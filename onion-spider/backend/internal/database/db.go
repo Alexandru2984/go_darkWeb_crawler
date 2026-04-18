@@ -54,12 +54,12 @@ func createTables(db *sql.DB) error {
 		PRIMARY KEY (source_url, target_url)
 	);
 	`
-	_, err = db.Exec(query)
+	_, err := db.Exec(query)
 	return err
-	}
+}
 
-	// SaveNode salveaza sau actualizeaza informatiile despre un site onion
-	func (db *DB) SaveNode(url, title, server string, statusCode int) error {
+// SaveNode salveaza sau actualizeaza informatiile despre un site onion
+func (db *DB) SaveNode(url, title, server string, statusCode int) error {
 	query := `
 	INSERT INTO nodes (url, title, status_code, server_header, last_crawled_at)
 	VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
@@ -71,10 +71,10 @@ func createTables(db *sql.DB) error {
 	`
 	_, err := db.Conn.Exec(query, url, title, statusCode, server)
 	return err
-	}
+}
 
-	// SaveEdge creeaza o legatura intre doua site-uri onion
-	func (db *DB) SaveEdge(source, target string) error {
+// SaveEdge creeaza o legatura intre doua site-uri onion
+func (db *DB) SaveEdge(source, target string) error {
 	query := `
 	INSERT INTO edges (source_url, target_url)
 	VALUES ($1, $2)
@@ -86,5 +86,4 @@ func createTables(db *sql.DB) error {
 
 	_, err := db.Conn.Exec(query, source, target)
 	return err
-	}
-
+}
