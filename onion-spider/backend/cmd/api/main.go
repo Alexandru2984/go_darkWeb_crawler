@@ -4,15 +4,44 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
 	"onion-spider/internal/crawler"
 	"onion-spider/internal/database"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Println("⚠️ Nu am gasit un fisier .env, folosesc variabilele din sistem")
+	}
+
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		log.Fatal("Eroare critica: Lipseste DATABASE_URL din variabilele de mediu")
+	}
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8900" // default fallback
+	}
+
+	workersStr := os.Getenv("WORKERS")
+	workers := 3
+	if w, err := strconv.Atoi(workersStr); err == nil {
+		workers = w
+	}
+
+	torProxy := os.Getenv("TOR_PROXY")
+	if torProxy == "" {
+		torProxy = "127.0.0.1:9050"
+	}
+
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
@@ -29,14 +58,13 @@ func main() {
 		MaxAge:           300,
 	}))
 
-	dsn := "postgres://spider_user:>REDACTED@localhost:5432/onion_spider?sslmode=disable"
 	dbConn, err := database.InitDB(dsn)
 	if err != nil {
 		log.Fatalf("Eroare critica la conectarea la DB: %v", err)
 	}
 
-	// Initializam Motorul de Crawling cu 3 workeri paraleli
-	engine := crawler.NewEngine(dbConn, "127.0.0.1:9050", 3)
+	// Initializam Motorul de Crawling
+	engine := crawler.NewEngine(dbConn, torProxy, workers)
 	engine.Start()
 
 	r.Get("/api/status", func(w http.ResponseWriter, r *http.Request) {
@@ -52,7 +80,7 @@ func main() {
 
 		stats.Status = "online"
 		stats.DBConnected = true
-		stats.ActiveWorkers = 3
+		stats.ActiveWorkers = workers
 		
 		_ = dbConn.Conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE processing_status = 'completed'").Scan(&stats.NodesCrawled)
 		_ = dbConn.Conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE processing_status = 'pending_v2'").Scan(&stats.PendingNodes)
@@ -126,8 +154,8 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"message": "URL added to crawl queue"})
 	})
 
-	log.Println("=== [API] Serverul asculta pe portul 8898 ===")
-	if err := http.ListenAndServe(":8898", r); err != nil {
+	log.Printf("=== [API] Serverul asculta pe portul %s ===", port)
+	if err := http.ListenAndServe(":"+port, r); err != nil {
 		log.Fatalf("Eroare la pornirea serverului: %v", err)
 	}
 }
