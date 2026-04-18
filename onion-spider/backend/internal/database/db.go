@@ -87,3 +87,56 @@ func (db *DB) SaveEdge(source, target string) error {
 	_, err := db.Conn.Exec(query, source, target)
 	return err
 }
+
+// Node reprezinta un site onion stocat in DB
+type Node struct {
+	ID           int    `json:"id"`
+	URL          string `json:"url"`
+	Title        string `json:"title"`
+	StatusCode   int    `json:"status_code"`
+	ServerHeader string `json:"server_header"`
+}
+
+// Edge reprezinta o conexiune intre doua site-uri onion
+type Edge struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
+}
+
+// GetNodes returneaza toate nodurile din baza de date
+func (db *DB) GetNodes() ([]Node, error) {
+	rows, err := db.Conn.Query("SELECT id, url, COALESCE(title, ''), COALESCE(status_code, 0), COALESCE(server_header, '') FROM nodes")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var nodes []Node
+	for rows.Next() {
+		var n Node
+		if err := rows.Scan(&n.ID, &n.URL, &n.Title, &n.StatusCode, &n.ServerHeader); err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, n)
+	}
+	return nodes, nil
+}
+
+// GetEdges returneaza toate legaturile din baza de date
+func (db *DB) GetEdges() ([]Edge, error) {
+	rows, err := db.Conn.Query("SELECT source_url, target_url FROM edges")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var edges []Edge
+	for rows.Next() {
+		var e Edge
+		if err := rows.Scan(&e.Source, &e.Target); err != nil {
+			return nil, err
+		}
+		edges = append(edges, e)
+	}
+	return edges, nil
+}
