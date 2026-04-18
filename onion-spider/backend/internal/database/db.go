@@ -74,18 +74,22 @@ type Edge struct {
 }
 
 // SaveNode salveaza sau actualizeaza informatiile despre un site onion
-func (db *DB) SaveNode(url, title, server string, statusCode int, status string) error {
+func (db *DB) SaveNode(url, title, server string, statusCode int, status string, metadata string) error {
 	query := `
-	INSERT INTO nodes (url, title, status_code, server_header, processing_status, last_crawled_at)
-	VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+	INSERT INTO nodes (url, title, status_code, server_header, processing_status, metadata, last_crawled_at)
+	VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
 	ON CONFLICT (url) DO UPDATE SET
 		title = EXCLUDED.title,
 		status_code = EXCLUDED.status_code,
 		server_header = EXCLUDED.server_header,
 		processing_status = EXCLUDED.processing_status,
+		metadata = EXCLUDED.metadata,
 		last_crawled_at = CURRENT_TIMESTAMP;
 	`
-	_, err := db.Conn.Exec(query, url, title, statusCode, server, status)
+	if metadata == "" {
+		metadata = "{}"
+	}
+	_, err := db.Conn.Exec(query, url, title, statusCode, server, status, metadata)
 	return err
 }
 

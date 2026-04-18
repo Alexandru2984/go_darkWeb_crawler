@@ -61,12 +61,12 @@ func (e *Engine) worker(id int) {
 		if err != nil {
 			log.Printf("[Worker %d] Eroare retea/SOCKS la %s: %v", id, url, err)
 			// Marcam ca finalizat dar cu status 0, sa stim ca nu e accesibil
-			e.DB.SaveNode(url, "", "", 0, "completed")
+			e.DB.SaveNode(url, "", "", 0, "completed", "{}")
 			continue
 		}
 
 		// 3. Salvam rezultatul si link-urile noi
-		err = e.DB.SaveNode(url, result.Title, result.ServerHeader, result.StatusCode, "completed")
+		err = e.DB.SaveNode(url, result.Title, result.ServerHeader, result.StatusCode, "completed", result.Metadata)
 		if err != nil {
 			log.Printf("[Worker %d] Eroare la salvare nod: %v", id, err)
 		}
@@ -87,5 +87,5 @@ func (e *Engine) worker(id int) {
 
 // AddToQueue adauga un URL manual in coada
 func (e *Engine) AddToQueue(url string) error {
-	return e.DB.SaveNode(url, "", "", 0, "pending_v2")
+	return e.DB.SaveNode(url, "", "", 0, "pending_v2", "{}")
 }

@@ -50,7 +50,7 @@ func main() {
 	// 5. Salvam in DB (daca suntem conectati)
 	if dbConn != nil {
 		// Salvam nodul radacina (cel scanat)
-		err = dbConn.SaveNode(*targetURL, result.Title, result.ServerHeader, 200) // 200 presupunem succesul
+		err = dbConn.SaveNode(*targetURL, result.Title, result.ServerHeader, 200, "completed", result.Metadata) // 200 presupunem succesul
 		if err != nil {
 			log.Printf("❌ Eroare la salvarea nodului: %v", err)
 		}

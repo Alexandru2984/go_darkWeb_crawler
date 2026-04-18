@@ -1,7 +1,9 @@
 package crawler
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -15,6 +17,7 @@ type ScrapeResult struct {
 	FoundOnions  []string
 	ServerHeader string
 	StatusCode   int
+	Metadata     string // JSON string
 }
 
 // ScrapePage descarca si parseaza o pagina HTML returnand titlul si linkurile onion gasite
@@ -39,12 +42,38 @@ func ScrapePage(client *http.Client, targetURL string) (*ScrapeResult, error) {
 		ServerHeader: resp.Header.Get("Server"),
 		FoundOnions:  []string{},
 		Title:        "",
+		Metadata:     "{}",
 	}
 
-	// Incarcam HTML-ul in goquery, chiar si daca avem erori HTTP 4xx sau 5xx, s-ar putea sa existe continut
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	// 1. Verificam Content-Type (daca e imagine sau binar masiv, il sarim la parsare)
+	contentType := resp.Header.Get("Content-Type")
+	if contentType != "" && !strings.Contains(contentType, "text/html") && !strings.Contains(contentType, "text/plain") && !strings.Contains(contentType, "xml") {
+		return result, nil // Ne oprim aici, returnam doar status code-ul, nu parsam body-ul
+	}
+
+	// 2. Protectie OOM: Citim maxim 5MB (5 * 1024 * 1024 bytes)
+	limitReader := io.LimitReader(resp.Body, 5*1024*1024)
+
+	// Incarcam HTML-ul in goquery limitat
+	doc, err := goquery.NewDocumentFromReader(limitReader)
 	if err == nil {
 		result.Title = strings.TrimSpace(doc.Find("title").Text())
+
+		// Extragem meta description & keywords
+		metaDataMap := make(map[string]string)
+		doc.Find("meta").Each(func(i int, s *goquery.Selection) {
+			name, _ := s.Attr("name")
+			content, _ := s.Attr("content")
+			if name == "description" || name == "keywords" {
+				metaDataMap[name] = strings.TrimSpace(content)
+			}
+		})
+		
+		if len(metaDataMap) > 0 {
+			if jsonBytes, err := json.Marshal(metaDataMap); err == nil {
+				result.Metadata = string(jsonBytes)
+			}
+		}
 
 		// Extragem toate tag-urile <a href="...">
 		doc.Find("a").Each(func(i int, s *goquery.Selection) {
