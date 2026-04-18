@@ -1,18 +1,20 @@
-# Frontend (Node / Vue)
-frontend/node_modules/
-frontend/dist/
-frontend/.env.local
-frontend/.env.*.local
-frontend/npm-debug.log*
-frontend/yarn-debug.log*
-frontend/yarn-error.log*
+# Ignorare module Go si binare
+pkg/
+bin/
 
-# Backend (Go)
-backend/api_bin
-backend/crawler_bin
-backend/vendor/
+# Ignorare generala module si build-uri frontend
+**/node_modules/
+**/dist/
+**/.env.local
+**/.env.*.local
+**/npm-debug.log*
 
-# Go environment and build files
+# Ignorare binare specifice proiectului Go
+onion-spider/backend/api_bin
+onion-spider/backend/crawler_bin
+onion-spider/backend/vendor/
+
+# Extensii compilate si fisiere de log
 *.exe
 *.exe~
 *.dll
@@ -22,13 +24,10 @@ backend/vendor/
 *.out
 cover.out
 
-# IDEs and Editors
+# IDEs, Editors si Sistem de operare
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
 .DS_Store
-
-# Temporary system files
-/tmp/
