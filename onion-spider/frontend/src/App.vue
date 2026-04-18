@@ -122,22 +122,12 @@ const drawGraph = () => {
     const cleanTitle = n.title ? n.title : 'Sursa Inaccesibila / Secundara'
     const shortLabel = cleanTitle.length > 25 ? cleanTitle.substring(0, 25) + '...' : cleanTitle
 
-    const tooltipHtml = `
-      <div style="padding: 12px; background: rgba(15,15,15,0.95); color: #fff; border: 1px solid #333; border-radius: 8px; font-family: Inter, sans-serif; backdrop-filter: blur(5px);">
-        <strong style="color: ${color}; font-size: 14px;">${cleanTitle}</strong><br>
-        <span style="color: #aaa; font-size: 11px; font-family: monospace;">${n.url}</span>
-        <hr style="border-color:#222; margin: 8px 0;">
-        <div style="font-size: 12px; color: #ccc;">
-          Status HTTP: <b style="color: #fff;">${n.status_code}</b> | Legaturi (Hub): <b style="color: #fff;">${degree}</b><br>
-          <i style="color:#777; font-size: 10px;">(Dublu click pe bila pentru a copia link-ul)</i>
-        </div>
-      </div>
-    `
+    const tooltipText = `${cleanTitle}\nURL: ${n.url}\nStatus HTTP: ${n.status_code} | Legaturi (Hub): ${degree}\n(Dublu click pe bila pentru a copia link-ul)`
 
     return {
       id: n.url,
       label: shortLabel,
-      title: tooltipHtml,
+      title: tooltipText,
       color: { 
         background: color, 
         border: '#000',
@@ -363,12 +353,18 @@ body, html { margin: 0; padding: 0; background: #0a0a0a; color: #e0e0e0; font-fa
 /* Vis.js Tooltip fix */
 div.vis-tooltip {
   position: absolute;
-  padding: 0 !important;
-  background-color: transparent !important;
-  border: none !important;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.9);
+  padding: 10px 15px !important;
+  background-color: rgba(20, 20, 20, 0.95) !important;
+  color: #ffffff !important;
+  border: 1px solid #ff3333 !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.9);
+  border-radius: 8px;
   pointer-events: none;
   z-index: 1000;
+  font-family: 'Courier New', Courier, monospace !important;
+  font-size: 13px !important;
+  line-height: 1.5;
+  white-space: pre-wrap;
 }
 </style>
 
