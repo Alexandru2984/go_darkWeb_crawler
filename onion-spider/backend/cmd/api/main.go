@@ -126,8 +126,8 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"message": "URL added to crawl queue"})
 	})
 
-	log.Println("=== [API] Serverul asculta pe portul 8896 ===")
-	if err := http.ListenAndServe(":8896", r); err != nil {
+	log.Println("=== [API] Serverul asculta pe portul 8898 ===")
+	if err := http.ListenAndServe(":8898", r); err != nil {
 		log.Fatalf("Eroare la pornirea serverului: %v", err)
 	}
 }

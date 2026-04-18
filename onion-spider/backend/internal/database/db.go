@@ -147,7 +147,8 @@ func (db *DB) GetNextPendingNode() (string, int, error) {
 		WHERE url = (
 			SELECT url FROM nodes 
 			WHERE processing_status = 'pending_v2' 
-			ORDER BY discovered_at ASC 
+			  AND next_crawl_at <= CURRENT_TIMESTAMP
+			ORDER BY next_crawl_at ASC, discovered_at ASC 
 			LIMIT 1 
 			FOR UPDATE SKIP LOCKED
 		) 
@@ -158,6 +159,22 @@ func (db *DB) GetNextPendingNode() (string, int, error) {
 		return "", 0, nil
 	}
 	return url, depth, err
+}
+
+// FailNodeWithRetry inregistreaza un esec de retea si pregateste o reincercare automata
+func (db *DB) FailNodeWithRetry(url string) error {
+	query := `
+		UPDATE nodes 
+		SET retry_count = retry_count + 1,
+			processing_status = CASE 
+				WHEN retry_count >= 2 THEN 'failed' 
+				ELSE 'pending_v2' 
+			END,
+			next_crawl_at = CURRENT_TIMESTAMP + (INTERVAL '15 minutes' * (retry_count + 1))
+		WHERE url = $1;
+	`
+	_, err := db.Conn.Exec(query, url)
+	return err
 }
 
 func (db *DB) GetNodes() ([]Node, error) {
