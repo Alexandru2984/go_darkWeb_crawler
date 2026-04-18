@@ -92,7 +92,7 @@ func (db *DB) SaveNode(url, title, server string, statusCode int, status string)
 // SaveEdge creeaza o legatura intre doua site-uri onion
 func (db *DB) SaveEdge(source, target string) error {
 	// Ne asiguram ca si target-ul exista in tabela nodes (ca pending) daca nu exista deja
-	_, _ = db.Conn.Exec("INSERT INTO nodes (url, processing_status) VALUES ($1, 'pending') ON CONFLICT (url) DO NOTHING", target)
+	_, _ = db.Conn.Exec("INSERT INTO nodes (url, processing_status) VALUES ($1, 'pending_v2') ON CONFLICT (url) DO NOTHING", target)
 
 	query := `
 	INSERT INTO edges (source_url, target_url)
@@ -111,7 +111,7 @@ func (db *DB) GetNextPendingNode() (string, error) {
 		SET processing_status = 'crawling' 
 		WHERE url = (
 			SELECT url FROM nodes 
-			WHERE processing_status = 'pending' 
+			WHERE processing_status = 'pending_v2' 
 			ORDER BY discovered_at ASC 
 			LIMIT 1 
 			FOR UPDATE SKIP LOCKED

@@ -55,7 +55,7 @@ func main() {
 		stats.ActiveWorkers = 3
 		
 		_ = dbConn.Conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE processing_status = 'completed'").Scan(&stats.NodesCrawled)
-		_ = dbConn.Conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE processing_status = 'pending'").Scan(&stats.PendingNodes)
+		_ = dbConn.Conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE processing_status = 'pending_v2'").Scan(&stats.PendingNodes)
 
 		json.NewEncoder(w).Encode(stats)
 	})
@@ -105,8 +105,8 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"message": "URL added to crawl queue"})
 	})
 
-	log.Println("=== [API] Serverul asculta pe portul 8891 ===")
-	if err := http.ListenAndServe(":8891", r); err != nil {
+	log.Println("=== [API] Serverul asculta pe portul 8893 ===")
+	if err := http.ListenAndServe(":8893", r); err != nil {
 		log.Fatalf("Eroare la pornirea serverului: %v", err)
 	}
 }

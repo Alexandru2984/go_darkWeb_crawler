@@ -59,13 +59,14 @@ func (e *Engine) worker(id int) {
 		// 2. Scanam pagina
 		result, err := ScrapePage(client, url)
 		if err != nil {
-			log.Printf("[Worker %d] Eroare la scanare %s: %v", id, url, err)
-			e.DB.SaveNode(url, "", "", 0, "failed")
+			log.Printf("[Worker %d] Eroare retea/SOCKS la %s: %v", id, url, err)
+			// Marcam ca finalizat dar cu status 0, sa stim ca nu e accesibil
+			e.DB.SaveNode(url, "", "", 0, "completed")
 			continue
 		}
 
 		// 3. Salvam rezultatul si link-urile noi
-		err = e.DB.SaveNode(url, result.Title, result.ServerHeader, 200, "completed")
+		err = e.DB.SaveNode(url, result.Title, result.ServerHeader, result.StatusCode, "completed")
 		if err != nil {
 			log.Printf("[Worker %d] Eroare la salvare nod: %v", id, err)
 		}
@@ -86,5 +87,5 @@ func (e *Engine) worker(id int) {
 
 // AddToQueue adauga un URL manual in coada
 func (e *Engine) AddToQueue(url string) error {
-	return e.DB.SaveNode(url, "", "", 0, "pending")
+	return e.DB.SaveNode(url, "", "", 0, "pending_v2")
 }

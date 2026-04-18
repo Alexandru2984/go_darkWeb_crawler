@@ -14,6 +14,7 @@ type ScrapeResult struct {
 	Title        string
 	FoundOnions  []string
 	ServerHeader string
+	StatusCode   int
 }
 
 // ScrapePage descarca si parseaza o pagina HTML returnand titlul si linkurile onion gasite
@@ -33,45 +34,35 @@ func ScrapePage(client *http.Client, targetURL string) (*ScrapeResult, error) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("status code nedorit: %d", resp.StatusCode)
-	}
-
-	// Incarcam HTML-ul in goquery
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("eroare la parsarea HTML-ului: %w", err)
-	}
-
 	result := &ScrapeResult{
-		Title:        strings.TrimSpace(doc.Find("title").Text()),
+		StatusCode:   resp.StatusCode,
 		ServerHeader: resp.Header.Get("Server"),
 		FoundOnions:  []string{},
+		Title:        "",
 	}
 
-	// Extragem toate tag-urile <a href="...">
-	doc.Find("a").Each(func(i int, s *goquery.Selection) {
-		href, exists := s.Attr("href")
-		if exists {
-			// Incercam sa parsăm URL-ul pentru a curata calea
-			parsedUrl, err := url.Parse(href)
-			if err == nil {
-				// Daca este link absolut (.onion) sau relativ, il prelucram
-				host := parsedUrl.Host
-				if host == "" {
-					// Link relativ, presupunem ca e din acelasi site (nu ne ajuta momentan)
-					return
-				}
-				if strings.HasSuffix(host, ".onion") {
-					fullOnion := fmt.Sprintf("%s://%s", parsedUrl.Scheme, host)
-					result.FoundOnions = append(result.FoundOnions, fullOnion)
+	// Incarcam HTML-ul in goquery, chiar si daca avem erori HTTP 4xx sau 5xx, s-ar putea sa existe continut
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err == nil {
+		result.Title = strings.TrimSpace(doc.Find("title").Text())
+
+		// Extragem toate tag-urile <a href="...">
+		doc.Find("a").Each(func(i int, s *goquery.Selection) {
+			href, exists := s.Attr("href")
+			if exists {
+				// Incercam sa parsăm URL-ul pentru a curata calea
+				parsedUrl, err := url.Parse(href)
+				if err == nil {
+					host := parsedUrl.Host
+					if host != "" && strings.HasSuffix(host, ".onion") {
+						fullOnion := fmt.Sprintf("%s://%s", parsedUrl.Scheme, host)
+						result.FoundOnions = append(result.FoundOnions, fullOnion)
+					}
 				}
 			}
-		}
-	})
-
-	// Eliminam duplicatele
-	result.FoundOnions = removeDuplicates(result.FoundOnions)
+		})
+		result.FoundOnions = removeDuplicates(result.FoundOnions)
+	}
 
 	return result, nil
 }
