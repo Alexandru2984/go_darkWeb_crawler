@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 
-const status = ref({ status: 'offline', nodes_crawled: 0, db_connected: false })
+const status = ref({ status: 'offline', nodes_crawled: 0, pending_nodes: 0, db_connected: false, active_workers: 0 })
 const nodes = ref([])
 const targetUrl = ref('')
 const loading = ref(false)
@@ -30,7 +30,7 @@ const fetchNodes = async () => {
 const startCrawl = async () => {
   if (!targetUrl.value) return
   loading.value = true
-  message.value = 'Se trimite cererea de scanare...'
+  message.value = 'Se adauga in coada...'
   
   try {
     const res = await fetch(`${API_BASE}/crawl`, {
@@ -40,11 +40,11 @@ const startCrawl = async () => {
     })
     
     if (res.ok) {
-      message.value = 'Scanarea a pornit in fundal!'
+      message.value = 'URL adaugat cu succes in coada de scanare!'
       targetUrl.value = ''
       setTimeout(() => { message.value = '' }, 3000)
     } else {
-      message.value = 'Eroare la pornirea scanarii.'
+      message.value = 'Eroare la adaugarea in coada.'
     }
   } catch (err) {
     message.value = 'Eroare de conexiune la API.'
@@ -70,19 +70,23 @@ onMounted(() => {
       <header>
         <div class="logo-area">
           <h1>🕷️ Onion Spider</h1>
-          <p class="subtitle">Deep Web Explorer</p>
+          <p class="subtitle">Recursive Deep Web Explorer</p>
         </div>
         <div class="status-bar" :class="{ online: status.db_connected }">
           <span class="dot"></span>
-          <span class="status-text">DB: {{ status.db_connected ? 'CONECTAT' : 'DECONECTAT' }}</span>
+          <span class="status-text">DB: {{ status.db_connected ? 'OK' : 'OFF' }}</span>
           <span class="divider">|</span>
-          <span class="nodes-count">Noduri: {{ status.nodes_crawled }}</span>
+          <span class="nodes-count">Scanate: {{ status.nodes_crawled }}</span>
+          <span class="divider">|</span>
+          <span class="pending-count">In Coada: {{ status.pending_nodes }}</span>
+          <span class="divider">|</span>
+          <span class="workers-count">Workeri: {{ status.active_workers }}</span>
         </div>
       </header>
 
       <main>
         <section class="crawl-form">
-          <h2>Porneste o scanare noua</h2>
+          <h2>Adauga URL la coada de scanare</h2>
           <div class="input-group">
             <input 
               v-model="targetUrl" 
@@ -91,8 +95,8 @@ onMounted(() => {
               @keyup.enter="startCrawl"
             />
             <button @click="startCrawl" :disabled="loading">
-              <span v-if="loading">Se procesează...</span>
-              <span v-else>Crawl 🚀</span>
+              <span v-if="loading">Trimitere...</span>
+              <span v-else>Adauga 🚀</span>
             </button>
           </div>
           <p v-if="message" class="info-message">{{ message }}</p>
@@ -109,18 +113,29 @@ onMounted(() => {
                 <tr>
                   <th class="col-id">ID</th>
                   <th>URL</th>
-                  <th>Titlu</th>
+                  <th>Titlu / Status Procesare</th>
                   <th class="col-server">Server</th>
-                  <th class="col-status">Status</th>
+                  <th class="col-status">Cod</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="node in nodes" :key="node.id">
                   <td class="col-id">{{ node.id }}</td>
                   <td class="url">{{ node.url }}</td>
-                  <td class="title">{{ node.title || 'Fără titlu' }}</td>
+                  <td>
+                    <div class="title-row">
+                      <span class="title">{{ node.title || 'In asteptare...' }}</span>
+                      <span class="status-pill" :class="node.processing_status">
+                        {{ node.processing_status }}
+                      </span>
+                    </div>
+                  </td>
                   <td class="col-server">{{ node.server_header || '-' }}</td>
-                  <td class="col-status"><span class="badge" :class="{ 's-200': node.status_code === 200 }">{{ node.status_code }}</span></td>
+                  <td class="col-status">
+                    <span class="badge" :class="{ 's-200': node.status_code === 200 }">
+                      {{ node.status_code || '-' }}
+                    </span>
+                  </td>
                 </tr>
                 <tr v-if="nodes.length === 0">
                   <td colspan="5" class="empty-state">Nu există date încă. Introdu un URL pentru a începe.</td>
@@ -139,22 +154,22 @@ onMounted(() => {
 body, html {
   margin: 0;
   padding: 0;
-  background: #0f0f0f;
+  background: #0a0a0a;
   color: #e0e0e0;
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
 }
 </style>
 
 <style scoped>
 .app-wrapper {
   min-height: 100vh;
-  background: #0f0f0f;
+  background: #0a0a0a;
   display: flex;
   justify-content: center;
 }
 
 .container {
   width: 100%;
-  max-width: 100%; /* Full screen */
   padding: 20px 40px;
   box-sizing: border-box;
 }
@@ -163,8 +178,8 @@ header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  border-bottom: 1px solid #333;
-  padding-bottom: 20px;
+  border-bottom: 1px solid #222;
+  padding-bottom: 25px;
   margin-bottom: 40px;
   flex-wrap: wrap;
   gap: 20px;
@@ -173,234 +188,147 @@ header {
 .logo-area h1 {
   color: #ff3333;
   margin: 0;
-  font-size: 2.5rem;
-  letter-spacing: -1px;
+  font-size: 2.2rem;
+  font-weight: 800;
+  letter-spacing: -1.5px;
 }
 
 .subtitle {
-  margin: 5px 0 0;
-  color: #888;
-  font-size: 0.9rem;
+  margin: 2px 0 0;
+  color: #555;
+  font-size: 0.8rem;
   text-transform: uppercase;
-  letter-spacing: 2px;
+  letter-spacing: 3px;
+  font-weight: 600;
 }
 
 .status-bar {
-  background: #1a1a1a;
-  padding: 10px 20px;
-  border-radius: 50px;
-  font-size: 0.9rem;
+  background: #151515;
+  padding: 12px 25px;
+  border-radius: 12px;
+  font-size: 0.85rem;
   display: flex;
   align-items: center;
-  gap: 10px;
-  border: 1px solid #333;
+  gap: 15px;
+  border: 1px solid #222;
+  color: #aaa;
 }
 
 .dot {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   background: #ff3333;
   border-radius: 50%;
-  box-shadow: 0 0 10px rgba(255, 51, 51, 0.5);
 }
 
 .status-bar.online .dot {
   background: #00ff00;
-  box-shadow: 0 0 10px rgba(0, 255, 0, 0.5);
+  box-shadow: 0 0 10px rgba(0, 255, 0, 0.4);
 }
 
-.divider { color: #444; }
+.divider { color: #333; font-weight: 100; }
 
-/* Form Area */
 .crawl-form {
-  background: #161616;
+  background: #111;
   padding: 30px;
-  border-radius: 12px;
+  border-radius: 16px;
   margin-bottom: 40px;
-  border: 1px solid #222;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  border: 1px solid #1a1a1a;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
 }
 
 .crawl-form h2 {
   margin-top: 0;
-  font-size: 1.2rem;
+  font-size: 1.1rem;
   margin-bottom: 20px;
-  color: #bbb;
+  color: #777;
 }
 
 .input-group {
   display: flex;
-  gap: 15px;
+  gap: 12px;
 }
 
 input {
   flex: 1;
-  padding: 15px 20px;
-  border-radius: 8px;
-  border: 1px solid #333;
-  background: #0a0a0a;
+  padding: 16px 20px;
+  border-radius: 10px;
+  border: 1px solid #222;
+  background: #050505;
   color: #fff;
   font-size: 1rem;
-  transition: border-color 0.3s;
-}
-
-input:focus {
-  outline: none;
-  border-color: #ff3333;
 }
 
 button {
-  padding: 0 40px;
+  padding: 0 35px;
   background: #ff3333;
   border: none;
   color: white;
-  font-weight: bold;
-  border-radius: 8px;
+  font-weight: 700;
+  border-radius: 10px;
   cursor: pointer;
-  font-size: 1rem;
-  transition: background 0.3s, transform 0.1s;
 }
 
-button:hover:not(:disabled) {
-  background: #cc0000;
-  transform: translateY(-2px);
+.status-pill {
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  font-weight: 800;
+  background: #222;
+  color: #888;
 }
 
-button:active:not(:disabled) {
-  transform: translateY(0);
+.status-pill.pending { color: #ffcc00; background: rgba(255, 204, 0, 0.1); }
+.status-pill.crawling { color: #4da6ff; background: rgba(77, 166, 255, 0.1); animation: pulse 2s infinite; }
+.status-pill.completed { color: #00ff00; background: rgba(0, 255, 0, 0.1); }
+.status-pill.failed { color: #ff3333; background: rgba(255, 51, 51, 0.1); }
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { opacity: 1; }
 }
 
-button:disabled {
-  background: #444;
-  cursor: not-allowed;
-}
-
-.info-message {
-  margin-top: 15px;
-  color: #ffaa00;
-  font-size: 0.9rem;
-}
-
-/* Nodes List */
-.section-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-
-.btn-refresh {
-  background: transparent;
-  border: 1px solid #333;
-  padding: 8px;
-  font-size: 1.2rem;
-  border-radius: 50%;
-  width: 40px;
-  height: 40px;
+.title-row {
   display: flex;
   align-items: center;
-  justify-content: center;
-}
-
-.table-responsive {
-  width: 100%;
-  overflow-x: auto;
-  background: #161616;
-  border-radius: 12px;
-  border: 1px solid #222;
+  gap: 10px;
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 800px;
 }
 
 th, td {
-  padding: 18px 20px;
+  padding: 15px 20px;
   text-align: left;
-  border-bottom: 1px solid #222;
+  border-bottom: 1px solid #151515;
 }
 
 th {
-  background: #1a1a1a;
-  color: #888;
-  font-weight: 600;
-  font-size: 0.85rem;
+  background: #0d0d0d;
+  color: #444;
+  font-weight: 700;
+  font-size: 0.75rem;
   text-transform: uppercase;
-  letter-spacing: 1px;
-}
-
-tr:hover td {
-  background: #1d1d1d;
+  letter-spacing: 1.5px;
 }
 
 .url {
-  font-family: 'Courier New', Courier, monospace;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
   color: #4da6ff;
-  font-size: 0.9rem;
-  max-width: 300px;
+  font-size: 0.85rem;
+  max-width: 250px;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.title {
-  font-weight: 500;
-}
-
-.badge {
-  background: #444;
-  padding: 4px 10px;
-  border-radius: 4px;
-  font-size: 0.8rem;
-  font-weight: bold;
-}
-
-.badge.s-200 {
-  background: #008000;
-}
-
-.empty-state {
-  padding: 40px;
-  text-align: center;
-  color: #666;
-}
-
-/* Responsive Mobile */
 @media (max-width: 768px) {
-  .container {
-    padding: 15px;
-  }
-  
-  header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 15px;
-  }
-
-  .logo-area h1 {
-    font-size: 1.8rem;
-  }
-
-  .input-group {
-    flex-direction: column;
-  }
-
-  button {
-    padding: 15px;
-  }
-
-  .col-server, .col-id {
-    display: none;
-  }
-
-  table {
-    min-width: 100%;
-  }
-
-  .url {
-    max-width: 150px;
-  }
+  .container { padding: 15px; }
+  header { flex-direction: column; align-items: flex-start; }
+  .input-group { flex-direction: column; }
+  .col-server, .col-id { display: none; }
 }
 </style>
