@@ -1,0 +1,78 @@
+package crawler
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func TestScrapePage(t *testing.T) {
+	// Cream un server HTTP de test care emuleaza un site onion
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Header().Set("Server", "TestServer/1.0")
+		w.WriteHeader(200)
+		w.Write([]byte(`
+			<html>
+			<head>
+				<title>The Hidden Test Wiki</title>
+				<meta name="description" content="A test page for the crawler">
+				<meta name="keywords" content="test, crawler, spider">
+			</head>
+			<body>
+				<h1>Welcome to the Hidden Wiki</h1>
+				<p>This is a paragraph with <strong>important content</strong>.</p>
+				
+				<script>
+					// Crawlerul nu trebuie sa extraga acest text
+					console.log("Secret hacker code");
+				</script>
+				
+				<style>
+					body { color: black; }
+				</style>
+				
+				<ul>
+					<li><a href="http://duckduckgogg42xjoc72x3sjiqbvzwsgxgjvpeqg5unfxgf2fsvawd.onion/">DuckDuckGo</a></li>
+					<li><a href="/local-page">Local Page (Should be ignored)</a></li>
+				</ul>
+			</body>
+			</html>
+		`))
+	}))
+	defer server.Close()
+
+	// Folosim clientul generat de httptest in loc de proxy-ul Tor
+	client := server.Client()
+
+	result, err := ScrapePage(client, server.URL)
+	if err != nil {
+		t.Fatalf("Eroare neasteptata la rularea scraper-ului: %v", err)
+	}
+
+	// 1. Verificam Titlul
+	if result.Title != "The Hidden Test Wiki" {
+		t.Errorf("Titlu incorect. Asteptat 'The Hidden Test Wiki', primit '%s'", result.Title)
+	}
+
+	// 2. Verificam Server Header
+	if result.ServerHeader != "TestServer/1.0" {
+		t.Errorf("Server Header incorect. Asteptat 'TestServer/1.0', primit '%s'", result.ServerHeader)
+	}
+
+	// 3. Verificam Extragerea Continutului (Text curat)
+	expectedContent := "Welcome to the Hidden Wiki This is a paragraph with important content. DuckDuckGo Local Page (Should be ignored)"
+	if result.Content != expectedContent {
+		t.Errorf("Content extras incorect.\nAsteptat: '%s'\nPrimit: '%s'", expectedContent, result.Content)
+	}
+
+	// 4. Verificam Extragerea Link-urilor Onion
+	if len(result.FoundOnions) != 1 {
+		t.Fatalf("Asteptam 1 link onion, am primit %d", len(result.FoundOnions))
+	}
+	
+	expectedOnion := "http://duckduckgogg42xjoc72x3sjiqbvzwsgxgjvpeqg5unfxgf2fsvawd.onion"
+	if result.FoundOnions[0] != expectedOnion {
+		t.Errorf("Link onion extras incorect. Asteptat '%s', primit '%s'", expectedOnion, result.FoundOnions[0])
+	}
+}

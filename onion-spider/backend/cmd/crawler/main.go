@@ -50,14 +50,14 @@ func main() {
 	// 5. Salvam in DB (daca suntem conectati)
 	if dbConn != nil {
 		// Salvam nodul radacina (cel scanat)
-		err = dbConn.SaveNode(*targetURL, result.Title, result.ServerHeader, 200, "completed", result.Metadata) // 200 presupunem succesul
+		err = dbConn.SaveNode(*targetURL, result.Title, result.ServerHeader, 200, "completed", result.Metadata, result.Content) // 200 presupunem succesul
 		if err != nil {
 			log.Printf("❌ Eroare la salvarea nodului: %v", err)
 		}
 
 		// Salvam link-urile gasite si legaturile
 		for _, link := range result.FoundOnions {
-			err = dbConn.SaveEdge(*targetURL, link)
+			err = dbConn.SaveEdge(*targetURL, link, 1)
 			if err != nil {
 				log.Printf("❌ Eroare la salvarea legaturii %s -> %s: %v", *targetURL, link, err)
 			}

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
@@ -14,11 +15,15 @@ import (
 // ScrapeResult retine datele curatate din pagina onion
 type ScrapeResult struct {
 	Title        string
+	Content      string
 	FoundOnions  []string
 	ServerHeader string
 	StatusCode   int
 	Metadata     string // JSON string
 }
+
+// spaceRegex este folosit pentru a curata whitespace-urile excesive din content
+var spaceRegex = regexp.MustCompile(`\s+`)
 
 // ScrapePage descarca si parseaza o pagina HTML returnand titlul si linkurile onion gasite
 func ScrapePage(client *http.Client, targetURL string) (*ScrapeResult, error) {
@@ -42,6 +47,7 @@ func ScrapePage(client *http.Client, targetURL string) (*ScrapeResult, error) {
 		ServerHeader: resp.Header.Get("Server"),
 		FoundOnions:  []string{},
 		Title:        "",
+		Content:      "",
 		Metadata:     "{}",
 	}
 
@@ -58,6 +64,11 @@ func ScrapePage(client *http.Client, targetURL string) (*ScrapeResult, error) {
 	doc, err := goquery.NewDocumentFromReader(limitReader)
 	if err == nil {
 		result.Title = strings.TrimSpace(doc.Find("title").Text())
+
+		// Extragem textul curat din pagina (fara zgomot tehnic)
+		doc.Find("script, style, noscript, iframe").Remove()
+		rawText := doc.Find("body").Text()
+		result.Content = strings.TrimSpace(spaceRegex.ReplaceAllString(rawText, " "))
 
 		// Extragem meta description & keywords
 		metaDataMap := make(map[string]string)

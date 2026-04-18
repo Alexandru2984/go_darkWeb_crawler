@@ -43,6 +43,7 @@ func createTables(db *sql.DB) error {
 		server_header VARCHAR(100),
 		metadata JSONB,
 		processing_status VARCHAR(20) DEFAULT 'pending', -- pending, crawling, completed, failed
+		depth INT DEFAULT 0,
 		discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		last_crawled_at TIMESTAMP
 	);
@@ -74,29 +75,58 @@ type Edge struct {
 }
 
 // SaveNode salveaza sau actualizeaza informatiile despre un site onion
-func (db *DB) SaveNode(url, title, server string, statusCode int, status string, metadata string) error {
+func (db *DB) SaveNode(url, title, server string, statusCode int, status string, metadata string, content string) error {
 	query := `
-	INSERT INTO nodes (url, title, status_code, server_header, processing_status, metadata, last_crawled_at)
-	VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+	INSERT INTO nodes (url, title, status_code, server_header, processing_status, metadata, content, last_crawled_at)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
 	ON CONFLICT (url) DO UPDATE SET
 		title = EXCLUDED.title,
 		status_code = EXCLUDED.status_code,
 		server_header = EXCLUDED.server_header,
 		processing_status = EXCLUDED.processing_status,
 		metadata = EXCLUDED.metadata,
+		content = EXCLUDED.content,
 		last_crawled_at = CURRENT_TIMESTAMP;
 	`
 	if metadata == "" {
 		metadata = "{}"
 	}
-	_, err := db.Conn.Exec(query, url, title, statusCode, server, status, metadata)
+	_, err := db.Conn.Exec(query, url, title, statusCode, server, status, metadata, content)
 	return err
 }
 
+// SearchNodes efectueaza o cautare Full-Text pe titlu si continut folosind indexul GIN (search_vector)
+func (db *DB) SearchNodes(searchQuery string) ([]Node, error) {
+	// Folosim plainto_tsquery('english', searchQuery) pentru a potrivi cuvintele
+	// si ts_rank pentru a le ordona descrescator in functie de relevanta.
+	query := `
+		SELECT id, url, COALESCE(title, ''), COALESCE(status_code, 0), COALESCE(server_header, ''), processing_status 
+		FROM nodes 
+		WHERE search_vector @@ plainto_tsquery('english', $1)
+		ORDER BY ts_rank(search_vector, plainto_tsquery('english', $1)) DESC
+		LIMIT 50;
+	`
+	rows, err := db.Conn.Query(query, searchQuery)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var nodes []Node
+	for rows.Next() {
+		var n Node
+		if err := rows.Scan(&n.ID, &n.URL, &n.Title, &n.StatusCode, &n.ServerHeader, &n.ProcessingStatus); err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, n)
+	}
+	return nodes, nil
+}
+
 // SaveEdge creeaza o legatura intre doua site-uri onion
-func (db *DB) SaveEdge(source, target string) error {
+func (db *DB) SaveEdge(source, target string, targetDepth int) error {
 	// Ne asiguram ca si target-ul exista in tabela nodes (ca pending) daca nu exista deja
-	_, _ = db.Conn.Exec("INSERT INTO nodes (url, processing_status) VALUES ($1, 'pending_v2') ON CONFLICT (url) DO NOTHING", target)
+	_, _ = db.Conn.Exec("INSERT INTO nodes (url, processing_status, depth) VALUES ($1, 'pending_v2', $2) ON CONFLICT (url) DO NOTHING", target, targetDepth)
 
 	query := `
 	INSERT INTO edges (source_url, target_url)
@@ -107,9 +137,10 @@ func (db *DB) SaveEdge(source, target string) error {
 	return err
 }
 
-// GetNextPendingNode extrage urmatorul URL care trebuie scanat
-func (db *DB) GetNextPendingNode() (string, error) {
+// GetNextPendingNode extrage urmatorul URL care trebuie scanat impreuna cu adancimea sa
+func (db *DB) GetNextPendingNode() (string, int, error) {
 	var url string
+	var depth int
 	query := `
 		UPDATE nodes 
 		SET processing_status = 'crawling' 
@@ -120,13 +151,13 @@ func (db *DB) GetNextPendingNode() (string, error) {
 			LIMIT 1 
 			FOR UPDATE SKIP LOCKED
 		) 
-		RETURNING url;
+		RETURNING url, depth;
 	`
-	err := db.Conn.QueryRow(query).Scan(&url)
+	err := db.Conn.QueryRow(query).Scan(&url, &depth)
 	if err == sql.ErrNoRows {
-		return "", nil
+		return "", 0, nil
 	}
-	return url, err
+	return url, depth, err
 }
 
 func (db *DB) GetNodes() ([]Node, error) {

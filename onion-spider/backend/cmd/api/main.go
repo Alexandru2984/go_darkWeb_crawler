@@ -80,6 +80,27 @@ func main() {
 		json.NewEncoder(w).Encode(edges)
 	})
 
+	r.Get("/api/search", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if dbConn == nil {
+			http.Error(w, "Database not connected", http.StatusInternalServerError)
+			return
+		}
+		
+		query := r.URL.Query().Get("q")
+		if query == "" {
+			http.Error(w, "Query is required", http.StatusBadRequest)
+			return
+		}
+
+		nodes, err := dbConn.SearchNodes(query)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(nodes)
+	})
+
 	r.Post("/api/crawl", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			URL string `json:"url"`
@@ -105,8 +126,8 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"message": "URL added to crawl queue"})
 	})
 
-	log.Println("=== [API] Serverul asculta pe portul 8894 ===")
-	if err := http.ListenAndServe(":8894", r); err != nil {
+	log.Println("=== [API] Serverul asculta pe portul 8896 ===")
+	if err := http.ListenAndServe(":8896", r); err != nil {
 		log.Fatalf("Eroare la pornirea serverului: %v", err)
 	}
 }

@@ -41,7 +41,7 @@ func (e *Engine) worker(id int) {
 
 	for {
 		// 1. Luam urmatorul URL din DB
-		url, err := e.DB.GetNextPendingNode()
+		url, depth, err := e.DB.GetNextPendingNode()
 		if err != nil {
 			log.Printf("[Worker %d] Eroare la preluarea cozii: %v", id, err)
 			time.Sleep(5 * time.Second)
@@ -54,31 +54,37 @@ func (e *Engine) worker(id int) {
 			continue
 		}
 
-		log.Printf("[Worker %d] Scanare: %s", id, url)
+		log.Printf("[Worker %d] Scanare: %s (Adancime: %d)", id, url, depth)
 
 		// 2. Scanam pagina
 		result, err := ScrapePage(client, url)
 		if err != nil {
 			log.Printf("[Worker %d] Eroare retea/SOCKS la %s: %v", id, url, err)
 			// Marcam ca finalizat dar cu status 0, sa stim ca nu e accesibil
-			e.DB.SaveNode(url, "", "", 0, "completed", "{}")
+			e.DB.SaveNode(url, "", "", 0, "completed", "{}", "")
 			continue
 		}
 
 		// 3. Salvam rezultatul si link-urile noi
-		err = e.DB.SaveNode(url, result.Title, result.ServerHeader, result.StatusCode, "completed", result.Metadata)
+		err = e.DB.SaveNode(url, result.Title, result.ServerHeader, result.StatusCode, "completed", result.Metadata, result.Content)
 		if err != nil {
 			log.Printf("[Worker %d] Eroare la salvare nod: %v", id, err)
 		}
 
-		for _, foundUrl := range result.FoundOnions {
-			err = e.DB.SaveEdge(url, foundUrl)
-			if err != nil {
-				log.Printf("[Worker %d] Eroare la salvare edge: %v", id, err)
-			}
-		}
+		// 4. Limita de adancime: Oprim recursivitatea daca suntem prea adanc (ex: max 2)
+		const MAX_DEPTH = 2
 
-		log.Printf("[Worker %d] Finalizat: %s (gasit %d link-uri)", id, url, len(result.FoundOnions))
+		if depth < MAX_DEPTH {
+			for _, foundUrl := range result.FoundOnions {
+				err = e.DB.SaveEdge(url, foundUrl, depth+1)
+				if err != nil {
+					log.Printf("[Worker %d] Eroare la salvare edge: %v", id, err)
+				}
+			}
+			log.Printf("[Worker %d] Finalizat: %s (gasit %d link-uri - le adaugam in coada)", id, url, len(result.FoundOnions))
+		} else {
+			log.Printf("[Worker %d] Finalizat: %s (adancime maxima %d atinsa, ignoram link-urile noi)", id, url, MAX_DEPTH)
+		}
 		
 		// O mica pauza pentru a nu supra-solicita Tor si a nu parea prea agresivi
 		time.Sleep(2 * time.Second)
@@ -87,5 +93,5 @@ func (e *Engine) worker(id int) {
 
 // AddToQueue adauga un URL manual in coada
 func (e *Engine) AddToQueue(url string) error {
-	return e.DB.SaveNode(url, "", "", 0, "pending_v2", "{}")
+	return e.DB.SaveNode(url, "", "", 0, "pending_v2", "{}", "")
 }
