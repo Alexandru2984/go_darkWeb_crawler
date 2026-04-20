@@ -1,6 +1,7 @@
 package crawler
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -33,7 +34,7 @@ func TestScrapePage(t *testing.T) {
 				</style>
 				
 				<ul>
-					<li><a href="http://duckduckgogg42xjoc72x3sjiqbvzwsgxgjvpeqg5unfxgf2fsvawd.onion/">DuckDuckGo</a></li>
+					<li><a href="http://duckduckgogg42xjoc72x3sjiqbvzwsgxgjvpeqg5unfxgf2fsvawd.onion/search?q=test">DuckDuckGo</a></li>
 					<li><a href="/local-page">Local Page (Should be ignored)</a></li>
 				</ul>
 			</body>
@@ -42,10 +43,9 @@ func TestScrapePage(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Folosim clientul generat de httptest in loc de proxy-ul Tor
 	client := server.Client()
 
-	result, err := ScrapePage(client, server.URL)
+	result, err := ScrapePage(context.Background(), client, server.URL)
 	if err != nil {
 		t.Fatalf("Eroare neasteptata la rularea scraper-ului: %v", err)
 	}
@@ -66,12 +66,13 @@ func TestScrapePage(t *testing.T) {
 		t.Errorf("Content extras incorect.\nAsteptat: '%s'\nPrimit: '%s'", expectedContent, result.Content)
 	}
 
-	// 4. Verificam Extragerea Link-urilor Onion
+	// 4. Verificam Extragerea Link-urilor Onion (cu path complet)
 	if len(result.FoundOnions) != 1 {
-		t.Fatalf("Asteptam 1 link onion, am primit %d", len(result.FoundOnions))
+		t.Fatalf("Asteptam 1 link onion, am primit %d: %v", len(result.FoundOnions), result.FoundOnions)
 	}
-	
-	expectedOnion := "http://duckduckgogg42xjoc72x3sjiqbvzwsgxgjvpeqg5unfxgf2fsvawd.onion"
+
+	// URL-ul complet cu path trebuie pastrat (fix #5)
+	expectedOnion := "http://duckduckgogg42xjoc72x3sjiqbvzwsgxgjvpeqg5unfxgf2fsvawd.onion/search?q=test"
 	if result.FoundOnions[0] != expectedOnion {
 		t.Errorf("Link onion extras incorect. Asteptat '%s', primit '%s'", expectedOnion, result.FoundOnions[0])
 	}

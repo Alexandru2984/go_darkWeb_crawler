@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"onion-spider/internal/crawler"
@@ -20,6 +21,64 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/joho/godotenv"
 )
+
+// crawlLimiter este un rate limiter per-IP cu fereastra fixa pentru /api/crawl
+type crawlLimiter struct {
+	mu      sync.Mutex
+	buckets map[string]*limitBucket
+	limit   int
+	window  time.Duration
+}
+
+type limitBucket struct {
+	count   int
+	resetAt time.Time
+}
+
+func newCrawlLimiter(limit int, window time.Duration) *crawlLimiter {
+	return &crawlLimiter{buckets: make(map[string]*limitBucket), limit: limit, window: window}
+}
+
+func (l *crawlLimiter) allow(ip string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	b, ok := l.buckets[ip]
+	if !ok || now.After(b.resetAt) {
+		l.buckets[ip] = &limitBucket{count: 1, resetAt: now.Add(l.window)}
+		return true
+	}
+	if b.count >= l.limit {
+		return false
+	}
+	b.count++
+	return true
+}
+
+func apiKeyMiddleware(apiKey string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("X-API-Key") != apiKey {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func parsePagination(r *http.Request) (limit, offset int) {
+	limit, _ = strconv.Atoi(r.URL.Query().Get("limit"))
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	offset = (page - 1) * limit
+	return
+}
 
 func main() {
 	if err := godotenv.Load(); err != nil {
@@ -65,9 +124,19 @@ func main() {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: strings.Split(corsOrigin, ","),
 		AllowedMethods: []string{"GET", "POST", "OPTIONS"},
-		AllowedHeaders: []string{"Accept", "Content-Type"},
+		AllowedHeaders: []string{"Accept", "Content-Type", "X-API-Key"},
 		MaxAge:         300,
 	}))
+
+	// Daca API_KEY e setat in env, toate request-urile trebuie sa il includa
+	if apiKey := os.Getenv("API_KEY"); apiKey != "" {
+		r.Use(apiKeyMiddleware(apiKey))
+		log.Println("🔒 Autentificare API key activata.")
+	} else {
+		log.Println("⚠️ API_KEY nu este setat — API-ul este public (recomandat doar pentru dezvoltare).")
+	}
+
+	limiter := newCrawlLimiter(20, time.Minute)
 
 	dbConn, err := database.InitDB(dsn)
 	if err != nil {
@@ -80,24 +149,28 @@ func main() {
 	r.Get("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		var stats struct {
+		var resp struct {
 			Status        string `json:"status"`
 			DBConnected   bool   `json:"db_connected"`
 			NodesCrawled  int    `json:"nodes_crawled"`
 			PendingNodes  int    `json:"pending_nodes"`
 			ActiveWorkers int    `json:"active_workers"`
 		}
-		stats.Status = "online"
-		stats.DBConnected = true
-		stats.ActiveWorkers = workers
-		_ = dbConn.Conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE processing_status = 'completed'").Scan(&stats.NodesCrawled)
-		_ = dbConn.Conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE processing_status = 'pending'").Scan(&stats.PendingNodes)
-		json.NewEncoder(w).Encode(stats)
+		resp.Status = "online"
+		resp.ActiveWorkers = workers
+		stats, err := dbConn.GetStats()
+		if err == nil {
+			resp.DBConnected = true
+			resp.NodesCrawled = stats.NodesCrawled
+			resp.PendingNodes = stats.PendingNodes
+		}
+		json.NewEncoder(w).Encode(resp)
 	})
 
 	r.Get("/api/nodes", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		nodes, err := dbConn.GetNodes()
+		limit, offset := parsePagination(r)
+		nodes, err := dbConn.GetNodes(limit, offset)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -107,7 +180,8 @@ func main() {
 
 	r.Get("/api/edges", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		edges, err := dbConn.GetEdges()
+		limit, offset := parsePagination(r)
+		edges, err := dbConn.GetEdges(limit, offset)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -122,6 +196,10 @@ func main() {
 			http.Error(w, "Query is required", http.StatusBadRequest)
 			return
 		}
+		if len(q) > 200 {
+			http.Error(w, "Query prea lung (max 200 caractere)", http.StatusBadRequest)
+			return
+		}
 		nodes, err := dbConn.SearchNodes(q)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -131,6 +209,14 @@ func main() {
 	})
 
 	r.Post("/api/crawl", func(w http.ResponseWriter, r *http.Request) {
+		ip := r.RemoteAddr
+		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+			ip = strings.SplitN(forwarded, ",", 2)[0]
+		}
+		if !limiter.allow(strings.TrimSpace(ip)) {
+			http.Error(w, "Prea multe cereri. Incearca din nou in cateva minute.", http.StatusTooManyRequests)
+			return
+		}
 		var req struct {
 			URL string `json:"url"`
 		}

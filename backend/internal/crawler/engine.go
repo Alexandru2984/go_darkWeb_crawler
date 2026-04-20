@@ -31,7 +31,8 @@ func NewEngine(db *database.DB, proxyAddr string, workerCount int, maxDepth int)
 	}
 }
 
-// Start porneste motorul de crawling cu numarul de workeri specificat
+// Start porneste motorul de crawling cu numarul de workeri specificat.
+// Fiecare worker se reporneste automat daca iese din cauza unei erori Tor.
 func (e *Engine) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	e.cancel = cancel
@@ -40,7 +41,16 @@ func (e *Engine) Start() {
 		e.wg.Add(1)
 		go func(id int) {
 			defer e.wg.Done()
-			e.worker(ctx, id)
+			for {
+				e.worker(ctx, id)
+				select {
+				case <-ctx.Done():
+					log.Printf("[Worker %d] Oprit definitiv.", id)
+					return
+				case <-time.After(10 * time.Second):
+					log.Printf("[Worker %d] Repornire dupa eroare Tor...", id)
+				}
+			}
 		}(i)
 	}
 }
@@ -54,11 +64,12 @@ func (e *Engine) Stop() {
 	log.Println("🛑 Motor crawling oprit.")
 }
 
-// waitForDomain asigura ca nu stresam acelasi domeniu — impune 5 secunde intarziere
-func (e *Engine) waitForDomain(targetUrl string) {
+// waitForDomain asigura ca nu stresam acelasi domeniu — impune 5 secunde intarziere.
+// Returneaza false daca contextul a fost anulat in timpul asteptarii.
+func (e *Engine) waitForDomain(ctx context.Context, targetUrl string) bool {
 	parsed, err := url.Parse(targetUrl)
 	if err != nil {
-		return
+		return true
 	}
 	host := parsed.Host
 
@@ -71,17 +82,21 @@ func (e *Engine) waitForDomain(targetUrl string) {
 			waitTime := 5*time.Second - elapsed
 			e.domainLastAccess[host] = time.Now().Add(waitTime)
 			e.domainMu.Unlock()
-			time.Sleep(waitTime)
-			// Actualizam cu momentul real al accesului dupa sleep
+			select {
+			case <-ctx.Done():
+				return false
+			case <-time.After(waitTime):
+			}
 			e.domainMu.Lock()
 			e.domainLastAccess[host] = time.Now()
 			e.domainMu.Unlock()
-			return
+			return true
 		}
 	}
 
 	e.domainLastAccess[host] = time.Now()
 	e.domainMu.Unlock()
+	return true
 }
 
 func (e *Engine) worker(ctx context.Context, id int) {
@@ -122,10 +137,12 @@ func (e *Engine) worker(ctx context.Context, id int) {
 		}
 
 		log.Printf("[Worker %d] Asteapta permisiunea rate-limit pt: %s", id, targetUrl)
-		e.waitForDomain(targetUrl)
+		if !e.waitForDomain(ctx, targetUrl) {
+			return // context anulat in timpul asteptarii
+		}
 		log.Printf("[Worker %d] Scanare aprobata: %s (Adancime: %d)", id, targetUrl, depth)
 
-		result, err := ScrapePage(client, targetUrl)
+		result, err := ScrapePage(ctx, client, targetUrl)
 		if err != nil {
 			log.Printf("[Worker %d] Eroare retea/SOCKS la %s: %v", id, targetUrl, err)
 			if errRetry := e.DB.FailNodeWithRetry(targetUrl); errRetry != nil {

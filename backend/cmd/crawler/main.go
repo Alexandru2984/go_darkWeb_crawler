@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -40,7 +41,7 @@ func main() {
 		log.Fatalf("❌ Eroare la initializarea clientului Tor: %v", err)
 	}
 
-	result, err := crawler.ScrapePage(client, *targetURL)
+	result, err := crawler.ScrapePage(context.Background(), client, *targetURL)
 	if err != nil {
 		log.Fatalf("❌ Eroare in timpul scanarii: %v", err)
 	}

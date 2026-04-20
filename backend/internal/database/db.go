@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"time"
 
 	_ "github.com/lib/pq"
 )
@@ -22,6 +23,10 @@ func InitDB(dsn string) (*DB, error) {
 	if err = db.Ping(); err != nil {
 		return nil, fmt.Errorf("eroare la conectarea fizica la db: %w", err)
 	}
+
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
 
 	log.Println("Conexiune la PostgreSQL reusita!")
 
@@ -214,10 +219,31 @@ func (db *DB) FailNodeWithRetry(nodeURL string) error {
 	return err
 }
 
-func (db *DB) GetNodes() ([]Node, error) {
+// Stats retine statistici sumare despre starea crawlingului
+type Stats struct {
+	NodesCrawled int
+	PendingNodes int
+}
+
+// GetStats returneaza numarul de noduri crawlate si in asteptare
+func (db *DB) GetStats() (Stats, error) {
+	var s Stats
+	err := db.Conn.QueryRow(`
+		SELECT
+			COUNT(*) FILTER (WHERE processing_status = 'completed'),
+			COUNT(*) FILTER (WHERE processing_status = 'pending')
+		FROM nodes
+	`).Scan(&s.NodesCrawled, &s.PendingNodes)
+	return s, err
+}
+
+func (db *DB) GetNodes(limit, offset int) ([]Node, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
 	rows, err := db.Conn.Query(`
 		SELECT id, url, COALESCE(title, ''), COALESCE(status_code, 0), COALESCE(server_header, ''), processing_status
-		FROM nodes ORDER BY discovered_at DESC LIMIT 100`)
+		FROM nodes ORDER BY discovered_at DESC LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -234,8 +260,11 @@ func (db *DB) GetNodes() ([]Node, error) {
 	return nodes, rows.Err()
 }
 
-func (db *DB) GetEdges() ([]Edge, error) {
-	rows, err := db.Conn.Query("SELECT source_url, target_url FROM edges LIMIT 500")
+func (db *DB) GetEdges(limit, offset int) ([]Edge, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	rows, err := db.Conn.Query("SELECT source_url, target_url FROM edges LIMIT $1 OFFSET $2", limit, offset)
 	if err != nil {
 		return nil, err
 	}
