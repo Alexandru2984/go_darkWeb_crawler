@@ -10,8 +10,9 @@ vendor/
 *.test
 *.out
 cover.out
-onion-spider/backend/api_bin
-onion-spider/backend/crawler_bin
+backend/api_bin
+backend/crawler_bin
+backend/onion-spider-api
 
 # --- Node/Frontend Specific ---
 node_modules/
