@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -36,7 +37,23 @@ type limitBucket struct {
 }
 
 func newCrawlLimiter(limit int, window time.Duration) *crawlLimiter {
-	return &crawlLimiter{buckets: make(map[string]*limitBucket), limit: limit, window: window}
+	l := &crawlLimiter{buckets: make(map[string]*limitBucket), limit: limit, window: window}
+	// Goroutine de cleanup — sterge bucket-urile expirate la fiecare 10 minute
+	go func() {
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			l.mu.Lock()
+			now := time.Now()
+			for ip, b := range l.buckets {
+				if now.After(b.resetAt) {
+					delete(l.buckets, ip)
+				}
+			}
+			l.mu.Unlock()
+		}
+	}()
+	return l
 }
 
 func (l *crawlLimiter) allow(ip string) bool {
@@ -56,9 +73,12 @@ func (l *crawlLimiter) allow(ip string) bool {
 }
 
 func apiKeyMiddleware(apiKey string) func(http.Handler) http.Handler {
+	keyBytes := []byte(apiKey)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("X-API-Key") != apiKey {
+			// ConstantTimeCompare previne timing attacks
+			incoming := []byte(r.Header.Get("X-API-Key"))
+			if subtle.ConstantTimeCompare(incoming, keyBytes) != 1 {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
@@ -137,6 +157,7 @@ func main() {
 	}
 
 	limiter := newCrawlLimiter(20, time.Minute)
+	searchLimiter := newCrawlLimiter(60, time.Minute)
 
 	dbConn, err := database.InitDB(dsn)
 	if err != nil {
@@ -191,6 +212,14 @@ func main() {
 
 	r.Get("/api/search", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		ip := r.Header.Get("X-Real-IP")
+		if ip == "" {
+			ip = r.RemoteAddr
+		}
+		if !searchLimiter.allow(ip) {
+			http.Error(w, "Rate limit depasit — max 60 cautari/minut", http.StatusTooManyRequests)
+			return
+		}
 		q := r.URL.Query().Get("q")
 		if q == "" {
 			http.Error(w, "Query is required", http.StatusBadRequest)
@@ -209,9 +238,10 @@ func main() {
 	})
 
 	r.Post("/api/crawl", func(w http.ResponseWriter, r *http.Request) {
-		ip := r.RemoteAddr
-		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-			ip = strings.SplitN(forwarded, ",", 2)[0]
+		// X-Real-IP e setat exclusiv de nginx — nu poate fi falsificat de client
+		ip := r.Header.Get("X-Real-IP")
+		if ip == "" {
+			ip = r.RemoteAddr
 		}
 		if !limiter.allow(strings.TrimSpace(ip)) {
 			http.Error(w, "Prea multe cereri. Incearca din nou in cateva minute.", http.StatusTooManyRequests)
@@ -220,6 +250,7 @@ func main() {
 		var req struct {
 			URL string `json:"url"`
 		}
+		r.Body = http.MaxBytesReader(w, r.Body, 2048) // 2KB limita — previne body-uri gigantice
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
@@ -236,7 +267,7 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"message": "URL added to crawl queue"})
 	})
 
-	srv := &http.Server{Addr: ":" + port, Handler: r}
+	srv := &http.Server{Addr: "127.0.0.1:" + port, Handler: r}
 
 	go func() {
 		log.Printf("=== [API] Serverul asculta pe portul %s ===", port)

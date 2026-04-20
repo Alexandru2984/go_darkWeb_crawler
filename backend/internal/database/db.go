@@ -34,6 +34,12 @@ func InitDB(dsn string) (*DB, error) {
 		return nil, fmt.Errorf("eroare la migrarea bazei de date: %w", err)
 	}
 
+	// Nodurile ramase in 'crawling' la un crash anterior nu vor fi niciodata reluate.
+	// Le resetam la 'pending' la fiecare pornire.
+	if _, err = db.Exec(`UPDATE nodes SET processing_status = 'pending' WHERE processing_status = 'crawling'`); err != nil {
+		log.Printf("⚠️ Nu am putut reseta nodurile 'crawling': %v", err)
+	}
+
 	return &DB{Conn: db}, nil
 }
 

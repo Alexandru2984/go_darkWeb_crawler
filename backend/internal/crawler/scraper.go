@@ -63,7 +63,12 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 	result.Title = strings.TrimSpace(doc.Find("title").Text())
 
 	doc.Find("script, style, noscript, iframe").Remove()
-	result.Content = strings.TrimSpace(spaceRegex.ReplaceAllString(doc.Find("body").Text(), " "))
+	content := strings.TrimSpace(spaceRegex.ReplaceAllString(doc.Find("body").Text(), " "))
+	const maxContentBytes = 100 * 1024 // 100KB — previne stocarea paginilor gigantice in DB
+	if len(content) > maxContentBytes {
+		content = content[:maxContentBytes]
+	}
+	result.Content = content
 
 	metaDataMap := make(map[string]string)
 	doc.Find("meta").Each(func(i int, s *goquery.Selection) {
