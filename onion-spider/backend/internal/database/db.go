@@ -12,7 +12,7 @@ type DB struct {
 	Conn *sql.DB
 }
 
-// InitDB initializeaza conexiunea la PostgreSQL
+// InitDB initializeaza conexiunea la PostgreSQL si ruleaza migrarile de schema
 func InitDB(dsn string) (*DB, error) {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
@@ -25,38 +25,75 @@ func InitDB(dsn string) (*DB, error) {
 
 	log.Println("Conexiune la PostgreSQL reusita!")
 
-	err = createTables(db)
-	if err != nil {
-		return nil, fmt.Errorf("eroare la crearea tabelelor: %w", err)
+	if err = migrate(db); err != nil {
+		return nil, fmt.Errorf("eroare la migrarea bazei de date: %w", err)
 	}
 
 	return &DB{Conn: db}, nil
 }
 
-func createTables(db *sql.DB) error {
-	query := `
+func migrate(db *sql.DB) error {
+	// Cream tabelele de baza daca nu exista (instalare noua)
+	_, err := db.Exec(`
 	CREATE TABLE IF NOT EXISTS nodes (
-		id SERIAL PRIMARY KEY,
-		url VARCHAR(255) UNIQUE NOT NULL,
-		title VARCHAR(255),
-		status_code INT,
-		server_header VARCHAR(100),
-		metadata JSONB,
-		processing_status VARCHAR(20) DEFAULT 'pending', -- pending, crawling, completed, failed
-		depth INT DEFAULT 0,
-		discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		id              SERIAL PRIMARY KEY,
+		url             TEXT UNIQUE NOT NULL,
+		title           TEXT,
+		status_code     INT,
+		server_header   VARCHAR(100),
+		metadata        JSONB,
+		content         TEXT,
+		retry_count     INT DEFAULT 0,
+		next_crawl_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		processing_status VARCHAR(20) DEFAULT 'pending',
+		depth           INT DEFAULT 0,
+		search_vector   TSVECTOR,
+		discovered_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		last_crawled_at TIMESTAMP
 	);
 
 	CREATE TABLE IF NOT EXISTS edges (
-		source_url VARCHAR(255) REFERENCES nodes(url) ON DELETE CASCADE,
-		target_url VARCHAR(255),
+		source_url    TEXT REFERENCES nodes(url) ON DELETE CASCADE,
+		target_url    TEXT,
 		discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		PRIMARY KEY (source_url, target_url)
 	);
-	`
-	_, err := db.Exec(query)
-	return err
+	`)
+	if err != nil {
+		return err
+	}
+
+	// Migrari incrementale pentru instalatii existente (sunt idempotente)
+	incremental := []string{
+		`ALTER TABLE nodes ALTER COLUMN url TYPE TEXT`,
+		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS content TEXT`,
+		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS retry_count INT DEFAULT 0`,
+		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS next_crawl_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`,
+		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS search_vector TSVECTOR`,
+		`ALTER TABLE edges ALTER COLUMN source_url TYPE TEXT`,
+		`ALTER TABLE edges ALTER COLUMN target_url TYPE TEXT`,
+		`UPDATE nodes SET processing_status = 'pending' WHERE processing_status = 'pending_v2'`,
+		`CREATE INDEX IF NOT EXISTS idx_nodes_search_vector ON nodes USING GIN(search_vector)`,
+		`CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(processing_status, next_crawl_at)`,
+		`CREATE OR REPLACE FUNCTION nodes_search_vector_update() RETURNS trigger AS $$
+		 BEGIN
+		   NEW.search_vector := to_tsvector('english',
+		     COALESCE(NEW.title, '') || ' ' || COALESCE(NEW.content, ''));
+		   RETURN NEW;
+		 END;
+		 $$ LANGUAGE plpgsql`,
+		`DROP TRIGGER IF EXISTS nodes_search_vector_trigger ON nodes`,
+		`CREATE TRIGGER nodes_search_vector_trigger
+		   BEFORE INSERT OR UPDATE ON nodes
+		   FOR EACH ROW EXECUTE FUNCTION nodes_search_vector_update()`,
+	}
+	for _, m := range incremental {
+		if _, err := db.Exec(m); err != nil {
+			log.Printf("⚠️ Migrare ignorata (probabil deja aplicata): %v", err)
+		}
+	}
+
+	return nil
 }
 
 // Node reprezinta un site onion stocat in DB
@@ -74,39 +111,44 @@ type Edge struct {
 	Target string `json:"target"`
 }
 
-// SaveNode salveaza sau actualizeaza informatiile despre un site onion
+// SaveNode salveaza sau actualizeaza informatiile despre un site onion dupa crawling
 func (db *DB) SaveNode(url, title, server string, statusCode int, status string, metadata string, content string) error {
-	query := `
-	INSERT INTO nodes (url, title, status_code, server_header, processing_status, metadata, content, last_crawled_at)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
-	ON CONFLICT (url) DO UPDATE SET
-		title = EXCLUDED.title,
-		status_code = EXCLUDED.status_code,
-		server_header = EXCLUDED.server_header,
-		processing_status = EXCLUDED.processing_status,
-		metadata = EXCLUDED.metadata,
-		content = EXCLUDED.content,
-		last_crawled_at = CURRENT_TIMESTAMP;
-	`
 	if metadata == "" {
 		metadata = "{}"
 	}
-	_, err := db.Conn.Exec(query, url, title, statusCode, server, status, metadata, content)
+	_, err := db.Conn.Exec(`
+	INSERT INTO nodes (url, title, status_code, server_header, processing_status, metadata, content, last_crawled_at)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+	ON CONFLICT (url) DO UPDATE SET
+		title             = EXCLUDED.title,
+		status_code       = EXCLUDED.status_code,
+		server_header     = EXCLUDED.server_header,
+		processing_status = EXCLUDED.processing_status,
+		metadata          = EXCLUDED.metadata,
+		content           = EXCLUDED.content,
+		last_crawled_at   = CURRENT_TIMESTAMP;
+	`, url, title, statusCode, server, status, metadata, content)
 	return err
 }
 
-// SearchNodes efectueaza o cautare Full-Text pe titlu si continut folosind indexul GIN (search_vector)
+// EnqueueURL adauga un URL in coada de crawling fara sa suprascrie date existente
+func (db *DB) EnqueueURL(rawURL string, depth int) error {
+	_, err := db.Conn.Exec(
+		`INSERT INTO nodes (url, processing_status, depth) VALUES ($1, 'pending', $2) ON CONFLICT (url) DO NOTHING`,
+		rawURL, depth,
+	)
+	return err
+}
+
+// SearchNodes efectueaza o cautare Full-Text pe titlu si continut folosind indexul GIN
 func (db *DB) SearchNodes(searchQuery string) ([]Node, error) {
-	// Folosim plainto_tsquery('english', searchQuery) pentru a potrivi cuvintele
-	// si ts_rank pentru a le ordona descrescator in functie de relevanta.
-	query := `
-		SELECT id, url, COALESCE(title, ''), COALESCE(status_code, 0), COALESCE(server_header, ''), processing_status 
-		FROM nodes 
+	rows, err := db.Conn.Query(`
+		SELECT id, url, COALESCE(title, ''), COALESCE(status_code, 0), COALESCE(server_header, ''), processing_status
+		FROM nodes
 		WHERE search_vector @@ plainto_tsquery('english', $1)
 		ORDER BY ts_rank(search_vector, plainto_tsquery('english', $1)) DESC
-		LIMIT 50;
-	`
-	rows, err := db.Conn.Query(query, searchQuery)
+		LIMIT 50
+	`, searchQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -120,65 +162,62 @@ func (db *DB) SearchNodes(searchQuery string) ([]Node, error) {
 		}
 		nodes = append(nodes, n)
 	}
-	return nodes, nil
+	return nodes, rows.Err()
 }
 
-// SaveEdge creeaza o legatura intre doua site-uri onion
+// SaveEdge creeaza o legatura intre doua site-uri si adauga target-ul in coada daca e nou
 func (db *DB) SaveEdge(source, target string, targetDepth int) error {
-	// Ne asiguram ca si target-ul exista in tabela nodes (ca pending) daca nu exista deja
-	_, _ = db.Conn.Exec("INSERT INTO nodes (url, processing_status, depth) VALUES ($1, 'pending_v2', $2) ON CONFLICT (url) DO NOTHING", target, targetDepth)
-
-	query := `
+	_, _ = db.Conn.Exec(
+		`INSERT INTO nodes (url, processing_status, depth) VALUES ($1, 'pending', $2) ON CONFLICT (url) DO NOTHING`,
+		target, targetDepth,
+	)
+	_, err := db.Conn.Exec(`
 	INSERT INTO edges (source_url, target_url)
 	VALUES ($1, $2)
-	ON CONFLICT (source_url, target_url) DO NOTHING;
-	`
-	_, err := db.Conn.Exec(query, source, target)
+	ON CONFLICT (source_url, target_url) DO NOTHING
+	`, source, target)
 	return err
 }
 
-// GetNextPendingNode extrage urmatorul URL care trebuie scanat impreuna cu adancimea sa
+// GetNextPendingNode extrage atomic urmatorul URL care trebuie scanat
 func (db *DB) GetNextPendingNode() (string, int, error) {
-	var url string
+	var nodeURL string
 	var depth int
-	query := `
-		UPDATE nodes 
-		SET processing_status = 'crawling' 
+	err := db.Conn.QueryRow(`
+		UPDATE nodes
+		SET processing_status = 'crawling'
 		WHERE url = (
-			SELECT url FROM nodes 
-			WHERE processing_status = 'pending_v2' 
+			SELECT url FROM nodes
+			WHERE processing_status = 'pending'
 			  AND next_crawl_at <= CURRENT_TIMESTAMP
-			ORDER BY next_crawl_at ASC, discovered_at ASC 
-			LIMIT 1 
+			ORDER BY next_crawl_at ASC, discovered_at ASC
+			LIMIT 1
 			FOR UPDATE SKIP LOCKED
-		) 
-		RETURNING url, depth;
-	`
-	err := db.Conn.QueryRow(query).Scan(&url, &depth)
+		)
+		RETURNING url, depth
+	`).Scan(&nodeURL, &depth)
 	if err == sql.ErrNoRows {
 		return "", 0, nil
 	}
-	return url, depth, err
+	return nodeURL, depth, err
 }
 
-// FailNodeWithRetry inregistreaza un esec de retea si pregateste o reincercare automata
-func (db *DB) FailNodeWithRetry(url string) error {
-	query := `
-		UPDATE nodes 
-		SET retry_count = retry_count + 1,
-			processing_status = CASE 
-				WHEN retry_count >= 2 THEN 'failed' 
-				ELSE 'pending_v2' 
-			END,
-			next_crawl_at = CURRENT_TIMESTAMP + (INTERVAL '15 minutes' * (retry_count + 1))
-		WHERE url = $1;
-	`
-	_, err := db.Conn.Exec(query, url)
+// FailNodeWithRetry inregistreaza un esec si programeaza o reincercare automata
+func (db *DB) FailNodeWithRetry(nodeURL string) error {
+	_, err := db.Conn.Exec(`
+		UPDATE nodes
+		SET retry_count       = retry_count + 1,
+		    processing_status = CASE WHEN retry_count >= 2 THEN 'failed' ELSE 'pending' END,
+		    next_crawl_at     = CURRENT_TIMESTAMP + (INTERVAL '15 minutes' * (retry_count + 1))
+		WHERE url = $1
+	`, nodeURL)
 	return err
 }
 
 func (db *DB) GetNodes() ([]Node, error) {
-	rows, err := db.Conn.Query("SELECT id, url, COALESCE(title, ''), COALESCE(status_code, 0), COALESCE(server_header, ''), processing_status FROM nodes ORDER BY discovered_at DESC LIMIT 100")
+	rows, err := db.Conn.Query(`
+		SELECT id, url, COALESCE(title, ''), COALESCE(status_code, 0), COALESCE(server_header, ''), processing_status
+		FROM nodes ORDER BY discovered_at DESC LIMIT 100`)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +231,7 @@ func (db *DB) GetNodes() ([]Node, error) {
 		}
 		nodes = append(nodes, n)
 	}
-	return nodes, nil
+	return nodes, rows.Err()
 }
 
 func (db *DB) GetEdges() ([]Edge, error) {
@@ -210,5 +249,5 @@ func (db *DB) GetEdges() ([]Edge, error) {
 		}
 		edges = append(edges, e)
 	}
-	return edges, nil
+	return edges, rows.Err()
 }

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, watch, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Network } from 'vis-network'
 
 const status = ref({ status: 'offline', nodes_crawled: 0, pending_nodes: 0, db_connected: false, active_workers: 0 })
@@ -12,18 +12,30 @@ const isSearching = ref(false)
 const isGraphView = ref(false)
 const physicsEnabled = ref(true)
 const message = ref('')
+const messageType = ref('info') // 'info' | 'error'
+const toast = ref('')
+let toastTimer = null
 
 const graphContainer = ref(null)
 let network = null
+let statusInterval = null
 
 const API_BASE = '/api'
+
+const showToast = (text) => {
+  toast.value = text
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toast.value = '' }, 3000)
+}
 
 const fetchStatus = async () => {
   try {
     const res = await fetch(`${API_BASE}/status`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
     status.value = await res.json()
   } catch (err) {
     console.error('Eroare la preluarea statusului:', err)
+    status.value = { ...status.value, status: 'offline', db_connected: false }
   }
 }
 
@@ -31,15 +43,19 @@ const fetchNodes = async () => {
   if (isSearching.value) return
   try {
     const res = await fetch(`${API_BASE}/nodes`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
     nodes.value = await res.json() || []
   } catch (err) {
     console.error('Eroare la preluarea nodurilor:', err)
+    message.value = 'Eroare la preluarea listei de noduri.'
+    messageType.value = 'error'
   }
 }
 
 const fetchEdges = async () => {
   try {
     const res = await fetch(`${API_BASE}/edges`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
     edges.value = await res.json() || []
   } catch (err) {
     console.error('Eroare la preluarea legaturilor:', err)
@@ -58,9 +74,14 @@ const performSearch = async () => {
     const res = await fetch(`${API_BASE}/search?q=${encodeURIComponent(searchQuery.value)}`)
     if (res.ok) {
       nodes.value = await res.json() || []
+    } else {
+      message.value = 'Eroare la cautare.'
+      messageType.value = 'error'
     }
   } catch (err) {
     console.error('Eroare la cautare:', err)
+    message.value = 'Eroare de conexiune la cautare.'
+    messageType.value = 'error'
   }
 }
 
@@ -68,6 +89,7 @@ const startCrawl = async () => {
   if (!targetUrl.value) return
   loading.value = true
   message.value = 'Se adauga in coada...'
+  messageType.value = 'info'
   
   try {
     const res = await fetch(`${API_BASE}/crawl`, {
@@ -78,13 +100,17 @@ const startCrawl = async () => {
     
     if (res.ok) {
       message.value = 'URL adaugat cu succes in coada de scanare!'
+      messageType.value = 'info'
       targetUrl.value = ''
       setTimeout(() => { message.value = '' }, 3000)
     } else {
-      message.value = 'Eroare la adaugarea in coada.'
+      const text = await res.text()
+      message.value = `Eroare: ${text || res.statusText}`
+      messageType.value = 'error'
     }
   } catch (err) {
     message.value = 'Eroare de conexiune la API.'
+    messageType.value = 'error'
   } finally {
     loading.value = false
     fetchStatus()
@@ -100,42 +126,38 @@ const togglePhysics = () => {
 const drawGraph = () => {
   if (!graphContainer.value) return
 
-  // Calculam gradele (numarul de legaturi pentru a mari nodurile principale)
   const nodeDegrees = {}
   edges.value.forEach(e => {
     nodeDegrees[e.source] = (nodeDegrees[e.source] || 0) + 1
     nodeDegrees[e.target] = (nodeDegrees[e.target] || 0) + 1
   })
 
-  // Cream nodurile
   const visNodes = nodes.value.map(n => {
-    let color = '#4da6ff' // Default albastru
-    if (n.status_code === 200) color = '#00ff00' // Verde pentru succes
-    else if (n.status_code === 400 || n.status_code === 429) color = '#ffcc00' // Galben pt erori
-    else if (n.status_code === 0 && n.processing_status === 'completed') color = '#ff3333' // Rosu pentru inaccesibil
-    else if (n.processing_status === 'pending_v2') color = '#888888' // Gri pt in coada
+    let color = '#4da6ff'
+    if (n.status_code === 200) color = '#00ff00'
+    else if (n.status_code === 400 || n.status_code === 429) color = '#ffcc00'
+    else if (n.status_code === 0 && n.processing_status === 'completed') color = '#ff3333'
+    else if (n.processing_status === 'pending') color = '#888888'
 
     const degree = nodeDegrees[n.url] || 0
-    let size = 15 + (degree * 2.5) // Hub-urile cresc mult mai repede
-    if (size > 60) size = 60 // Cap size crescut
+    const size = Math.min(15 + (degree * 2.5), 60)
 
     const cleanTitle = n.title ? n.title : 'Sursa Inaccesibila / Secundara'
     const shortLabel = cleanTitle.length > 25 ? cleanTitle.substring(0, 25) + '...' : cleanTitle
-
     const tooltipText = `${cleanTitle}\nURL: ${n.url}\nStatus HTTP: ${n.status_code} | Legaturi (Hub): ${degree}\n(Dublu click pe bila pentru a copia link-ul)`
 
     return {
       id: n.url,
       label: shortLabel,
       title: tooltipText,
-      color: { 
-        background: color, 
+      color: {
+        background: color,
         border: '#000',
         highlight: { background: '#ffffff', border: color },
         hover: { background: color, border: '#ffffff' }
       },
       shape: 'dot',
-      size: size,
+      size,
       borderWidth: size > 30 ? 3 : 1,
       font: { color: '#ccc', size: size > 30 ? 16 : 10, face: 'Inter' },
       shadow: { enabled: true, color: 'rgba(0,0,0,0.6)', size: 10, x: 0, y: 0 }
@@ -144,7 +166,6 @@ const drawGraph = () => {
 
   const uniqueNodes = Array.from(new Map(visNodes.map(item => [item.id, item])).values())
 
-  // Cream muchiile transparente
   const visEdges = edges.value.map(e => ({
     from: e.source,
     to: e.target,
@@ -156,7 +177,7 @@ const drawGraph = () => {
   const data = { nodes: uniqueNodes, edges: visEdges }
   const options = {
     edges: { width: 1, selectionWidth: 4 },
-    physics: { 
+    physics: {
       solver: 'forceAtlas2Based',
       forceAtlas2Based: {
         gravitationalConstant: -150,
@@ -169,12 +190,12 @@ const drawGraph = () => {
       minVelocity: 0.1,
       stabilization: { iterations: 250 }
     },
-    interaction: { 
-      hover: true, 
-      tooltipDelay: 50, 
-      zoomView: true, 
+    interaction: {
+      hover: true,
+      tooltipDelay: 50,
+      zoomView: true,
       dragView: true,
-      hideEdgesOnDrag: true // Pentru performanta cand tragem de ecran
+      hideEdgesOnDrag: true
     }
   }
 
@@ -189,12 +210,14 @@ const drawGraph = () => {
     physicsEnabled.value = false
   })
 
-  // Actiune de Dublu Click pentru a copia URL-ul
   network.on("doubleClick", function (params) {
     if (params.nodes.length > 0) {
       const clickedUrl = params.nodes[0]
-      navigator.clipboard.writeText(clickedUrl)
-      alert("URL copiat în clipboard: \n" + clickedUrl)
+      navigator.clipboard.writeText(clickedUrl).then(() => {
+        showToast('✅ URL copiat în clipboard!')
+      }).catch(() => {
+        showToast('❌ Nu am putut copia URL-ul.')
+      })
     }
   })
 }
@@ -211,10 +234,16 @@ watch(isGraphView, async (newVal) => {
 onMounted(() => {
   fetchStatus()
   fetchNodes()
-  setInterval(() => {
+  statusInterval = setInterval(() => {
     fetchStatus()
-    if (!isGraphView.value) fetchNodes() // Actualizam lista doar daca nu suntem in graph
+    if (!isGraphView.value) fetchNodes()
   }, 5000)
+})
+
+onUnmounted(() => {
+  clearInterval(statusInterval)
+  if (toastTimer) clearTimeout(toastTimer)
+  if (network) network.destroy()
 })
 </script>
 
@@ -253,13 +282,18 @@ onMounted(() => {
               <span v-else>Adauga 🚀</span>
             </button>
           </div>
-          <p v-if="message" class="info-message">{{ message }}</p>
+          <p v-if="message" class="info-message" :class="{ 'error-message': messageType === 'error' }">{{ message }}</p>
         </section>
 
         <div class="view-controls">
           <button class="toggle-btn" :class="{ active: !isGraphView }" @click="isGraphView = false">📄 Listă / Căutare</button>
           <button class="toggle-btn" :class="{ active: isGraphView }" @click="isGraphView = true">🕸️ Grafic Rețea</button>
         </div>
+
+        <!-- Toast notification pentru clipboard -->
+        <transition name="toast-fade">
+          <div v-if="toast" class="toast">{{ toast }}</div>
+        </transition>
 
         <!-- Vizualizarea Lista + Cautare -->
         <div v-if="!isGraphView">
@@ -301,7 +335,7 @@ onMounted(() => {
                     <td>
                       <div class="title-row">
                         <span class="title">{{ node.title || 'In asteptare...' }}</span>
-                        <span class="status-pill" :class="node.processing_status">
+                        <span class="status-pill" :class="node.processing_status.replace('_', '-')">
                           {{ node.processing_status }}
                         </span>
                       </div>
@@ -414,11 +448,32 @@ button { padding: 0 35px; background: #ff3333; border: none; color: white; font-
 .l-red { background: #ff3333; }
 .l-gray { background: #888888; }
 
-.status-pill { font-size: 0.7rem; padding: 2px 8px; border-radius: 10px; text-transform: uppercase; font-weight: 800; background: #222; color: #888; }
-.status-pill.pending_v2 { color: #ffcc00; background: rgba(255, 204, 0, 0.1); }
+.status-pill.pending { color: #888; background: #222; }
+.status-pill.pending-v2 { color: #ffcc00; background: rgba(255, 204, 0, 0.1); }
 .status-pill.crawling { color: #4da6ff; background: rgba(77, 166, 255, 0.1); animation: pulse 2s infinite; }
 .status-pill.completed { color: #00ff00; background: rgba(0, 255, 0, 0.1); }
 .status-pill.failed { color: #ff3333; background: rgba(255, 51, 51, 0.1); }
+
+.info-message { color: #00ff00; font-size: 0.9rem; margin-top: 10px; }
+.error-message { color: #ff3333 !important; }
+
+.toast {
+  position: fixed;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(20, 20, 20, 0.95);
+  color: #fff;
+  border: 1px solid #ff3333;
+  padding: 12px 28px;
+  border-radius: 10px;
+  font-size: 0.95rem;
+  z-index: 9999;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.8);
+  pointer-events: none;
+}
+.toast-fade-enter-active, .toast-fade-leave-active { transition: opacity 0.3s, transform 0.3s; }
+.toast-fade-enter-from, .toast-fade-leave-to { opacity: 0; transform: translateX(-50%) translateY(10px); }
 
 @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
 .title-row { display: flex; align-items: center; gap: 10px; }
