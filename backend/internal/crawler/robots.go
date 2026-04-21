@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -97,16 +99,16 @@ func fetchRobots(ctx context.Context, client *http.Client, base *url.URL) *robot
 	}
 	defer resp.Body.Close()
 
-	entry.disallowed = parseRobots(resp, robotsUA)
+	entry.disallowed = parseRobots(io.LimitReader(resp.Body, 64*1024), robotsUA)
 	return entry
 }
 
 // parseRobots citeste un robots.txt si extrage caile interzise pentru UA-ul dat.
 // Suporta sectiunile User-agent: * si User-agent: OnionSpider.
-func parseRobots(resp *http.Response, ua string) []string {
+func parseRobots(body io.Reader, ua string) []string {
 	var disallowed []string
 	applies := false
-	scanner := bufio.NewScanner(resp.Body)
+	scanner := bufio.NewScanner(body)
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -125,10 +127,13 @@ func parseRobots(resp *http.Response, ua string) []string {
 		case "user-agent":
 			applies = value == "*" || strings.EqualFold(value, ua)
 		case "disallow":
-			if applies && value != "" {
+			if applies && value != "" && len(disallowed) < 1000 {
 				disallowed = append(disallowed, value)
 			}
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("[robots.txt] Eroare la scanare: %v", err)
 	}
 	return disallowed
 }

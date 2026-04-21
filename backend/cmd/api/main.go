@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -82,7 +83,7 @@ func apiKeyMiddleware(apiKey string) func(http.Handler) http.Handler {
 			// ConstantTimeCompare previne timing attacks
 			incoming := []byte(r.Header.Get("X-API-Key"))
 			if subtle.ConstantTimeCompare(incoming, keyBytes) != 1 {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -96,6 +97,9 @@ func parsePagination(r *http.Request) (limit, offset int) {
 	if page < 1 {
 		page = 1
 	}
+	if page > 10000 {
+		page = 10000
+	}
 	if limit <= 0 {
 		limit = 50
 	}
@@ -108,6 +112,18 @@ func writeJSONError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// clientIP extrage IP-ul clientului din request, fara portul asociat.
+func clientIP(r *http.Request) string {
+	ip := r.Header.Get("X-Real-IP")
+	if ip == "" {
+		ip = r.RemoteAddr
+	}
+	if host, _, err := net.SplitHostPort(ip); err == nil {
+		return host
+	}
+	return ip
 }
 
 func main() {
@@ -153,7 +169,7 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: strings.Split(corsOrigin, ","),
-		AllowedMethods: []string{"GET", "POST", "OPTIONS"},
+		AllowedMethods: []string{"GET", "POST", "DELETE", "OPTIONS"},
 		AllowedHeaders: []string{"Accept", "Content-Type", "X-API-Key"},
 		MaxAge:         300,
 	}))
@@ -484,7 +500,7 @@ func main() {
 }
 
 func isValidOnionURL(rawURL string) bool {
-	if rawURL == "" {
+	if rawURL == "" || len(rawURL) > 2048 {
 		return false
 	}
 	parsed, err := url.Parse(rawURL)

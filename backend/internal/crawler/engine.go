@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"onion-spider/internal/database"
 	"onion-spider/internal/proxy"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -172,6 +173,13 @@ func (e *Engine) worker(ctx context.Context, id int) {
 			continue
 		}
 
+		// Validare la crawl-time: procesam exclusiv adrese .onion
+		if parsedTarget, err := url.Parse(targetUrl); err != nil || !strings.HasSuffix(strings.ToLower(parsedTarget.Hostname()), ".onion") {
+			log.Printf("[Worker %d] URL non-.onion in DB, marcat ca invalid: %s", id, targetUrl)
+			_ = e.DB.MarkRobotsBlocked(targetUrl)
+			continue
+		}
+
 		log.Printf("[Worker %d] Asteapta permisiunea rate-limit pt: %s", id, targetUrl)
 		if !e.waitForDomain(ctx, targetUrl) {
 			return // context anulat in timpul asteptarii
@@ -201,6 +209,9 @@ func (e *Engine) worker(ctx context.Context, id int) {
 		changed, err := e.DB.SaveNode(targetUrl, result.Title, result.ServerHeader, result.StatusCode, "completed", result.Metadata, result.Content, result.Category)
 		if err != nil {
 			log.Printf("[Worker %d] Eroare la salvare nod: %v", id, err)
+			if retryErr := e.DB.FailNodeWithRetry(targetUrl); retryErr != nil {
+				log.Printf("[Worker %d] Eroare la retry dupa esec SaveNode: %v", id, retryErr)
+			}
 		} else if !changed {
 			log.Printf("[Worker %d] Continut nemodificat (hash identic): %s", id, targetUrl)
 		}

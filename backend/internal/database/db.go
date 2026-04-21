@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"strings"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -214,33 +215,39 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 // EnqueueURL adauga un URL in coada de crawling fara sa suprascrie date existente.
 // Returneaza ErrBlacklisted daca domeniul e pe blacklist.
 func (db *DB) EnqueueURL(rawURL string, depth int) error {
+	if len(rawURL) > 2048 {
+		return fmt.Errorf("url prea lung (max 2048 caractere)")
+	}
 	parsed, err := url.Parse(rawURL)
 	if err != nil || parsed.Host == "" {
 		return fmt.Errorf("url invalid: %s", rawURL)
 	}
+	host := strings.ToLower(parsed.Host)
 	var count int
-	db.Conn.QueryRow(`SELECT COUNT(*) FROM blacklist WHERE domain = $1`, parsed.Host).Scan(&count)
+	db.Conn.QueryRow(`SELECT COUNT(*) FROM blacklist WHERE domain = $1`, host).Scan(&count)
 	if count > 0 {
 		return ErrBlacklisted
 	}
 	_, err = db.Conn.Exec(
 		`INSERT INTO nodes (url, host, processing_status, depth) VALUES ($1, $2, 'pending', $3) ON CONFLICT (url) DO NOTHING`,
-		rawURL, parsed.Host, depth,
+		rawURL, host, depth,
 	)
 	return err
 }
 
-// SearchNodes efectueaza o cautare Full-Text pe titlu si continut folosind indexul GIN
-func (db *DB) SearchNodes(searchQuery string) ([]Node, error) {
+// SearchNodes efectueaza o cautare Full-Text pe titlu si continut folosind indexul GIN.
+// Daca category nu e gol, filtreaza si dupa categorie.
+func (db *DB) SearchNodes(searchQuery, category string) ([]Node, error) {
 	rows, err := db.Conn.Query(`
 		SELECT id, url, COALESCE(title, ''), COALESCE(status_code, 0), COALESCE(server_header, ''),
 		       processing_status, COALESCE(category, 'unknown'),
 		       to_char(last_crawled_at, 'YYYY-MM-DD HH24:MI:SS')
 		FROM nodes
 		WHERE search_vector @@ plainto_tsquery('english', $1)
+		  AND ($2 = '' OR category = $2)
 		ORDER BY ts_rank(search_vector, plainto_tsquery('english', $1)) DESC
 		LIMIT 50
-	`, searchQuery)
+	`, searchQuery, category)
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +274,7 @@ func (db *DB) SearchNodes(searchQuery string) ([]Node, error) {
 func (db *DB) SaveEdge(source, target string, targetDepth int) error {
 	targetHost := ""
 	if parsed, err := url.Parse(target); err == nil {
-		targetHost = parsed.Host
+		targetHost = strings.ToLower(parsed.Host)
 	}
 
 	// Verificam blacklist-ul inainte sa adaugam nodul tinta in coada
@@ -558,6 +565,7 @@ func (db *DB) GetQueueSummary() (*QueueSummary, error) {
 // AddBlacklist adauga un domeniu in blacklist (seteaza processing_status='blocked' pe toate nodurile cu acel domeniu)
 // si previne adaugarea viitoare de URL-uri din acel domeniu.
 func (db *DB) AddBlacklist(domain string) error {
+	domain = strings.ToLower(strings.TrimSpace(domain))
 	_, err := db.Conn.Exec(`
 		INSERT INTO blacklist (domain) VALUES ($1) ON CONFLICT (domain) DO NOTHING
 	`, domain)
@@ -593,7 +601,7 @@ func (db *DB) GetBlacklist() ([]string, error) {
 // IsDomainBlacklisted verifica daca un domeniu e blocat
 func (db *DB) IsDomainBlacklisted(domain string) (bool, error) {
 	var count int
-	err := db.Conn.QueryRow(`SELECT COUNT(*) FROM blacklist WHERE domain = $1`, domain).Scan(&count)
+	err := db.Conn.QueryRow(`SELECT COUNT(*) FROM blacklist WHERE domain = $1`, strings.ToLower(domain)).Scan(&count)
 	return count > 0, err
 }
 
@@ -627,4 +635,53 @@ func (db *DB) ExportNodes(fn func(Node) error) error {
 		}
 	}
 	return rows.Err()
+}
+
+// DeleteBlacklist elimina un domeniu din blacklist si repune nodurile blocate inapoi in coada.
+// Returneaza (found bool, error).
+func (db *DB) DeleteBlacklist(domain string) (bool, error) {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	res, err := db.Conn.Exec(`DELETE FROM blacklist WHERE domain = $1`, domain)
+	if err != nil {
+		return false, err
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return false, nil
+	}
+	_, err = db.Conn.Exec(`
+		UPDATE nodes SET processing_status = 'pending', retry_count = 0, next_crawl_at = CURRENT_TIMESTAMP
+		WHERE host = $1 AND processing_status = 'blocked'
+	`, domain)
+	return true, err
+}
+
+// TimelineStat retine numarul de noduri descoperite intr-o zi.
+type TimelineStat struct {
+	Date  string `json:"date"`
+	Count int    `json:"count"`
+}
+
+// GetTimelineStats returneaza numarul de noduri descoperite pe zi in ultimele 30 de zile.
+func (db *DB) GetTimelineStats() ([]TimelineStat, error) {
+	rows, err := db.Conn.Query(`
+		SELECT to_char(discovered_at, 'YYYY-MM-DD') AS date, COUNT(*) AS count
+		FROM nodes
+		WHERE discovered_at >= CURRENT_DATE - INTERVAL '30 days'
+		GROUP BY date
+		ORDER BY date ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var stats []TimelineStat
+	for rows.Next() {
+		var s TimelineStat
+		if err := rows.Scan(&s.Date, &s.Count); err != nil {
+			return nil, err
+		}
+		stats = append(stats, s)
+	}
+	return stats, rows.Err()
 }

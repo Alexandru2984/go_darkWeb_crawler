@@ -98,7 +98,7 @@ func (c *TorController) buildAuthCommand() (string, error) {
 		}
 	}
 	if c.password != "" {
-		return fmt.Sprintf(`AUTHENTICATE "%s"`, c.password), nil
+		return fmt.Sprintf("AUTHENTICATE %x", []byte(c.password)), nil
 	}
 	return `AUTHENTICATE ""`, nil
 }

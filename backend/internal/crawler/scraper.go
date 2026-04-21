@@ -45,7 +45,7 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 
 	result := &ScrapeResult{
 		StatusCode:   resp.StatusCode,
-		ServerHeader: resp.Header.Get("Server"),
+		ServerHeader: truncateUTF8(resp.Header.Get("Server"), 100),
 		FoundOnions:  []string{},
 		Metadata:     "{}",
 		Category:     "unknown",
@@ -63,7 +63,7 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 		return result, nil
 	}
 
-	result.Title = strings.TrimSpace(doc.Find("title").Text())
+	result.Title = truncateUTF8(strings.TrimSpace(doc.Find("title").Text()), 512)
 
 	doc.Find("script, style, noscript, iframe").Remove()
 	content := strings.TrimSpace(spaceRegex.ReplaceAllString(doc.Find("body").Text(), " "))
@@ -75,7 +75,7 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 		name, _ := s.Attr("name")
 		content, _ := s.Attr("content")
 		if name == "description" || name == "keywords" {
-			metaDataMap[name] = strings.TrimSpace(content)
+			metaDataMap[name] = truncateUTF8(strings.TrimSpace(content), 1000)
 		}
 	})
 	if len(metaDataMap) > 0 {
