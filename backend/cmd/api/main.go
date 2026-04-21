@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/csv"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"log"
@@ -18,6 +20,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
 	"onion-spider/internal/crawler"
 	"onion-spider/internal/database"
 	"onion-spider/internal/proxy"
@@ -25,15 +28,18 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	gofpdf "github.com/go-pdf/fpdf"
 	"github.com/joho/godotenv"
+	"github.com/xuri/excelize/v2"
 )
 
 // crawlLimiter este un rate limiter per-IP cu fereastra fixa pentru /api/crawl
 type crawlLimiter struct {
-	mu      sync.Mutex
-	buckets map[string]*limitBucket
-	limit   int
-	window  time.Duration
+	mu         sync.Mutex
+	buckets    map[string]*limitBucket
+	limit      int
+	window     time.Duration
+	maxBuckets int
 }
 
 type limitBucket struct {
@@ -42,8 +48,12 @@ type limitBucket struct {
 }
 
 func newCrawlLimiter(limit int, window time.Duration) *crawlLimiter {
-	l := &crawlLimiter{buckets: make(map[string]*limitBucket), limit: limit, window: window}
-	// Goroutine de cleanup — sterge bucket-urile expirate la fiecare 10 minute
+	l := &crawlLimiter{
+		buckets:    make(map[string]*limitBucket),
+		limit:      limit,
+		window:     window,
+		maxBuckets: 100_000,
+	}
 	go func() {
 		ticker := time.NewTicker(10 * time.Minute)
 		defer ticker.Stop()
@@ -67,6 +77,19 @@ func (l *crawlLimiter) allow(ip string) bool {
 	now := time.Now()
 	b, ok := l.buckets[ip]
 	if !ok || now.After(b.resetAt) {
+		// IP nou sau expirat — verifica limita de buckets
+		if !ok && len(l.buckets) >= l.maxBuckets {
+			// Sweep inline: sterge toate bucket-urile expirate inainte sa refuzam
+			for k, v := range l.buckets {
+				if now.After(v.resetAt) {
+					delete(l.buckets, k)
+				}
+			}
+			// Daca e inca plin dupa sweep, refuzam
+			if len(l.buckets) >= l.maxBuckets {
+				return false
+			}
+		}
 		l.buckets[ip] = &limitBucket{count: 1, resetAt: now.Add(l.window)}
 		return true
 	}
@@ -266,7 +289,7 @@ func main() {
 		}
 		node, err := dbConn.GetNodeByURL(nodeURL)
 		if err != nil {
-			log.Printf("[ERROR] GET /api/node url=%s: %v", nodeURL, err)
+			log.Printf("[ERROR] GET /api/node url=%s: %v", sanitizeForLog(nodeURL), err)
 			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
 			return
 		}
@@ -308,7 +331,7 @@ func main() {
 		category := r.URL.Query().Get("category")
 		nodes, err := dbConn.SearchNodes(q, category)
 		if err != nil {
-			log.Printf("[ERROR] GET /api/search q=%s: %v", q, err)
+			log.Printf("[ERROR] GET /api/search q=%s: %v", sanitizeForLog(q), err)
 			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
 			return
 		}
@@ -339,7 +362,7 @@ func main() {
 				writeJSONError(w, http.StatusForbidden, "Domeniu blocat")
 				return
 			}
-			log.Printf("[ERROR] POST /api/crawl ip=%s url=%s: %v", ip, req.URL, err)
+			log.Printf("[ERROR] POST /api/crawl ip=%s url=%s: %v", sanitizeForLog(ip), sanitizeForLog(req.URL), err)
 			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
 			return
 		}
@@ -368,7 +391,7 @@ func main() {
 		}
 		found, canRequeue, err := dbConn.RequeueForCrawl(req.URL)
 		if err != nil {
-			log.Printf("[ERROR] POST /api/recrawl url=%s: %v", req.URL, err)
+			log.Printf("[ERROR] POST /api/recrawl url=%s: %v", sanitizeForLog(req.URL), err)
 			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
 			return
 		}
@@ -433,7 +456,7 @@ func main() {
 			return
 		}
 		if err := dbConn.AddBlacklist(req.Domain); err != nil {
-			log.Printf("[ERROR] POST /api/blacklist domain=%s: %v", req.Domain, err)
+			log.Printf("[ERROR] POST /api/blacklist domain=%s: %v", sanitizeForLog(req.Domain), err)
 			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
 			return
 		}
@@ -441,65 +464,160 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"message": fmt.Sprintf("Domeniu blocat: %s", req.Domain)})
 	})
 
-	// GET /api/export?format=json|csv — export streaming al nodurilor crawlate
-	// Folosim http.ResponseController pentru a extinde deadline-ul pe handler-ul de streaming.
-	r.Get("/api/export", func(w http.ResponseWriter, r *http.Request) {
-		// Permite doar un export simultan pentru a evita supraincarcarea DB
-		select {
-		case exportSem <- struct{}{}:
-			defer func() { <-exportSem }()
-		default:
-			writeJSONError(w, http.StatusTooManyRequests, "Export in desfasurare — incearca din nou in cateva momente")
-			return
-		}
-
-		format := r.URL.Query().Get("format")
-		if format != "csv" {
-			format = "json"
-		}
-
-		// Extinde deadline-ul pentru export (poate dura mai mult de 30s)
-		rc := http.NewResponseController(w)
-		rc.SetWriteDeadline(time.Now().Add(10 * time.Minute))
-
-		if format == "csv" {
-			w.Header().Set("Content-Type", "text/csv")
-			w.Header().Set("Content-Disposition", `attachment; filename="onion_spider_export.csv"`)
-			csvWriter := csv.NewWriter(w)
-			csvWriter.Write([]string{"id", "url", "title", "status_code", "server_header", "processing_status", "category", "last_crawled_at"})
-			err := dbConn.ExportNodes(r.Context(), func(n database.Node) error {
-				return csvWriter.Write([]string{
-					strconv.Itoa(n.ID), n.URL, n.Title,
-					strconv.Itoa(n.StatusCode), n.ServerHeader,
-					n.ProcessingStatus, n.Category, n.LastCrawledAt,
-				})
-			})
-			csvWriter.Flush()
-			if err != nil {
-				log.Printf("[EXPORT] Eroare la export CSV: %v", err)
-			}
-		} else {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte("["))
-			first := true
-			err := dbConn.ExportNodes(r.Context(), func(n database.Node) error {
-				b, err := json.Marshal(n)
-				if err != nil {
-					return err
-				}
-				if !first {
-					w.Write([]byte(","))
-				}
-				first = false
-				_, err = w.Write(b)
-				return err
-			})
-			w.Write([]byte("]"))
-			if err != nil {
-				log.Printf("[EXPORT] Eroare la export JSON: %v", err)
-			}
-		}
-	})
+// GET /api/export?format=json|csv|ndjson|xlsx|pdf|graphml
+r.Get("/api/export", func(w http.ResponseWriter, r *http.Request) {
+select {
+case exportSem <- struct{}{}:
+defer func() { <-exportSem }()
+default:
+writeJSONError(w, http.StatusTooManyRequests, "Export in desfasurare — incearca din nou in cateva momente")
+return
+}
+format := r.URL.Query().Get("format")
+switch format {
+case "csv", "ndjson", "xlsx", "pdf", "graphml":
+default:
+format = "json"
+}
+rc := http.NewResponseController(w)
+rc.SetWriteDeadline(time.Now().Add(10 * time.Minute))
+switch format {
+case "json":
+w.Header().Set("Content-Type", "application/json")
+w.Write([]byte("["))
+first := true
+err := dbConn.ExportNodes(r.Context(), func(n database.Node) error {
+b, marshalErr := json.Marshal(n)
+if marshalErr != nil { return marshalErr }
+if !first { w.Write([]byte(",")) }
+first = false
+_, err := w.Write(b)
+return err
+})
+w.Write([]byte("]"))
+if err != nil { log.Printf("[EXPORT] JSON error: %v", err) }
+case "ndjson":
+w.Header().Set("Content-Type", "application/x-ndjson")
+w.Header().Set("Content-Disposition", "attachment; filename=onion_spider_export.ndjson")
+enc := json.NewEncoder(w)
+err := dbConn.ExportNodes(r.Context(), func(n database.Node) error { return enc.Encode(n) })
+if err != nil { log.Printf("[EXPORT] NDJSON error: %v", err) }
+case "csv":
+w.Header().Set("Content-Type", "text/csv")
+w.Header().Set("Content-Disposition", "attachment; filename=onion_spider_export.csv")
+cw := csv.NewWriter(w)
+cw.Write([]string{"id", "url", "title", "status_code", "server_header", "processing_status", "category", "last_crawled_at"})
+err := dbConn.ExportNodes(r.Context(), func(n database.Node) error {
+return cw.Write([]string{
+strconv.Itoa(n.ID), sanitizeCSVField(n.URL), sanitizeCSVField(n.Title),
+strconv.Itoa(n.StatusCode), sanitizeCSVField(n.ServerHeader),
+n.ProcessingStatus, n.Category, n.LastCrawledAt,
+})
+})
+cw.Flush()
+if err != nil { log.Printf("[EXPORT] CSV error: %v", err) }
+case "xlsx":
+const xlsxRowCap = 10_000
+xf := excelize.NewFile()
+defer xf.Close()
+sheet := "Nodes"
+xf.SetSheetName("Sheet1", sheet)
+for col, h := range []string{"id", "url", "title", "status_code", "server_header", "processing_status", "category", "last_crawled_at"} {
+cell, _ := excelize.CoordinatesToCellName(col+1, 1)
+xf.SetCellValue(sheet, cell, h)
+}
+xlsxRow := 2
+err := dbConn.ExportNodes(r.Context(), func(n database.Node) error {
+if xlsxRow-1 > xlsxRowCap { return nil }
+for col, v := range []interface{}{n.ID, sanitizeCSVField(n.URL), sanitizeCSVField(n.Title), n.StatusCode, sanitizeCSVField(n.ServerHeader), n.ProcessingStatus, n.Category, n.LastCrawledAt} {
+cell, _ := excelize.CoordinatesToCellName(col+1, xlsxRow)
+xf.SetCellValue(sheet, cell, v)
+}
+xlsxRow++
+return nil
+})
+if err != nil { log.Printf("[EXPORT] XLSX error: %v", err) }
+var xlsxBuf bytes.Buffer
+if err := xf.Write(&xlsxBuf); err != nil {
+writeJSONError(w, http.StatusInternalServerError, "Eroare la generarea XLSX")
+return
+}
+w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+w.Header().Set("Content-Disposition", "attachment; filename=onion_spider_export.xlsx")
+w.Write(xlsxBuf.Bytes())
+case "pdf":
+const pdfRowCap = 5_000
+pf := gofpdf.New("L", "mm", "A4", "")
+pf.AddPage()
+pf.SetTitle("Onion Spider Export", false)
+pf.SetFont("Helvetica", "B", 8)
+type pdfCol struct{ name string; width float64 }
+cols := []pdfCol{{"ID",12},{"URL",90},{"Title",70},{"Status",14},{"Category",28},{"Last Crawled",35}}
+pf.SetFillColor(50, 50, 50)
+pf.SetTextColor(255, 255, 255)
+for _, c := range cols { pf.CellFormat(c.width, 7, c.name, "1", 0, "C", true, 0, "") }
+pf.Ln(-1)
+pf.SetFont("Helvetica", "", 7)
+pf.SetTextColor(0, 0, 0)
+pdfRows := 0
+fillRow := false
+trunc := func(s string, max int) string {
+runes := []rune(s)
+if len(runes) > max { return string(runes[:max-1]) + "..." }
+return s
+}
+err := dbConn.ExportNodes(r.Context(), func(n database.Node) error {
+if pdfRows >= pdfRowCap { return nil }
+if fillRow { pf.SetFillColor(240, 240, 240) } else { pf.SetFillColor(255, 255, 255) }
+pf.CellFormat(cols[0].width, 6, strconv.Itoa(n.ID), "1", 0, "R", true, 0, "")
+pf.CellFormat(cols[1].width, 6, trunc(n.URL, 60), "1", 0, "L", true, 0, "")
+pf.CellFormat(cols[2].width, 6, trunc(n.Title, 50), "1", 0, "L", true, 0, "")
+pf.CellFormat(cols[3].width, 6, strconv.Itoa(n.StatusCode), "1", 0, "C", true, 0, "")
+pf.CellFormat(cols[4].width, 6, n.Category, "1", 0, "L", true, 0, "")
+pf.CellFormat(cols[5].width, 6, n.LastCrawledAt, "1", 1, "L", true, 0, "")
+pdfRows++
+return nil
+})
+if err != nil { log.Printf("[EXPORT] PDF error: %v", err) }
+var pdfBuf bytes.Buffer
+if err := pf.Output(&pdfBuf); err != nil {
+writeJSONError(w, http.StatusInternalServerError, "Eroare la generarea PDF")
+return
+}
+w.Header().Set("Content-Type", "application/pdf")
+w.Header().Set("Content-Disposition", "attachment; filename=onion_spider_export.pdf")
+w.Write(pdfBuf.Bytes())
+case "graphml":
+w.Header().Set("Content-Type", "application/xml")
+w.Header().Set("Content-Disposition", "attachment; filename=onion_spider_export.graphml")
+fmt.Fprint(w, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+fmt.Fprint(w, "<graphml xmlns=\"http://graphml.graphdrawing.org/graphml\">\n")
+fmt.Fprint(w, "  <key id=\"d0\" for=\"node\" attr.name=\"url\" attr.type=\"string\"/>\n")
+fmt.Fprint(w, "  <key id=\"d1\" for=\"node\" attr.name=\"title\" attr.type=\"string\"/>\n")
+fmt.Fprint(w, "  <key id=\"d2\" for=\"node\" attr.name=\"category\" attr.type=\"string\"/>\n")
+fmt.Fprint(w, "  <graph id=\"G\" edgedefault=\"directed\">\n")
+xmlEsc := func(s string) string {
+var sb strings.Builder
+xml.EscapeText(&sb, []byte(s))
+return sb.String()
+}
+err := dbConn.ExportNodes(r.Context(), func(n database.Node) error {
+fmt.Fprintf(w, "    <node id=\"n%d\">\n", n.ID)
+fmt.Fprintf(w, "      <data key=\"d0\">%s</data>\n", xmlEsc(n.URL))
+fmt.Fprintf(w, "      <data key=\"d1\">%s</data>\n", xmlEsc(n.Title))
+fmt.Fprintf(w, "      <data key=\"d2\">%s</data>\n", xmlEsc(n.Category))
+fmt.Fprint(w, "    </node>\n")
+return nil
+})
+if err != nil { log.Printf("[EXPORT] GraphML nodes error: %v", err) }
+err = dbConn.ExportGraphMLEdges(r.Context(), func(ge database.GraphMLEdge) error {
+fmt.Fprintf(w, "    <edge source=\"n%d\" target=\"n%d\"/>\n", ge.SourceID, ge.TargetID)
+return nil
+})
+if err != nil { log.Printf("[EXPORT] GraphML edges error: %v", err) }
+fmt.Fprint(w, "  </graph>\n</graphml>\n")
+}
+})
 
 	// POST /api/crawl/bulk — adauga mai multe URL-uri in coada deodata (max 20)
 	r.Post("/api/crawl/bulk", func(w http.ResponseWriter, r *http.Request) {
@@ -547,7 +665,7 @@ func main() {
 		}
 		found, err := dbConn.DeleteBlacklist(domain)
 		if err != nil {
-			log.Printf("[ERROR] DELETE /api/blacklist domain=%s: %v", domain, err)
+			log.Printf("[ERROR] DELETE /api/blacklist domain=%s: %v", sanitizeForLog(domain), err)
 			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
 			return
 		}
@@ -614,6 +732,18 @@ func isValidOnionURL(rawURL string) bool {
 	}
 	return (parsed.Scheme == "http" || parsed.Scheme == "https") &&
 		strings.HasSuffix(parsed.Host, ".onion")
+}
+
+// sanitizeCSVField previne formula injection in CSV/XLSX.
+// Valorile care incep cu =, +, -, @ sunt prefixate cu ' pentru a fi tratate ca text.
+func sanitizeCSVField(s string) string {
+	if len(s) > 0 {
+		switch s[0] {
+		case '=', '+', '-', '@', '\t', '\r':
+			return "'" + s
+		}
+	}
+	return s
 }
 
 // sanitizeForLog inlocuieste newline-uri din valorile controlate de utilizator

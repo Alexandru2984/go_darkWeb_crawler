@@ -331,7 +331,7 @@ func (db *DB) GetNextPendingNode() (string, int, error) {
 }
 
 // FailNodeWithRetry inregistreaza un esec si programeaza o reincercare cu exponential backoff.
-// Formula: min(2^retry * 10min * rand(0.8..1.2), 48h)
+// Formula: min(2^retry * 10min, 48h). Nodurile 'blocked' nu sunt niciodata modificate.
 func (db *DB) FailNodeWithRetry(nodeURL string) error {
 	_, err := db.Conn.Exec(`
 		UPDATE nodes
@@ -343,7 +343,7 @@ func (db *DB) FailNodeWithRetry(nodeURL string) error {
 		            INTERVAL '48 hours'
 		        )
 		    )
-		WHERE url = $1
+		WHERE url = $1 AND processing_status != 'blocked'
 	`, nodeURL)
 	return err
 }
@@ -658,7 +658,37 @@ func (db *DB) DeleteBlacklist(domain string) (bool, error) {
 	return true, err
 }
 
-// TimelineStat retine numarul de noduri descoperite intr-o zi.
+// GraphMLEdge reprezinta o muchie exportata pentru GraphML — ambele capete sunt noduri completed.
+type GraphMLEdge struct {
+	SourceID int
+	TargetID int
+}
+
+// ExportGraphMLEdges returneaza muchiile unde ambele noduri (source si target) sunt completed.
+// Foloseste JOIN pentru a garanta consistenta grafului exportat.
+func (db *DB) ExportGraphMLEdges(ctx context.Context, fn func(GraphMLEdge) error) error {
+	rows, err := db.Conn.QueryContext(ctx, `
+		SELECT n1.id, n2.id
+		FROM edges e
+		JOIN nodes n1 ON n1.url = e.source_url AND n1.processing_status = 'completed'
+		JOIN nodes n2 ON n2.url = e.target_url AND n2.processing_status = 'completed'
+	`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ge GraphMLEdge
+		if err := rows.Scan(&ge.SourceID, &ge.TargetID); err != nil {
+			return err
+		}
+		if err := fn(ge); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
 type TimelineStat struct {
 	Date  string `json:"date"`
 	Count int    `json:"count"`
