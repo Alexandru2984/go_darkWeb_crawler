@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"golang.org/x/net/proxy"
@@ -39,9 +40,16 @@ func NewTorClientWithTransport(socksProxyAddress string) (*http.Transport, *http
 		Transport: transport,
 		Timeout:   30 * time.Second, // Daca site-ul nu raspunde, renuntam
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			// Limitare redirect-uri pentru a nu pica in loops infinite
 			if len(via) >= 3 {
 				return fmt.Errorf("prea multe redirect-uri")
+			}
+			// Permitem redirect-uri numai in spatiul .onion — clearnet-ul e interzis
+			if !strings.HasSuffix(req.URL.Hostname(), ".onion") {
+				return fmt.Errorf("redirect catre clearnet blocat: %s", req.URL.Host)
+			}
+			// Nu urmarim redirect-uri catre alt domeniu onion (previne tracking cross-site)
+			if req.URL.Hostname() != via[0].URL.Hostname() {
+				return fmt.Errorf("redirect catre alt domeniu onion blocat: %s -> %s", via[0].URL.Host, req.URL.Host)
 			}
 			return nil
 		},

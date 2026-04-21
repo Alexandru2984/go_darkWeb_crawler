@@ -181,8 +181,8 @@ func (e *Engine) worker(ctx context.Context, id int) {
 		// Verificam robots.txt inainte de scraping
 		if !IsAllowed(ctx, client, targetUrl) {
 			log.Printf("[Worker %d] Blocat de robots.txt: %s", id, targetUrl)
-			if err := e.DB.FailNodeWithRetry(targetUrl); err != nil {
-				log.Printf("[Worker %d] DB Eroare: %v", id, err)
+			if err := e.DB.MarkRobotsBlocked(targetUrl); err != nil {
+				log.Printf("[Worker %d] DB Eroare la marcare robots blocked: %v", id, err)
 			}
 			continue
 		}

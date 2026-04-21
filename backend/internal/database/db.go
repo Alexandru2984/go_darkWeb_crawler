@@ -3,6 +3,7 @@ package database
 import (
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -10,6 +11,9 @@ import (
 
 	_ "github.com/lib/pq"
 )
+
+// ErrBlacklisted este returnat de EnqueueURL cand domeniul e pe blacklist.
+var ErrBlacklisted = errors.New("domeniu blocat")
 
 type DB struct {
 	Conn *sql.DB
@@ -97,6 +101,9 @@ func migrate(db *sql.DB) error {
 			domain   TEXT PRIMARY KEY,
 			added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS host TEXT`,
+		`CREATE INDEX IF NOT EXISTS idx_nodes_host ON nodes(host)`,
+		`UPDATE nodes SET host = (regexp_match(url, '^https?://([^/?#]+)'))[1] WHERE host IS NULL`,
 		// Trigger conditional: recalculeaza search_vector doar cand titlul sau continutul se schimba
 		`CREATE OR REPLACE FUNCTION nodes_search_vector_update() RETURNS trigger AS $$
 		 BEGIN
@@ -185,7 +192,8 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 			content_hash      = EXCLUDED.content_hash,
 			category          = EXCLUDED.category,
 			last_crawled_at   = CURRENT_TIMESTAMP,
-			next_crawl_at     = CURRENT_TIMESTAMP + (INTERVAL '1 day' * nodes.re_crawl_interval_days);
+			next_crawl_at     = CURRENT_TIMESTAMP + (INTERVAL '1 day' * nodes.re_crawl_interval_days)
+		WHERE nodes.processing_status != 'blocked';
 		`, nodeURL, title, statusCode, server, status, metadata, content, newHash, category)
 		return true, err
 	}
@@ -198,35 +206,28 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 		processing_status = $4,
 		last_crawled_at   = CURRENT_TIMESTAMP,
 		next_crawl_at     = CURRENT_TIMESTAMP + (INTERVAL '1 day' * re_crawl_interval_days)
-	WHERE url = $1
+	WHERE url = $1 AND processing_status != 'blocked'
 	`, nodeURL, statusCode, server, status)
 	return false, err
 }
 
 // EnqueueURL adauga un URL in coada de crawling fara sa suprascrie date existente.
-// Returneaza eroare daca domeniul e pe blacklist.
+// Returneaza ErrBlacklisted daca domeniul e pe blacklist.
 func (db *DB) EnqueueURL(rawURL string, depth int) error {
-	if parsed, err := url.Parse(rawURL); err == nil && parsed.Host != "" {
-		var count int
-		db.Conn.QueryRow(`SELECT COUNT(*) FROM blacklist WHERE domain = $1`, parsed.Host).Scan(&count)
-		if count > 0 {
-			return fmt.Errorf("domeniu blocat: %s", parsed.Host)
-		}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		return fmt.Errorf("url invalid: %s", rawURL)
 	}
-	_, err := db.Conn.Exec(
-		`INSERT INTO nodes (url, processing_status, depth) VALUES ($1, 'pending', $2) ON CONFLICT (url) DO NOTHING`,
-		rawURL, depth,
+	var count int
+	db.Conn.QueryRow(`SELECT COUNT(*) FROM blacklist WHERE domain = $1`, parsed.Host).Scan(&count)
+	if count > 0 {
+		return ErrBlacklisted
+	}
+	_, err = db.Conn.Exec(
+		`INSERT INTO nodes (url, host, processing_status, depth) VALUES ($1, $2, 'pending', $3) ON CONFLICT (url) DO NOTHING`,
+		rawURL, parsed.Host, depth,
 	)
 	return err
-}
-
-// parseOnionHost extrage hostname-ul dintr-un URL — helper intern
-func parseOnionHost(rawURL string) (string, error) {
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Host == "" {
-		return "", fmt.Errorf("url invalid: %s", rawURL)
-	}
-	return u.Host, nil
 }
 
 // SearchNodes efectueaza o cautare Full-Text pe titlu si continut folosind indexul GIN
@@ -262,14 +263,28 @@ func (db *DB) SearchNodes(searchQuery string) ([]Node, error) {
 
 // SaveEdge creeaza o legatura intre doua site-uri si adauga target-ul in coada daca e nou.
 // Daca URL-ul exista deja dar la adancime mai mare, actualizeaza adancimea (crawl mai eficient).
+// Domeniile de pe blacklist sunt sarite (nu se adauga in coada).
 func (db *DB) SaveEdge(source, target string, targetDepth int) error {
-	_, _ = db.Conn.Exec(
-		`INSERT INTO nodes (url, processing_status, depth) VALUES ($1, 'pending', $2)
-		 ON CONFLICT (url) DO UPDATE
-		   SET depth = EXCLUDED.depth
-		   WHERE nodes.depth > EXCLUDED.depth AND nodes.processing_status = 'pending'`,
-		target, targetDepth,
-	)
+	targetHost := ""
+	if parsed, err := url.Parse(target); err == nil {
+		targetHost = parsed.Host
+	}
+
+	// Verificam blacklist-ul inainte sa adaugam nodul tinta in coada
+	if targetHost != "" {
+		var count int
+		db.Conn.QueryRow(`SELECT COUNT(*) FROM blacklist WHERE domain = $1`, targetHost).Scan(&count)
+		if count == 0 {
+			_, _ = db.Conn.Exec(
+				`INSERT INTO nodes (url, host, processing_status, depth) VALUES ($1, $2, 'pending', $3)
+				 ON CONFLICT (url) DO UPDATE
+				   SET depth = EXCLUDED.depth
+				   WHERE nodes.depth > EXCLUDED.depth AND nodes.processing_status = 'pending'`,
+				target, targetHost, targetDepth,
+			)
+		}
+	}
+
 	_, err := db.Conn.Exec(`
 	INSERT INTO edges (source_url, target_url)
 	VALUES ($1, $2)
@@ -402,7 +417,7 @@ func (db *DB) RequeueForCrawl(nodeURL string) (found bool, canRequeue bool, err 
 	if err != nil {
 		return false, false, err
 	}
-	if status == "crawling" {
+	if status == "crawling" || status == "blocked" {
 		return true, false, nil
 	}
 	_, err = db.Conn.Exec(
@@ -410,6 +425,20 @@ func (db *DB) RequeueForCrawl(nodeURL string) (found bool, canRequeue bool, err 
 		nodeURL,
 	)
 	return true, true, err
+}
+
+// MarkRobotsBlocked marcheaza un nod ca interzis de robots.txt.
+// Seteaza next_crawl_at la 30 de zile si retry_count=10 pentru a preveni re-incercari inutile.
+// Nu suprascrie nodurile blocate explicit prin blacklist.
+func (db *DB) MarkRobotsBlocked(nodeURL string) error {
+	_, err := db.Conn.Exec(`
+		UPDATE nodes SET
+			processing_status = 'failed',
+			retry_count       = 10,
+			next_crawl_at     = CURRENT_TIMESTAMP + INTERVAL '30 days'
+		WHERE url = $1 AND processing_status != 'blocked'
+	`, nodeURL)
+	return err
 }
 
 func (db *DB) GetNodes(limit, offset int) ([]Node, error) {
@@ -535,11 +564,11 @@ func (db *DB) AddBlacklist(domain string) error {
 	if err != nil {
 		return err
 	}
-	// Blocheaza toate nodurile existente cu acest domeniu
+	// Blocheaza toate nodurile existente cu acest domeniu (match exact pe coloana host)
 	_, err = db.Conn.Exec(`
 		UPDATE nodes SET processing_status = 'blocked'
-		WHERE url LIKE $1 AND processing_status != 'blocked'
-	`, "%"+domain+"%")
+		WHERE host = $1 AND processing_status != 'blocked'
+	`, domain)
 	return err
 }
 

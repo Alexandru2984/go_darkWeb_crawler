@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -210,7 +211,8 @@ func main() {
 		limit, offset := parsePagination(r)
 		nodes, err := dbConn.GetNodes(limit, offset)
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			log.Printf("[ERROR] GET /api/nodes: %v", err)
+			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
 			return
 		}
 		json.NewEncoder(w).Encode(nodes)
@@ -225,7 +227,8 @@ func main() {
 		}
 		node, err := dbConn.GetNodeByURL(nodeURL)
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			log.Printf("[ERROR] GET /api/node url=%s: %v", nodeURL, err)
+			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
 			return
 		}
 		if node == nil {
@@ -240,7 +243,8 @@ func main() {
 		limit, offset := parsePagination(r)
 		edges, err := dbConn.GetEdges(limit, offset)
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			log.Printf("[ERROR] GET /api/edges: %v", err)
+			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
 			return
 		}
 		json.NewEncoder(w).Encode(edges)
@@ -267,7 +271,8 @@ func main() {
 		}
 		nodes, err := dbConn.SearchNodes(q)
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			log.Printf("[ERROR] GET /api/search q=%s: %v", q, err)
+			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
 			return
 		}
 		json.NewEncoder(w).Encode(nodes)
@@ -296,7 +301,12 @@ func main() {
 		}
 		log.Printf("[AUDIT] POST /api/crawl ip=%s url=%s", ip, req.URL)
 		if err := engine.AddToQueue(req.URL); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			if errors.Is(err, database.ErrBlacklisted) {
+				writeJSONError(w, http.StatusForbidden, "Domeniu blocat")
+				return
+			}
+			log.Printf("[ERROR] POST /api/crawl ip=%s url=%s: %v", ip, req.URL, err)
+			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -319,7 +329,8 @@ func main() {
 		}
 		found, canRequeue, err := dbConn.RequeueForCrawl(req.URL)
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			log.Printf("[ERROR] POST /api/recrawl url=%s: %v", req.URL, err)
+			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
 			return
 		}
 		if !found {
@@ -340,7 +351,8 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		summary, err := dbConn.GetQueueSummary()
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			log.Printf("[ERROR] GET /api/queue: %v", err)
+			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
 			return
 		}
 		json.NewEncoder(w).Encode(summary)
@@ -351,7 +363,8 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		domains, err := dbConn.GetBlacklist()
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			log.Printf("[ERROR] GET /api/blacklist: %v", err)
+			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
 			return
 		}
 		if domains == nil {
@@ -381,7 +394,8 @@ func main() {
 			return
 		}
 		if err := dbConn.AddBlacklist(req.Domain); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			log.Printf("[ERROR] POST /api/blacklist domain=%s: %v", req.Domain, err)
+			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

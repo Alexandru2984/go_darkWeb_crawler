@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/PuerkitoBio/goquery"
 )
@@ -67,10 +68,7 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 	doc.Find("script, style, noscript, iframe").Remove()
 	content := strings.TrimSpace(spaceRegex.ReplaceAllString(doc.Find("body").Text(), " "))
 	const maxContentBytes = 100 * 1024 // 100KB — previne stocarea paginilor gigantice in DB
-	if len(content) > maxContentBytes {
-		content = content[:maxContentBytes]
-	}
-	result.Content = content
+	result.Content = truncateUTF8(content, maxContentBytes)
 
 	metaDataMap := make(map[string]string)
 	doc.Find("meta").Each(func(i int, s *goquery.Selection) {
@@ -89,7 +87,7 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 	// Rezolvam URL-urile relative fata de pagina curenta si pastram path-ul complet
 	baseURL, _ := url.Parse(targetURL)
 
-	// collectOnion rezolva un href/src fata de baseURL si il adauga daca e .onion
+	// collectOnion rezolva un href/src fata de baseURL, normalizeaza si il adauga daca e .onion
 	collectOnion := func(href string) {
 		if href == "" || href == "#" || strings.HasPrefix(href, "javascript:") ||
 			strings.HasPrefix(href, "mailto:") {
@@ -101,6 +99,11 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 		}
 		resolved := baseURL.ResolveReference(parsed)
 		resolved.Fragment = "" // fragmentele (#section) nu schimba continutul paginii
+		resolved.Scheme = strings.ToLower(resolved.Scheme)
+		resolved.Host = strings.ToLower(resolved.Host)
+		if resolved.Path == "" {
+			resolved.Path = "/"
+		}
 		if (resolved.Scheme == "http" || resolved.Scheme == "https") &&
 			strings.HasSuffix(resolved.Host, ".onion") {
 			result.FoundOnions = append(result.FoundOnions, resolved.String())
@@ -141,6 +144,11 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 		}
 	})
 	result.FoundOnions = removeDuplicates(result.FoundOnions)
+	// Limitam numarul de linkuri per pagina pentru a preveni flood-ul in coada
+	const maxFoundOnions = 300
+	if len(result.FoundOnions) > maxFoundOnions {
+		result.FoundOnions = result.FoundOnions[:maxFoundOnions]
+	}
 	result.Category = Categorize(result.Title, result.Content)
 
 	return result, nil
@@ -156,4 +164,16 @@ func removeDuplicates(elements []string) []string {
 		}
 	}
 	return result
+}
+
+// truncateUTF8 taie un string la maxBytes octeti fara sa rupa secvente UTF-8 multi-byte.
+func truncateUTF8(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	b := s[:maxBytes]
+	for len(b) > 0 && !utf8.RuneStart(b[len(b)-1]) {
+		b = b[:len(b)-1]
+	}
+	return b
 }

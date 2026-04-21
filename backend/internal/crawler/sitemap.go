@@ -97,6 +97,11 @@ func fetchAndParseSitemap(ctx context.Context, client *http.Client, sitemapURL s
 			result = append(result, u.Loc)
 		}
 	}
+	// Limitam numarul de URL-uri returnate per sitemap pentru a preveni flood-ul in coada
+	const maxSitemapURLs = 300
+	if len(result) > maxSitemapURLs {
+		result = result[:maxSitemapURLs]
+	}
 	return result
 }
 
