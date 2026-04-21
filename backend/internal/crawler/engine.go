@@ -3,10 +3,12 @@ package crawler
 import (
 	"context"
 	"log"
+	"net/http"
 	"net/url"
 	"onion-spider/internal/database"
 	"onion-spider/internal/proxy"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -15,10 +17,16 @@ type Engine struct {
 	Proxy            string
 	Workers          int
 	MaxDepth         int
+	TorCtrl          *proxy.TorController // nil daca controlul Tor nu e configurat
 	domainLastAccess map[string]time.Time
 	domainMu         sync.Mutex
 	wg               sync.WaitGroup
 	cancel           context.CancelFunc
+	// globalErrorCount numara erorile de retea consecutive pe toti workerii.
+	// Cand depaseste pragul, se cere reinnoire circuit Tor.
+	globalErrorCount atomic.Int32
+	transports       []*http.Transport
+	transportsMu     sync.Mutex
 }
 
 func NewEngine(db *database.DB, proxyAddr string, workerCount int, maxDepth int) *Engine {
@@ -53,6 +61,29 @@ func (e *Engine) Start() {
 			}
 		}(i)
 	}
+
+	// Goroutine de cleanup pentru domainLastAccess — previne memory leak cu mii de domenii
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cutoff := time.Now().Add(-10 * time.Minute)
+				e.domainMu.Lock()
+				for host, t := range e.domainLastAccess {
+					if t.Before(cutoff) {
+						delete(e.domainLastAccess, host)
+					}
+				}
+				e.domainMu.Unlock()
+			}
+		}
+	}()
 }
 
 // Stop opreste toti workerii si asteapta finalizarea lor
@@ -102,11 +133,16 @@ func (e *Engine) waitForDomain(ctx context.Context, targetUrl string) bool {
 func (e *Engine) worker(ctx context.Context, id int) {
 	log.Printf("[Worker %d] Activ", id)
 
-	client, err := proxy.NewTorClient(e.Proxy)
+	transport, client, err := proxy.NewTorClientWithTransport(e.Proxy)
 	if err != nil {
 		log.Printf("[Worker %d] Eroare fatala Tor: %v", id, err)
 		return
 	}
+
+	// Inregistrare transport pentru CloseIdleConnections dupa NEWNYM
+	e.transportsMu.Lock()
+	e.transports = append(e.transports, transport)
+	e.transportsMu.Unlock()
 
 	for {
 		select {
@@ -142,23 +178,49 @@ func (e *Engine) worker(ctx context.Context, id int) {
 		}
 		log.Printf("[Worker %d] Scanare aprobata: %s (Adancime: %d)", id, targetUrl, depth)
 
+		// Verificam robots.txt inainte de scraping
+		if !IsAllowed(ctx, client, targetUrl) {
+			log.Printf("[Worker %d] Blocat de robots.txt: %s", id, targetUrl)
+			if err := e.DB.FailNodeWithRetry(targetUrl); err != nil {
+				log.Printf("[Worker %d] DB Eroare: %v", id, err)
+			}
+			continue
+		}
+
 		result, err := ScrapePage(ctx, client, targetUrl)
 		if err != nil {
 			log.Printf("[Worker %d] Eroare retea/SOCKS la %s: %v", id, targetUrl, err)
 			if errRetry := e.DB.FailNodeWithRetry(targetUrl); errRetry != nil {
 				log.Printf("[Worker %d] DB Eroare la retry pentru %s: %v", id, targetUrl, errRetry)
 			}
+			e.onNetworkError()
 			continue
 		}
-
-		if err = e.DB.SaveNode(targetUrl, result.Title, result.ServerHeader, result.StatusCode, "completed", result.Metadata, result.Content); err != nil {
+		// Succes — resetam contorul de erori
+		e.globalErrorCount.Store(0)
+		changed, err := e.DB.SaveNode(targetUrl, result.Title, result.ServerHeader, result.StatusCode, "completed", result.Metadata, result.Content, result.Category)
+		if err != nil {
 			log.Printf("[Worker %d] Eroare la salvare nod: %v", id, err)
+		} else if !changed {
+			log.Printf("[Worker %d] Continut nemodificat (hash identic): %s", id, targetUrl)
 		}
 
 		if depth < e.MaxDepth {
 			for _, foundUrl := range result.FoundOnions {
 				if err = e.DB.SaveEdge(targetUrl, foundUrl, depth+1); err != nil {
 					log.Printf("[Worker %d] Eroare la salvare edge: %v", id, err)
+				}
+			}
+			// La depth=0 descarcam si sitemap.xml pentru descoperire suplimentara
+			if depth == 0 {
+				sitemapURLs := FetchSitemapURLs(ctx, client, targetUrl)
+				for _, su := range sitemapURLs {
+					if err = e.DB.SaveEdge(targetUrl, su, 1); err != nil {
+						log.Printf("[Worker %d] Eroare sitemap edge: %v", id, err)
+					}
+				}
+				if len(sitemapURLs) > 0 {
+					log.Printf("[Worker %d] Sitemap: %d URL-uri suplimentare de la %s", id, len(sitemapURLs), targetUrl)
 				}
 			}
 			log.Printf("[Worker %d] Finalizat: %s (gasit %d link-uri noi)", id, targetUrl, len(result.FoundOnions))
@@ -174,7 +236,30 @@ func (e *Engine) worker(ctx context.Context, id int) {
 	}
 }
 
+// onNetworkError incrementeaza contorul global de erori si cere reinnoire circuit
+// daca pragul de 5 erori consecutive a fost depasit.
+func (e *Engine) onNetworkError() {
+	count := e.globalErrorCount.Add(1)
+	const threshold = 5
+	if count < threshold || e.TorCtrl == nil {
+		return
+	}
+	renewed, err := e.TorCtrl.RenewCircuit()
+	if err != nil {
+		log.Printf("[TorCtrl] Eroare la reinnoire circuit: %v", err)
+		return
+	}
+	if renewed {
+		e.globalErrorCount.Store(0)
+		// Inchidem conexiunile idle — circuitul vechi nu mai e valid
+		e.transportsMu.Lock()
+		for _, t := range e.transports {
+			t.CloseIdleConnections()
+		}
+		e.transportsMu.Unlock()
+	}
+}
 // AddToQueue adauga un URL manual in coada fara sa suprascrie date existente
 func (e *Engine) AddToQueue(rawURL string) error {
-	return e.DB.EnqueueURL(rawURL, 0)
+return e.DB.EnqueueURL(rawURL, 0)
 }

@@ -11,10 +11,17 @@ import (
 
 // NewTorClient creeaza un client HTTP care ruteaza exclusiv prin SOCKS5 (Tor)
 func NewTorClient(socksProxyAddress string) (*http.Client, error) {
+	_, client, err := NewTorClientWithTransport(socksProxyAddress)
+	return client, err
+}
+
+// NewTorClientWithTransport returneaza atat transport-ul cat si clientul,
+// astfel incat engine-ul sa poata apela CloseIdleConnections() dupa SIGNAL NEWNYM.
+func NewTorClientWithTransport(socksProxyAddress string) (*http.Transport, *http.Client, error) {
 	// Configurarea proxy-ului SOCKS5
 	dialer, err := proxy.SOCKS5("tcp", socksProxyAddress, nil, proxy.Direct)
 	if err != nil {
-		return nil, fmt.Errorf("eroare la initializarea SOCKS5: %w", err)
+		return nil, nil, fmt.Errorf("eroare la initializarea SOCKS5: %w", err)
 	}
 
 	// Crearea unui transport HTTP custom, legat de dialer-ul SOCKS5
@@ -40,5 +47,5 @@ func NewTorClient(socksProxyAddress string) (*http.Client, error) {
 		},
 	}
 
-	return client, nil
+	return transport, client, nil
 }

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Network } from 'vis-network'
 
 const status = ref({ status: 'offline', nodes_crawled: 0, pending_nodes: 0, db_connected: false, active_workers: 0 })
@@ -7,6 +7,7 @@ const nodes = ref([])
 const edges = ref([])
 const targetUrl = ref('')
 const searchQuery = ref('')
+const selectedCategory = ref('all')
 const loading = ref(false)
 const isSearching = ref(false)
 const isGraphView = ref(false)
@@ -21,6 +22,38 @@ let network = null
 let statusInterval = null
 
 const API_BASE = '/api'
+
+// Culori per categorie — folosite atat in tabel cat si in graf
+const CATEGORY_COLORS = {
+  marketplace:    '#e74c3c',
+  forum:          '#e67e22',
+  'search-engine':'#3498db',
+  blog:           '#9b59b6',
+  wiki:           '#1abc9c',
+  directory:      '#f39c12',
+  news:           '#27ae60',
+  social:         '#e91e63',
+  unknown:        '#555555',
+}
+
+const CATEGORY_LABELS = {
+  marketplace:    '🛒 Marketplace',
+  forum:          '💬 Forum',
+  'search-engine':'🔍 Motor Căutare',
+  blog:           '📝 Blog',
+  wiki:           '📚 Wiki',
+  directory:      '📁 Director',
+  news:           '📰 Știri',
+  social:         '👥 Social',
+  unknown:        '❓ Necunoscut',
+}
+
+const allCategories = Object.keys(CATEGORY_LABELS)
+
+const filteredNodes = computed(() => {
+  if (selectedCategory.value === 'all') return nodes.value
+  return nodes.value.filter(n => n.category === selectedCategory.value)
+})
 
 const showToast = (text) => {
   toast.value = text
@@ -133,28 +166,29 @@ const drawGraph = () => {
   })
 
   const visNodes = nodes.value.map(n => {
-    let color = '#4da6ff'
-    if (n.status_code === 200) color = '#00ff00'
-    else if (n.status_code === 400 || n.status_code === 429) color = '#ffcc00'
-    else if (n.status_code === 0 && n.processing_status === 'completed') color = '#ff3333'
-    else if (n.processing_status === 'pending') color = '#888888'
+    // Culoarea principala = categorie, cu fallback pe status HTTP
+    const catColor = CATEGORY_COLORS[n.category] || CATEGORY_COLORS.unknown
+    let borderColor = catColor
+    if (n.status_code === 0 && n.processing_status === 'completed') borderColor = '#ff3333'
+    else if (n.processing_status === 'pending') borderColor = '#444'
 
     const degree = nodeDegrees[n.url] || 0
     const size = Math.min(15 + (degree * 2.5), 60)
 
     const cleanTitle = n.title ? n.title : 'Sursa Inaccesibila / Secundara'
     const shortLabel = cleanTitle.length > 25 ? cleanTitle.substring(0, 25) + '...' : cleanTitle
-    const tooltipText = `${cleanTitle}\nURL: ${n.url}\nStatus HTTP: ${n.status_code} | Legaturi (Hub): ${degree}\n(Dublu click pe bila pentru a copia link-ul)`
+    const catLabel = CATEGORY_LABELS[n.category] || n.category
+    const tooltipText = `${cleanTitle}\nURL: ${n.url}\nCategorie: ${catLabel}\nStatus HTTP: ${n.status_code} | Legaturi: ${degree}\n(Dublu click pentru a copia link-ul)`
 
     return {
       id: n.url,
       label: shortLabel,
       title: tooltipText,
       color: {
-        background: color,
-        border: '#000',
-        highlight: { background: '#ffffff', border: color },
-        hover: { background: color, border: '#ffffff' }
+        background: catColor,
+        border: borderColor,
+        highlight: { background: '#ffffff', border: catColor },
+        hover: { background: catColor, border: '#ffffff' }
       },
       shape: 'dot',
       size,
@@ -308,11 +342,28 @@ onUnmounted(() => {
                 @input="performSearch"
               />
             </div>
+            <div class="category-filter">
+              <button
+                class="cat-btn"
+                :class="{ active: selectedCategory === 'all' }"
+                @click="selectedCategory = 'all'"
+              >Toate</button>
+              <button
+                v-for="cat in allCategories"
+                :key="cat"
+                class="cat-btn"
+                :class="{ active: selectedCategory === cat }"
+                :style="selectedCategory === cat ? { background: CATEGORY_COLORS[cat], borderColor: CATEGORY_COLORS[cat] } : { borderColor: CATEGORY_COLORS[cat] }"
+                @click="selectedCategory = cat"
+              >{{ CATEGORY_LABELS[cat] }}</button>
+            </div>
           </section>
 
           <section class="nodes-list">
             <div class="section-header">
-              <h2>{{ isSearching ? 'Rezultatele Cautarii' : 'Ultimele Site-uri Descoperite' }}</h2>
+              <h2>{{ isSearching ? 'Rezultatele Cautarii' : 'Ultimele Site-uri Descoperite' }}
+                <span v-if="selectedCategory !== 'all'" class="filter-tag">• {{ CATEGORY_LABELS[selectedCategory] }}</span>
+              </h2>
               <button class="btn-refresh" @click="fetchNodes" v-if="!isSearching">🔄</button>
               <button class="btn-refresh" @click="searchQuery = ''; performSearch()" v-if="isSearching">❌</button>
             </div>
@@ -324,12 +375,13 @@ onUnmounted(() => {
                     <th class="col-id">ID</th>
                     <th>URL</th>
                     <th>Titlu / Status Procesare</th>
+                    <th class="col-cat">Categorie</th>
                     <th class="col-server">Server</th>
                     <th class="col-status">Cod</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="node in nodes" :key="node.id">
+                  <tr v-for="node in filteredNodes" :key="node.id">
                     <td class="col-id">{{ node.id }}</td>
                     <td class="url">{{ node.url }}</td>
                     <td>
@@ -340,6 +392,12 @@ onUnmounted(() => {
                         </span>
                       </div>
                     </td>
+                    <td class="col-cat">
+                      <span
+                        class="cat-badge"
+                        :style="{ background: (CATEGORY_COLORS[node.category] || CATEGORY_COLORS.unknown) + '22', color: CATEGORY_COLORS[node.category] || CATEGORY_COLORS.unknown, borderColor: CATEGORY_COLORS[node.category] || CATEGORY_COLORS.unknown }"
+                      >{{ CATEGORY_LABELS[node.category] || node.category }}</span>
+                    </td>
                     <td class="col-server">{{ node.server_header || '-' }}</td>
                     <td class="col-status">
                       <span class="badge" :class="{ 's-200': node.status_code === 200 }">
@@ -347,8 +405,8 @@ onUnmounted(() => {
                       </span>
                     </td>
                   </tr>
-                  <tr v-if="nodes.length === 0">
-                    <td colspan="5" class="empty-state">Nu există date încă. Introdu un URL pentru a începe.</td>
+                  <tr v-if="filteredNodes.length === 0">
+                    <td colspan="6" class="empty-state">Nu există date încă. Introdu un URL pentru a începe.</td>
                   </tr>
                 </tbody>
               </table>
@@ -368,10 +426,10 @@ onUnmounted(() => {
             </div>
           </div>
           <div class="legend">
-            <span class="legend-item"><span class="dot-legend l-green"></span> 200 OK</span>
-            <span class="legend-item"><span class="dot-legend l-yellow"></span> 4xx Eroare Server</span>
-            <span class="legend-item"><span class="dot-legend l-red"></span> Offline / SOCKS Fail</span>
-            <span class="legend-item"><span class="dot-legend l-gray"></span> În Coadă</span>
+            <span v-for="cat in allCategories" :key="cat" class="legend-item">
+              <span class="dot-legend" :style="{ background: CATEGORY_COLORS[cat] }"></span>
+              {{ CATEGORY_LABELS[cat] }}
+            </span>
           </div>
           <div ref="graphContainer" class="graph-container"></div>
         </div>
@@ -443,10 +501,6 @@ button { padding: 0 35px; background: #ff3333; border: none; color: white; font-
 .legend { display: flex; gap: 20px; padding: 12px; background: #161616; border-radius: 8px; font-size: 0.85rem; justify-content: center; border: 1px solid #222;}
 .legend-item { display: flex; align-items: center; gap: 8px; color: #888; font-weight: 600;}
 .dot-legend { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
-.l-green { background: #00ff00; }
-.l-yellow { background: #ffcc00; }
-.l-red { background: #ff3333; }
-.l-gray { background: #888888; }
 
 .status-pill.pending { color: #888; background: #222; }
 .status-pill.pending-v2 { color: #ffcc00; background: rgba(255, 204, 0, 0.1); }
@@ -482,11 +536,24 @@ th, td { padding: 15px 20px; text-align: left; border-bottom: 1px solid #151515;
 th { background: #0d0d0d; color: #444; font-weight: 700; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1.5px; }
 .url { font-family: 'JetBrains Mono', 'Fira Code', monospace; color: #4da6ff; font-size: 0.85rem; max-width: 250px; overflow: hidden; text-overflow: ellipsis; }
 
+/* Filtru categorie */
+.category-filter { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.cat-btn { background: transparent; border: 1px solid #333; color: #888; padding: 6px 14px; border-radius: 20px; cursor: pointer; font-size: 0.78rem; font-weight: 600; transition: all 0.2s; }
+.cat-btn:hover { color: #fff; }
+.cat-btn.active { color: #fff; }
+
+/* Badge categorie in tabel */
+.cat-badge { display: inline-block; padding: 3px 10px; border-radius: 12px; border: 1px solid; font-size: 0.75rem; font-weight: 600; white-space: nowrap; }
+.col-cat { min-width: 130px; }
+
+/* Tag filtru activ in header sectiune */
+.filter-tag { font-size: 0.8rem; color: #888; font-weight: 400; margin-left: 8px; }
+
 @media (max-width: 768px) {
   .container { padding: 15px; }
   header { flex-direction: column; align-items: flex-start; }
   .input-group { flex-direction: column; }
-  .col-server, .col-id { display: none; }
+  .col-server, .col-id, .col-cat { display: none; }
   .legend { flex-wrap: wrap; }
 }
 </style>

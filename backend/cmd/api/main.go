@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -100,6 +102,13 @@ func parsePagination(r *http.Request) (limit, offset int) {
 	return
 }
 
+// writeJSONError trimite un raspuns de eroare consistent in format JSON
+func writeJSONError(w http.ResponseWriter, code int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
 func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("⚠️ Nu am gasit un fisier .env, folosesc variabilele din sistem")
@@ -175,6 +184,10 @@ func main() {
 			DBConnected   bool   `json:"db_connected"`
 			NodesCrawled  int    `json:"nodes_crawled"`
 			PendingNodes  int    `json:"pending_nodes"`
+			FailedNodes   int    `json:"failed_nodes"`
+			CrawlingNodes int    `json:"crawling_nodes"`
+			BlockedNodes  int    `json:"blocked_nodes"`
+			TotalEdges    int    `json:"total_edges"`
 			ActiveWorkers int    `json:"active_workers"`
 		}
 		resp.Status = "online"
@@ -184,6 +197,10 @@ func main() {
 			resp.DBConnected = true
 			resp.NodesCrawled = stats.NodesCrawled
 			resp.PendingNodes = stats.PendingNodes
+			resp.FailedNodes = stats.FailedNodes
+			resp.CrawlingNodes = stats.CrawlingNodes
+			resp.BlockedNodes = stats.BlockedNodes
+			resp.TotalEdges = stats.TotalEdges
 		}
 		json.NewEncoder(w).Encode(resp)
 	})
@@ -193,10 +210,29 @@ func main() {
 		limit, offset := parsePagination(r)
 		nodes, err := dbConn.GetNodes(limit, offset)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		json.NewEncoder(w).Encode(nodes)
+	})
+
+	r.Get("/api/node", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		nodeURL := r.URL.Query().Get("url")
+		if nodeURL == "" {
+			writeJSONError(w, http.StatusBadRequest, "Parametrul 'url' este obligatoriu")
+			return
+		}
+		node, err := dbConn.GetNodeByURL(nodeURL)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if node == nil {
+			writeJSONError(w, http.StatusNotFound, "Nodul nu a fost gasit")
+			return
+		}
+		json.NewEncoder(w).Encode(node)
 	})
 
 	r.Get("/api/edges", func(w http.ResponseWriter, r *http.Request) {
@@ -204,7 +240,7 @@ func main() {
 		limit, offset := parsePagination(r)
 		edges, err := dbConn.GetEdges(limit, offset)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		json.NewEncoder(w).Encode(edges)
@@ -217,57 +253,199 @@ func main() {
 			ip = r.RemoteAddr
 		}
 		if !searchLimiter.allow(ip) {
-			http.Error(w, "Rate limit depasit — max 60 cautari/minut", http.StatusTooManyRequests)
+			writeJSONError(w, http.StatusTooManyRequests, "Rate limit depasit — max 60 cautari/minut")
 			return
 		}
 		q := r.URL.Query().Get("q")
 		if q == "" {
-			http.Error(w, "Query is required", http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, "Parametrul 'q' este obligatoriu")
 			return
 		}
 		if len(q) > 200 {
-			http.Error(w, "Query prea lung (max 200 caractere)", http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, "Query prea lung (max 200 caractere)")
 			return
 		}
 		nodes, err := dbConn.SearchNodes(q)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		json.NewEncoder(w).Encode(nodes)
 	})
 
 	r.Post("/api/crawl", func(w http.ResponseWriter, r *http.Request) {
-		// X-Real-IP e setat exclusiv de nginx — nu poate fi falsificat de client
 		ip := r.Header.Get("X-Real-IP")
 		if ip == "" {
 			ip = r.RemoteAddr
 		}
 		if !limiter.allow(strings.TrimSpace(ip)) {
-			http.Error(w, "Prea multe cereri. Incearca din nou in cateva minute.", http.StatusTooManyRequests)
+			writeJSONError(w, http.StatusTooManyRequests, "Prea multe cereri. Incearca din nou in cateva minute.")
 			return
 		}
 		var req struct {
 			URL string `json:"url"`
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 2048) // 2KB limita — previne body-uri gigantice
+		r.Body = http.MaxBytesReader(w, r.Body, 2048)
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, "Body invalid")
 			return
 		}
 		if !isValidOnionURL(req.URL) {
-			http.Error(w, "URL invalid: trebuie sa fie un URL .onion valid (http/https)", http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, "URL invalid: trebuie sa fie un URL .onion valid (http/https)")
 			return
 		}
+		log.Printf("[AUDIT] POST /api/crawl ip=%s url=%s", ip, req.URL)
 		if err := engine.AddToQueue(req.URL); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(map[string]string{"message": "URL added to crawl queue"})
+		json.NewEncoder(w).Encode(map[string]string{"message": "URL adaugat in coada de crawling"})
 	})
 
-	srv := &http.Server{Addr: "127.0.0.1:" + port, Handler: r}
+	r.Post("/api/recrawl", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			URL string `json:"url"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 2048)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "Body invalid")
+			return
+		}
+		if req.URL == "" {
+			writeJSONError(w, http.StatusBadRequest, "Campul 'url' este obligatoriu")
+			return
+		}
+		found, canRequeue, err := dbConn.RequeueForCrawl(req.URL)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if !found {
+			writeJSONError(w, http.StatusNotFound, "URL-ul nu exista in baza de date")
+			return
+		}
+		if !canRequeue {
+			writeJSONError(w, http.StatusConflict, "Nodul este deja in curs de crawling")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]string{"message": "Nodul a fost pus in coada pentru re-crawling"})
+	})
+
+	// GET /api/queue — statistici coada + urmatoarele 10 URL-uri pending
+	r.Get("/api/queue", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		summary, err := dbConn.GetQueueSummary()
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		json.NewEncoder(w).Encode(summary)
+	})
+
+	// GET /api/blacklist — lista domeniilor blocate
+	r.Get("/api/blacklist", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		domains, err := dbConn.GetBlacklist()
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if domains == nil {
+			domains = []string{}
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"domains": domains})
+	})
+
+	// POST /api/blacklist — adauga un domeniu in blacklist
+	r.Post("/api/blacklist", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Domain string `json:"domain"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 512)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "Body invalid")
+			return
+		}
+		req.Domain = strings.TrimSpace(req.Domain)
+		if req.Domain == "" {
+			writeJSONError(w, http.StatusBadRequest, "Campul 'domain' este obligatoriu")
+			return
+		}
+		// Acceptam doar domenii .onion
+		if !strings.HasSuffix(req.Domain, ".onion") {
+			writeJSONError(w, http.StatusBadRequest, "Doar domeniile .onion pot fi blocate")
+			return
+		}
+		if err := dbConn.AddBlacklist(req.Domain); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"message": fmt.Sprintf("Domeniu blocat: %s", req.Domain)})
+	})
+
+	// GET /api/export?format=json|csv — export streaming al nodurilor crawlate
+	// Folosim http.ResponseController pentru a extinde deadline-ul pe handler-ul de streaming.
+	r.Get("/api/export", func(w http.ResponseWriter, r *http.Request) {
+		format := r.URL.Query().Get("format")
+		if format != "csv" {
+			format = "json"
+		}
+
+		// Extinde deadline-ul pentru export (poate dura mai mult de 30s)
+		rc := http.NewResponseController(w)
+		rc.SetWriteDeadline(time.Now().Add(10 * time.Minute))
+
+		if format == "csv" {
+			w.Header().Set("Content-Type", "text/csv")
+			w.Header().Set("Content-Disposition", `attachment; filename="onion_spider_export.csv"`)
+			csvWriter := csv.NewWriter(w)
+			csvWriter.Write([]string{"id", "url", "title", "status_code", "server_header", "processing_status", "category", "last_crawled_at"})
+			err := dbConn.ExportNodes(func(n database.Node) error {
+				return csvWriter.Write([]string{
+					strconv.Itoa(n.ID), n.URL, n.Title,
+					strconv.Itoa(n.StatusCode), n.ServerHeader,
+					n.ProcessingStatus, n.Category, n.LastCrawledAt,
+				})
+			})
+			csvWriter.Flush()
+			if err != nil {
+				log.Printf("[EXPORT] Eroare la export CSV: %v", err)
+			}
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("["))
+			first := true
+			err := dbConn.ExportNodes(func(n database.Node) error {
+				b, err := json.Marshal(n)
+				if err != nil {
+					return err
+				}
+				if !first {
+					w.Write([]byte(","))
+				}
+				first = false
+				_, err = w.Write(b)
+				return err
+			})
+			w.Write([]byte("]"))
+			if err != nil {
+				log.Printf("[EXPORT] Eroare la export JSON: %v", err)
+			}
+		}
+	})
+
+	srv := &http.Server{
+		Addr:         "127.0.0.1:" + port,
+		Handler:      r,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
 
 	go func() {
 		log.Printf("=== [API] Serverul asculta pe portul %s ===", port)

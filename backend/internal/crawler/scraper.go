@@ -21,6 +21,7 @@ type ScrapeResult struct {
 	ServerHeader string
 	StatusCode   int
 	Metadata     string // JSON string
+	Category     string // ex: "marketplace", "forum", "wiki", "unknown"
 }
 
 var spaceRegex = regexp.MustCompile(`\s+`)
@@ -46,6 +47,7 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 		ServerHeader: resp.Header.Get("Server"),
 		FoundOnions:  []string{},
 		Metadata:     "{}",
+		Category:     "unknown",
 	}
 
 	contentType := resp.Header.Get("Content-Type")
@@ -54,8 +56,8 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 		return result, nil
 	}
 
-	// Protectie OOM: citim maxim 5MB
-	doc, err := goquery.NewDocumentFromReader(io.LimitReader(resp.Body, 5*1024*1024))
+	// Protectie OOM: citim maxim 1MB (suficient pentru orice pagina utila)
+	doc, err := goquery.NewDocumentFromReader(io.LimitReader(resp.Body, 1*1024*1024))
 	if err != nil {
 		return result, nil
 	}
@@ -86,12 +88,14 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 
 	// Rezolvam URL-urile relative fata de pagina curenta si pastram path-ul complet
 	baseURL, _ := url.Parse(targetURL)
-	doc.Find("a[href]").Each(func(i int, s *goquery.Selection) {
-		href, _ := s.Attr("href")
-		if href == "" || href == "#" || strings.HasPrefix(href, "javascript:") {
+
+	// collectOnion rezolva un href/src fata de baseURL si il adauga daca e .onion
+	collectOnion := func(href string) {
+		if href == "" || href == "#" || strings.HasPrefix(href, "javascript:") ||
+			strings.HasPrefix(href, "mailto:") {
 			return
 		}
-		parsed, err := url.Parse(href)
+		parsed, err := url.Parse(strings.TrimSpace(href))
 		if err != nil {
 			return
 		}
@@ -101,8 +105,43 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 			strings.HasSuffix(resolved.Host, ".onion") {
 			result.FoundOnions = append(result.FoundOnions, resolved.String())
 		}
+	}
+
+	// <a href>
+	doc.Find("a[href]").Each(func(i int, s *goquery.Selection) {
+		href, _ := s.Attr("href")
+		collectOnion(href)
+	})
+
+	// <area href> (image maps)
+	doc.Find("area[href]").Each(func(i int, s *goquery.Selection) {
+		href, _ := s.Attr("href")
+		collectOnion(href)
+	})
+
+	// <link rel="canonical"> si alte <link href>
+	doc.Find("link[href]").Each(func(i int, s *goquery.Selection) {
+		href, _ := s.Attr("href")
+		collectOnion(href)
+	})
+
+	// <form action>
+	doc.Find("form[action]").Each(func(i int, s *goquery.Selection) {
+		action, _ := s.Attr("action")
+		collectOnion(action)
+	})
+
+	// <meta http-equiv="refresh" content="5; url=...">
+	doc.Find(`meta[http-equiv="refresh"], meta[http-equiv="Refresh"]`).Each(func(i int, s *goquery.Selection) {
+		content, _ := s.Attr("content")
+		// Format: "delay; url=..." sau "delay; URL=..."
+		lower := strings.ToLower(content)
+		if idx := strings.Index(lower, "url="); idx != -1 {
+			collectOnion(strings.TrimSpace(content[idx+4:]))
+		}
 	})
 	result.FoundOnions = removeDuplicates(result.FoundOnions)
+	result.Category = Categorize(result.Title, result.Content)
 
 	return result, nil
 }
