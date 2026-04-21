@@ -145,7 +145,7 @@ func TestBuildAuthCommand_Password(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd != `AUTHENTICATE "supersecret"` {
+	if cmd != fmt.Sprintf("AUTHENTICATE %x", []byte("supersecret")) {
 		t.Errorf("comanda incorecta: %s", cmd)
 	}
 }

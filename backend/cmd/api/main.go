@@ -193,6 +193,9 @@ func main() {
 	engine := crawler.NewEngine(dbConn, torProxy, workers, maxDepth)
 	engine.Start()
 
+	// exportSem previne exporturi simultane (max 1 la un moment dat)
+	exportSem := make(chan struct{}, 1)
+
 	r.Get("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -268,10 +271,7 @@ func main() {
 
 	r.Get("/api/search", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		ip := r.Header.Get("X-Real-IP")
-		if ip == "" {
-			ip = r.RemoteAddr
-		}
+		ip := clientIP(r)
 		if !searchLimiter.allow(ip) {
 			writeJSONError(w, http.StatusTooManyRequests, "Rate limit depasit — max 60 cautari/minut")
 			return
@@ -285,7 +285,8 @@ func main() {
 			writeJSONError(w, http.StatusBadRequest, "Query prea lung (max 200 caractere)")
 			return
 		}
-		nodes, err := dbConn.SearchNodes(q)
+		category := r.URL.Query().Get("category")
+		nodes, err := dbConn.SearchNodes(q, category)
 		if err != nil {
 			log.Printf("[ERROR] GET /api/search q=%s: %v", q, err)
 			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
@@ -295,11 +296,8 @@ func main() {
 	})
 
 	r.Post("/api/crawl", func(w http.ResponseWriter, r *http.Request) {
-		ip := r.Header.Get("X-Real-IP")
-		if ip == "" {
-			ip = r.RemoteAddr
-		}
-		if !limiter.allow(strings.TrimSpace(ip)) {
+		ip := clientIP(r)
+		if !limiter.allow(ip) {
 			writeJSONError(w, http.StatusTooManyRequests, "Prea multe cereri. Incearca din nou in cateva minute.")
 			return
 		}
@@ -331,6 +329,11 @@ func main() {
 	})
 
 	r.Post("/api/recrawl", func(w http.ResponseWriter, r *http.Request) {
+		ip := clientIP(r)
+		if !limiter.allow(ip) {
+			writeJSONError(w, http.StatusTooManyRequests, "Prea multe cereri. Incearca din nou in cateva minute.")
+			return
+		}
 		var req struct {
 			URL string `json:"url"`
 		}
@@ -421,6 +424,15 @@ func main() {
 	// GET /api/export?format=json|csv — export streaming al nodurilor crawlate
 	// Folosim http.ResponseController pentru a extinde deadline-ul pe handler-ul de streaming.
 	r.Get("/api/export", func(w http.ResponseWriter, r *http.Request) {
+		// Permite doar un export simultan pentru a evita supraincarcarea DB
+		select {
+		case exportSem <- struct{}{}:
+			defer func() { <-exportSem }()
+		default:
+			writeJSONError(w, http.StatusTooManyRequests, "Export in desfasurare — incearca din nou in cateva momente")
+			return
+		}
+
 		format := r.URL.Query().Get("format")
 		if format != "csv" {
 			format = "json"
@@ -467,6 +479,79 @@ func main() {
 				log.Printf("[EXPORT] Eroare la export JSON: %v", err)
 			}
 		}
+	})
+
+	// POST /api/crawl/bulk — adauga mai multe URL-uri in coada deodata (max 20)
+	r.Post("/api/crawl/bulk", func(w http.ResponseWriter, r *http.Request) {
+		ip := clientIP(r)
+		if !limiter.allow(ip) {
+			writeJSONError(w, http.StatusTooManyRequests, "Prea multe cereri. Incearca din nou in cateva minute.")
+			return
+		}
+		var req struct {
+			URLs []string `json:"urls"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 10*1024)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "Body invalid")
+			return
+		}
+		if len(req.URLs) == 0 || len(req.URLs) > 20 {
+			writeJSONError(w, http.StatusBadRequest, "Trimite 1-20 URL-uri in campul 'urls'")
+			return
+		}
+		var added, skipped int
+		for _, u := range req.URLs {
+			if !isValidOnionURL(u) {
+				skipped++
+				continue
+			}
+			log.Printf("[AUDIT] POST /api/crawl/bulk ip=%s url=%s", ip, u)
+			if err := engine.AddToQueue(u); err != nil {
+				skipped++
+			} else {
+				added++
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]int{"added": added, "skipped": skipped})
+	})
+
+	// DELETE /api/blacklist/{domain} — scoate un domeniu din blacklist
+	r.Delete("/api/blacklist/{domain}", func(w http.ResponseWriter, r *http.Request) {
+		domain := strings.TrimSpace(chi.URLParam(r, "domain"))
+		if domain == "" || !strings.HasSuffix(domain, ".onion") {
+			writeJSONError(w, http.StatusBadRequest, "Domeniu invalid: trebuie sa fie un domeniu .onion")
+			return
+		}
+		found, err := dbConn.DeleteBlacklist(domain)
+		if err != nil {
+			log.Printf("[ERROR] DELETE /api/blacklist domain=%s: %v", domain, err)
+			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
+			return
+		}
+		if !found {
+			writeJSONError(w, http.StatusNotFound, "Domeniu negasit in blacklist")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"message": fmt.Sprintf("Domeniu scos din blacklist: %s", domain)})
+	})
+
+	// GET /api/stats/timeline — noduri descoperite pe zi in ultimele 30 de zile
+	r.Get("/api/stats/timeline", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		stats, err := dbConn.GetTimelineStats()
+		if err != nil {
+			log.Printf("[ERROR] GET /api/stats/timeline: %v", err)
+			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
+			return
+		}
+		if stats == nil {
+			stats = []database.TimelineStat{}
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"timeline": stats})
 	})
 
 	srv := &http.Server{
