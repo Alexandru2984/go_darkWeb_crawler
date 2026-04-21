@@ -69,16 +69,28 @@ func fetchAndParseSitemap(ctx context.Context, client *http.Client, sitemapURL s
 		return nil
 	}
 
+	const (
+		maxSitemapURLs  = 300
+		maxChildSitemaps = 50
+	)
+
 	var result []string
 
 	// Incearcam mai intai sitemapindex
 	var idx sitemapIndex
 	if err := xml.Unmarshal(body, &idx); err == nil && len(idx.Sitemaps) > 0 {
 		if recurse {
-			for _, sm := range idx.Sitemaps {
+			for i, sm := range idx.Sitemaps {
+				if i >= maxChildSitemaps {
+					break
+				}
 				if isOnionURL(sm.Loc) {
 					sub := fetchAndParseSitemap(ctx, client, sm.Loc, false) // fara recursie suplimentara
 					result = append(result, sub...)
+					if len(result) >= maxSitemapURLs {
+						result = result[:maxSitemapURLs]
+						break
+					}
 				}
 			}
 		}
@@ -95,12 +107,10 @@ func fetchAndParseSitemap(ctx context.Context, client *http.Client, sitemapURL s
 	for _, u := range us.URLs {
 		if isOnionURL(u.Loc) {
 			result = append(result, u.Loc)
+			if len(result) >= maxSitemapURLs {
+				break
+			}
 		}
-	}
-	// Limitam numarul de URL-uri returnate per sitemap pentru a preveni flood-ul in coada
-	const maxSitemapURLs = 300
-	if len(result) > maxSitemapURLs {
-		result = result[:maxSitemapURLs]
 	}
 	return result
 }

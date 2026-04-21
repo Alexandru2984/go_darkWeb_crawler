@@ -20,6 +20,7 @@ import (
 	"time"
 	"onion-spider/internal/crawler"
 	"onion-spider/internal/database"
+	"onion-spider/internal/proxy"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -100,7 +101,7 @@ func parsePagination(r *http.Request) (limit, offset int) {
 	if page > 10000 {
 		page = 10000
 	}
-	if limit <= 0 {
+	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
 	offset = (page - 1) * limit
@@ -191,6 +192,25 @@ func main() {
 	}
 
 	engine := crawler.NewEngine(dbConn, torProxy, workers, maxDepth)
+
+	// Wire TorController inainte de Start() pentru a evita race cu workerii
+	torCtrlAddr := os.Getenv("TOR_CONTROL_ADDR")
+	if torCtrlAddr == "" {
+		torCtrlAddr = "127.0.0.1:9051"
+	}
+	torCtrl := proxy.NewTorController(
+		torCtrlAddr,
+		os.Getenv("TOR_CONTROL_PASSWORD"),
+		os.Getenv("TOR_CONTROL_COOKIE"),
+		30*time.Second,
+	)
+	if _, err := torCtrl.RenewCircuit(); err != nil {
+		log.Printf("⚠️ TorController: port control Tor indisponibil, reinnoire circuit dezactivata: %v", err)
+	} else {
+		engine.TorCtrl = torCtrl
+		log.Println("✅ TorController activ — reinnoire circuit Tor activata")
+	}
+
 	engine.Start()
 
 	// exportSem previne exporturi simultane (max 1 la un moment dat)
@@ -313,7 +333,7 @@ func main() {
 			writeJSONError(w, http.StatusBadRequest, "URL invalid: trebuie sa fie un URL .onion valid (http/https)")
 			return
 		}
-		log.Printf("[AUDIT] POST /api/crawl ip=%s url=%s", ip, req.URL)
+		log.Printf("[AUDIT] POST /api/crawl ip=%s url=%s", sanitizeForLog(ip), sanitizeForLog(req.URL))
 		if err := engine.AddToQueue(req.URL); err != nil {
 			if errors.Is(err, database.ErrBlacklisted) {
 				writeJSONError(w, http.StatusForbidden, "Domeniu blocat")
@@ -447,7 +467,7 @@ func main() {
 			w.Header().Set("Content-Disposition", `attachment; filename="onion_spider_export.csv"`)
 			csvWriter := csv.NewWriter(w)
 			csvWriter.Write([]string{"id", "url", "title", "status_code", "server_header", "processing_status", "category", "last_crawled_at"})
-			err := dbConn.ExportNodes(func(n database.Node) error {
+			err := dbConn.ExportNodes(r.Context(), func(n database.Node) error {
 				return csvWriter.Write([]string{
 					strconv.Itoa(n.ID), n.URL, n.Title,
 					strconv.Itoa(n.StatusCode), n.ServerHeader,
@@ -462,7 +482,7 @@ func main() {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte("["))
 			first := true
-			err := dbConn.ExportNodes(func(n database.Node) error {
+			err := dbConn.ExportNodes(r.Context(), func(n database.Node) error {
 				b, err := json.Marshal(n)
 				if err != nil {
 					return err
@@ -506,7 +526,7 @@ func main() {
 				skipped++
 				continue
 			}
-			log.Printf("[AUDIT] POST /api/crawl/bulk ip=%s url=%s", ip, u)
+			log.Printf("[AUDIT] POST /api/crawl/bulk ip=%s url=%s", sanitizeForLog(ip), sanitizeForLog(u))
 			if err := engine.AddToQueue(u); err != nil {
 				skipped++
 			} else {
@@ -594,4 +614,12 @@ func isValidOnionURL(rawURL string) bool {
 	}
 	return (parsed.Scheme == "http" || parsed.Scheme == "https") &&
 		strings.HasSuffix(parsed.Host, ".onion")
+}
+
+// sanitizeForLog inlocuieste newline-uri din valorile controlate de utilizator
+// pentru a preveni log injection.
+func sanitizeForLog(s string) string {
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	s = strings.ReplaceAll(s, "\r", "\\r")
+	return s
 }

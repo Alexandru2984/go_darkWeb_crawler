@@ -1,8 +1,10 @@
 package proxy
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -19,16 +21,28 @@ func NewTorClient(socksProxyAddress string) (*http.Client, error) {
 // NewTorClientWithTransport returneaza atat transport-ul cat si clientul,
 // astfel incat engine-ul sa poata apela CloseIdleConnections() dupa SIGNAL NEWNYM.
 func NewTorClientWithTransport(socksProxyAddress string) (*http.Transport, *http.Client, error) {
-	// Configurarea proxy-ului SOCKS5
 	dialer, err := proxy.SOCKS5("tcp", socksProxyAddress, nil, proxy.Direct)
 	if err != nil {
 		return nil, nil, fmt.Errorf("eroare la initializarea SOCKS5: %w", err)
 	}
 
-	// Crearea unui transport HTTP custom, legat de dialer-ul SOCKS5
+	// Folosim DialContext daca dialer-ul SOCKS5 il suporta (context cancelabil).
+	// Altfel, wrap cu verificare context inainte de dial.
+	type contextDialer interface {
+		DialContext(ctx context.Context, network, address string) (net.Conn, error)
+	}
+	dialCtx := func(ctx context.Context, network, address string) (net.Conn, error) {
+		if cd, ok := dialer.(contextDialer); ok {
+			return cd.DialContext(ctx, network, address)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return dialer.Dial(network, address)
+	}
+
 	transport := &http.Transport{
-		Dial:                  dialer.Dial,
-		DialContext:           nil, // Important pentru a forta DNS resolution prin Tor
+		DialContext:           dialCtx,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
@@ -38,7 +52,7 @@ func NewTorClientWithTransport(socksProxyAddress string) (*http.Transport, *http
 
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   30 * time.Second, // Daca site-ul nu raspunde, renuntam
+		Timeout:   30 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 3 {
 				return fmt.Errorf("prea multe redirect-uri")

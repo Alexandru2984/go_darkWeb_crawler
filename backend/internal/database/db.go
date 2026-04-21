@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"errors"
@@ -606,9 +607,10 @@ func (db *DB) IsDomainBlacklisted(domain string) (bool, error) {
 }
 
 // ExportNodes returneaza toate nodurile crawlate complet, in ordine de descoperire.
+// ctx permite anularea exportului daca clientul se deconecteaza.
 // Foloseste un cursor pentru a nu incarca toata tabela in memorie.
-func (db *DB) ExportNodes(fn func(Node) error) error {
-	rows, err := db.Conn.Query(`
+func (db *DB) ExportNodes(ctx context.Context, fn func(Node) error) error {
+	rows, err := db.Conn.QueryContext(ctx, `
 		SELECT id, url, COALESCE(title,''), COALESCE(status_code,0), COALESCE(server_header,''),
 		       processing_status, COALESCE(category,'unknown'),
 		       to_char(last_crawled_at,'YYYY-MM-DD HH24:MI:SS')
