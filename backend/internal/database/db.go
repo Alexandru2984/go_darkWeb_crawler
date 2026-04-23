@@ -105,6 +105,22 @@ func migrate(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_nodes_search_vector ON nodes USING GIN(search_vector)`,
 		`CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(processing_status, next_crawl_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_nodes_category ON nodes(category)`,
+		// Email verification token expiry (security hardening)
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_expires_at TIMESTAMP`,
+		`UPDATE users SET verification_expires_at = CURRENT_TIMESTAMP + INTERVAL '24 hours'
+		   WHERE is_verified = FALSE AND verification_token IS NOT NULL AND verification_expires_at IS NULL`,
+		// Audit log pentru evenimente de securitate (login, register, token invalid etc)
+		`CREATE TABLE IF NOT EXISTS auth_audit (
+			id         SERIAL PRIMARY KEY,
+			event      TEXT NOT NULL,
+			email      TEXT,
+			ip         TEXT,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_auth_audit_created ON auth_audit(created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_auth_audit_email_event ON auth_audit(email, event, created_at DESC)`,
+		// Heartbeat pentru detectarea nodurilor blocate in 'crawling' dupa crash brutal
+		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS crawl_started_at TIMESTAMP`,
 		// Tabel blacklist pentru domenii blocate
 		`CREATE TABLE IF NOT EXISTS blacklist (
 			domain   TEXT PRIMARY KEY,
@@ -207,13 +223,13 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 	// Continut nemodificat: update minimal — nu atinge content/tsvector/category
 	_, err := db.Conn.Exec(`
 	UPDATE nodes SET
-		status_code       = $2,
-		server_header     = $3,
-		processing_status = $4,
+		status_code       = $3,
+		server_header     = $4,
+		processing_status = $5,
 		last_crawled_at   = CURRENT_TIMESTAMP,
 		next_crawl_at     = CURRENT_TIMESTAMP + (INTERVAL '1 day' * re_crawl_interval_days)
-	WHERE url = $1 AND user_id = $2 AND user_id = $2 AND user_id = $5 AND processing_status != 'blocked'
-	`, nodeURL, userID, statusCode, server, status, userID)
+	WHERE url = $1 AND user_id = $2 AND processing_status != 'blocked'
+	`, nodeURL, userID, statusCode, server, status)
 	return false, err
 }
 
@@ -247,9 +263,10 @@ func (db *DB) SearchNodes(searchQuery, category string, userID int, isAdmin bool
 		SELECT id, url, COALESCE(title, ''), COALESCE(status_code, 0), COALESCE(server_header, ''),
 		       processing_status, COALESCE(category, 'unknown'),
 		       to_char(last_crawled_at, 'YYYY-MM-DD HH24:MI:SS')
-		FROM nodes WHERE user_id = $1
+		FROM nodes
 		WHERE search_vector @@ plainto_tsquery('english', $1)
-		  AND ($2 = '' OR category = $2) AND (user_id = $3 OR $4)
+		  AND ($2 = '' OR category = $2)
+		  AND (user_id = $3 OR $4)
 		ORDER BY ts_rank(search_vector, plainto_tsquery('english', $1)) DESC
 		LIMIT 50
 	`, searchQuery, category, userID, isAdmin)
@@ -304,13 +321,15 @@ func (db *DB) SaveEdge(source, target string, targetDepth int, userID int) error
 
 // GetNextPendingNode extrage atomic urmatorul URL care trebuie scanat.
 // Prioritate: noduri 'pending' > noduri 'completed' cu next_crawl_at expirat.
+// Seteaza crawl_started_at pentru a permite sweeperul sa recupereze noduri stuck.
 func (db *DB) GetNextPendingNode() (string, int, int, error) {
 	var nodeURL string
 	var depth int
 	var userID int
 	err := db.Conn.QueryRow(`
 		UPDATE nodes
-		SET processing_status = 'crawling'
+		SET processing_status = 'crawling',
+		    crawl_started_at  = CURRENT_TIMESTAMP
 		WHERE url = (
 			SELECT url FROM nodes
 			WHERE (
@@ -330,6 +349,25 @@ func (db *DB) GetNextPendingNode() (string, int, int, error) {
 		return "", 0, 0, nil
 	}
 	return nodeURL, depth, userID, err
+}
+
+// ResetStuckCrawling reseteaza nodurile ramase in starea 'crawling' mai mult
+// decat olderThan (ex: dupa crash brutal al unui worker). Returneaza numarul
+// de noduri recuperate.
+func (db *DB) ResetStuckCrawling(olderThan time.Duration) (int64, error) {
+	res, err := db.Conn.Exec(`
+		UPDATE nodes
+		SET processing_status = 'pending',
+		    crawl_started_at  = NULL
+		WHERE processing_status = 'crawling'
+		  AND crawl_started_at IS NOT NULL
+		  AND crawl_started_at < CURRENT_TIMESTAMP - ($1 || ' seconds')::INTERVAL
+	`, fmt.Sprintf("%d", int(olderThan.Seconds())))
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
 }
 
 // FailNodeWithRetry inregistreaza un esec si programeaza o reincercare cu exponential backoff.
@@ -412,7 +450,7 @@ func (db *DB) GetNodeByURL(nodeURL string, userID int, isAdmin bool) (*NodeDetai
 // canRequeue=false daca nodul e deja in starea 'crawling'.
 func (db *DB) RequeueForCrawl(nodeURL string, userID int) (found bool, canRequeue bool, err error) {
 	var status string
-	err = db.Conn.QueryRow(`SELECT processing_status FROM nodes WHERE user_id = $1 WHERE url = $1 AND user_id = $2 AND user_id = $2`, nodeURL, userID, userID).Scan(&status)
+	err = db.Conn.QueryRow(`SELECT processing_status FROM nodes WHERE url = $1 AND user_id = $2`, nodeURL, userID).Scan(&status)
 	if err == sql.ErrNoRows {
 		return false, false, nil
 	}
@@ -423,7 +461,7 @@ func (db *DB) RequeueForCrawl(nodeURL string, userID int) (found bool, canRequeu
 		return true, false, nil
 	}
 	_, err = db.Conn.Exec(
-		`UPDATE nodes SET processing_status = 'pending', next_crawl_at = CURRENT_TIMESTAMP WHERE url = $1 AND user_id = $2 AND user_id = $2`,
+		`UPDATE nodes SET processing_status = 'pending', next_crawl_at = CURRENT_TIMESTAMP WHERE url = $1 AND user_id = $2`,
 		nodeURL, userID,
 	)
 	return true, true, err
@@ -510,8 +548,10 @@ type QueueItem struct {
 // GetQueueSummary returneaza numaratori pe status si urmatoarele 10 URL-uri din coada
 func (db *DB) GetQueueSummary(userID int, isAdmin bool) (*QueueSummary, error) {
 	rows, err := db.Conn.Query(`
-		SELECT processing_status, COUNT(*) FROM nodes WHERE user_id = $1 WHERE user_id = $1 GROUP BY processing_status
-	`)
+		SELECT processing_status, COUNT(*) FROM nodes
+		WHERE (user_id = $1 OR $2)
+		GROUP BY processing_status
+	`, userID, isAdmin)
 	if err != nil {
 		return nil, err
 	}
@@ -532,7 +572,7 @@ func (db *DB) GetQueueSummary(userID int, isAdmin bool) (*QueueSummary, error) {
 
 	next, err := db.Conn.Query(`
 		SELECT url, depth, processing_status, to_char(discovered_at, 'YYYY-MM-DD HH24:MI:SS')
-		FROM nodes WHERE user_id = $1
+		FROM nodes
 		WHERE processing_status = 'pending' AND (user_id = $1 OR $2)
 		ORDER BY next_crawl_at ASC
 		LIMIT 10
@@ -724,41 +764,98 @@ type User struct {
 	CreatedAt         string `json:"created_at"`
 }
 
-// CreateUser adauga un nou utilizator
+// NormalizeEmail returneaza emailul in lowercase si fara spatii.
+// Toate operatiile cu email-uri trebuie sa treaca prin asta.
+func NormalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+// CreateUser adauga un nou utilizator cu token de verificare valabil 24h.
 func (db *DB) CreateUser(email, passwordHash, role, token string) error {
 	_, err := db.Conn.Exec(`
-		INSERT INTO users (email, password_hash, role, verification_token)
-		VALUES ($1, $2, $3, $4)
-	`, email, passwordHash, role, token)
+		INSERT INTO users (email, password_hash, role, verification_token, verification_expires_at)
+		VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP + INTERVAL '24 hours')
+	`, NormalizeEmail(email), passwordHash, role, token)
 	return err
 }
 
-// GetUserByEmail extrage un utilizator folosind email-ul
+// GetUserByEmail extrage un utilizator folosind email-ul (case-insensitive).
 func (db *DB) GetUserByEmail(email string) (*User, error) {
 	var u User
 	err := db.Conn.QueryRow(`
 		SELECT id, email, password_hash, role, is_verified, COALESCE(verification_token, ''), to_char(created_at, 'YYYY-MM-DD HH24:MI:SS')
 		FROM users WHERE email = $1
-	`, email).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.IsVerified, &u.VerificationToken, &u.CreatedAt)
+	`, NormalizeEmail(email)).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.IsVerified, &u.VerificationToken, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	return &u, err
 }
 
-// VerifyUser seteaza utilizatorul ca verificat
+// VerifyUser seteaza utilizatorul ca verificat, doar daca token-ul nu a expirat.
 func (db *DB) VerifyUser(token string) error {
+	if len(token) < 16 {
+		return errors.New("token invalid")
+	}
 	res, err := db.Conn.Exec(`
-		UPDATE users SET is_verified = TRUE, verification_token = NULL
-		WHERE verification_token = $1 AND is_verified = FALSE
+		UPDATE users
+		SET is_verified = TRUE, verification_token = NULL, verification_expires_at = NULL
+		WHERE verification_token = $1
+		  AND is_verified = FALSE
+		  AND (verification_expires_at IS NULL OR verification_expires_at > CURRENT_TIMESTAMP)
 	`, token)
 	if err != nil {
 		return err
 	}
 	aff, _ := res.RowsAffected()
 	if aff == 0 {
-		return errors.New("token invalid sau deja verificat")
+		return errors.New("token invalid, expirat sau deja folosit")
 	}
 	return nil
+}
+
+// HasAnyAdmin verifica daca exista cel putin un user cu rol admin.
+// Folosit la bootstrap — primul user cu ADMIN_EMAIL devine admin doar daca nu exista inca.
+func (db *DB) HasAnyAdmin() (bool, error) {
+	var count int
+	err := db.Conn.QueryRow(`SELECT COUNT(*) FROM users WHERE role = 'admin'`).Scan(&count)
+	return count > 0, err
+}
+
+// LogAuthEvent insereaza un record in auth_audit. Nu bloca fluxul daca esueaza.
+func (db *DB) LogAuthEvent(event, email, ip string) {
+	_, err := db.Conn.Exec(
+		`INSERT INTO auth_audit (event, email, ip) VALUES ($1, $2, $3)`,
+		event, NormalizeEmail(email), ip,
+	)
+	if err != nil {
+		log.Printf("[audit] nu am putut loga %s pt %s: %v", event, email, err)
+	}
+}
+
+// CountRecentAuthEvents numara evenimentele din auth_audit de tip `event` pentru `email`
+// in ultimele `window` minute. Folosit pentru:
+//   - lockout login dupa 5 fail consecutiv ('login_fail')
+//   - rate-limit register per email destinatar ('register_ok')
+func (db *DB) CountRecentAuthEvents(event, email string, windowMinutes int) (int, error) {
+	var count int
+	err := db.Conn.QueryRow(`
+		SELECT COUNT(*) FROM auth_audit
+		WHERE event = $1 AND email = $2
+		  AND created_at > CURRENT_TIMESTAMP - ($3 || ' minutes')::INTERVAL
+	`, event, NormalizeEmail(email), fmt.Sprintf("%d", windowMinutes)).Scan(&count)
+	return count, err
+}
+
+// GetUserRole returneaza rolul curent al utilizatorului din DB (bypass JWT claims).
+// Folosit pe endpointurile admin-only pentru a invalida imediat demotion-urile,
+// in loc sa astepti expirarea JWT-ului.
+func (db *DB) GetUserRole(userID int) (string, error) {
+	var role string
+	err := db.Conn.QueryRow(`SELECT role FROM users WHERE id = $1`, userID).Scan(&role)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return role, err
 }
 

@@ -23,6 +23,117 @@ let statusInterval = null
 
 const API_BASE = '/api'
 
+const userToken = ref(localStorage.getItem('token') || '')
+const userRole = ref(localStorage.getItem('role') || '')
+const userEmail = ref(localStorage.getItem('email') || '')
+const authEmail = ref('')
+const authPassword = ref('')
+const authMode = ref('login') // 'login' sau 'register'
+const isLoggedIn = computed(() => !!userToken.value)
+
+const authMessage = ref('')
+
+const getAuthHeaders = () => {
+  const headers = {}
+  if (userToken.value) {
+    headers['Authorization'] = `Bearer ${userToken.value}`
+  }
+  return headers
+}
+
+// apiFetch e un wrapper peste fetch care auto-logout daca backend-ul returneaza 401
+// (token expirat sau invalidat prin rotatie JWT_SECRET). Previne stari inconsistente
+// unde UI-ul crede ca esti logat dar orice apel esueaza tacit.
+const apiFetch = async (url, opts = {}) => {
+  const res = await fetch(url, {
+    ...opts,
+    headers: { ...(opts.headers || {}), ...getAuthHeaders() }
+  })
+  if (res.status === 401 && userToken.value) {
+    logout()
+    authMessage.value = 'Sesiunea a expirat. Intra din nou in cont.'
+  }
+  return res
+}
+
+const handleAuth = async () => {
+  authMessage.value = 'Se proceseaza...'
+  const endpoint = authMode.value === 'login' ? '/api/auth/login' : '/api/auth/register'
+  
+  try {
+    const res = await fetch(`${API_BASE.replace('/api', '')}${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ email: authEmail.value, password: authPassword.value })
+    })
+    const data = await res.json()
+    
+    if (res.ok) {
+      if (authMode.value === 'login') {
+        userToken.value = data.token
+        userRole.value = data.role
+        userEmail.value = data.email
+        localStorage.setItem('token', data.token)
+        localStorage.setItem('role', data.role)
+        localStorage.setItem('email', data.email)
+        authMessage.value = 'Login reusit!'
+        setTimeout(() => { authMessage.value = '' }, 2000)
+        fetchStatus()
+        fetchNodes()
+      } else {
+        authMessage.value = data.message || 'Cont creat. Verifica email-ul!'
+      }
+    } else {
+      authMessage.value = data.error || 'Eroare la autentificare.'
+    }
+  } catch (err) {
+    authMessage.value = 'Eroare de conexiune.'
+  }
+}
+
+const logout = () => {
+  userToken.value = ''
+  userRole.value = ''
+  userEmail.value = ''
+  localStorage.removeItem('token')
+  localStorage.removeItem('role')
+  localStorage.removeItem('email')
+  status.value = { status: 'offline', nodes_crawled: 0, pending_nodes: 0, db_connected: false, active_workers: 0 }
+  nodes.value = []
+  edges.value = []
+}
+
+const downloadExport = (format) => {
+  if (!userToken.value) return
+
+  apiFetch(`${API_BASE}/export?format=${format}`)
+  .then(res => {
+    if (!res.ok) throw new Error('Eroare export')
+    return res.blob()
+  })
+  .then(blob => {
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.style.display = 'none'
+    a.href = url
+    
+    // Set appropriate extension
+    let ext = format
+    if (format === 'graphml') ext = 'graphml'
+    if (format === 'ndjson') ext = 'ndjson'
+    
+    a.download = `onion_spider_export.${ext}`
+    document.body.appendChild(a)
+    a.click()
+    window.URL.revokeObjectURL(url)
+  })
+  .catch(err => {
+    console.error(err)
+    showToast('Eroare la generarea exportului.')
+  })
+}
+
+
 // Culori per categorie — folosite atat in tabel cat si in graf
 const CATEGORY_COLORS = {
   marketplace:    '#e74c3c',
@@ -63,7 +174,7 @@ const showToast = (text) => {
 
 const fetchStatus = async () => {
   try {
-    const res = await fetch(`${API_BASE}/status`)
+    const res = await apiFetch(`${API_BASE}/status`)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     status.value = await res.json()
   } catch (err) {
@@ -74,8 +185,9 @@ const fetchStatus = async () => {
 
 const fetchNodes = async () => {
   if (isSearching.value) return
+  if (!userToken.value) return
   try {
-    const res = await fetch(`${API_BASE}/nodes`)
+    const res = await apiFetch(`${API_BASE}/nodes`)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     nodes.value = await res.json() || []
   } catch (err) {
@@ -86,8 +198,9 @@ const fetchNodes = async () => {
 }
 
 const fetchEdges = async () => {
+  if (!userToken.value) return
   try {
-    const res = await fetch(`${API_BASE}/edges`)
+    const res = await apiFetch(`${API_BASE}/edges`)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     edges.value = await res.json() || []
   } catch (err) {
@@ -104,7 +217,7 @@ const performSearch = async () => {
   
   isSearching.value = true
   try {
-    const res = await fetch(`${API_BASE}/search?q=${encodeURIComponent(searchQuery.value)}`)
+    const res = await apiFetch(`${API_BASE}/search?q=${encodeURIComponent(searchQuery.value)}`)
     if (res.ok) {
       nodes.value = await res.json() || []
     } else {
@@ -125,7 +238,7 @@ const startCrawl = async () => {
   messageType.value = 'info'
   
   try {
-    const res = await fetch(`${API_BASE}/crawl`, {
+    const res = await apiFetch(`${API_BASE}/crawl`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: targetUrl.value })
@@ -289,6 +402,7 @@ onUnmounted(() => {
           <h1>🕷️ Onion Spider</h1>
           <p class="subtitle">Recursive Deep Web Explorer & Search Engine</p>
         </div>
+        
         <div class="status-bar" :class="{ online: status.db_connected }">
           <span class="dot"></span>
           <span class="status-text">DB: {{ status.db_connected ? 'OK' : 'OFF' }}</span>
@@ -298,12 +412,47 @@ onUnmounted(() => {
           <span class="pending-count">In Coada: {{ status.pending_nodes }}</span>
           <span class="divider">|</span>
           <span class="workers-count">Workeri: {{ status.active_workers }}</span>
+          
+          <span v-if="isLoggedIn" class="divider">|</span>
+          <span v-if="isLoggedIn" style="color: #4da6ff; font-weight: bold;">👤 {{ userEmail }}</span>
+
+          <span v-if="isLoggedIn" class="divider">|</span>
+          <span v-if="isLoggedIn" style="cursor: pointer; color: #ff3333; font-weight: bold;" @click="logout">Logout</span>
         </div>
+
       </header>
 
-      <main>
+      
+      <div v-if="!isLoggedIn" class="auth-container">
+        <div class="auth-box">
+          <h2>{{ authMode === 'login' ? 'Login' : 'Inregistrare' }}</h2>
+          <div class="input-group">
+            <input v-model="authEmail" type="email" placeholder="Email" @keyup.enter="handleAuth" />
+          </div>
+          <div class="input-group" style="margin-top: 15px;">
+            <input v-model="authPassword" type="password" placeholder="Parola" @keyup.enter="handleAuth" />
+          </div>
+          <button @click="handleAuth" style="margin-top: 20px; width: 100%;">{{ authMode === 'login' ? 'Intra in cont' : 'Creeaza cont' }}</button>
+          <p class="auth-toggle" @click="authMode = authMode === 'login' ? 'register' : 'login'">
+            {{ authMode === 'login' ? 'Nu ai cont? Inregistreaza-te' : 'Ai deja cont? Intra' }}
+          </p>
+          <p v-if="authMessage" class="info-message">{{ authMessage }}</p>
+        </div>
+      </div>
+
+      <main v-else>
+
         <section class="crawl-form">
-          <h2>Adauga URL la coada de scanare</h2>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2 style="margin: 0;">Adauga URL la coada de scanare</h2>
+            <div v-if="userRole === 'admin'" style="display: flex; gap: 8px;">
+              <span style="color: #888; font-size: 0.8rem; align-self: center; margin-right: 5px;">EXPORT ADMIN:</span>
+              <button @click="downloadExport('csv')" style="padding: 5px 15px; font-size: 0.8rem; background: #27ae60;">CSV</button>
+              <button @click="downloadExport('xlsx')" style="padding: 5px 15px; font-size: 0.8rem; background: #2980b9;">XLSX</button>
+              <button @click="downloadExport('pdf')" style="padding: 5px 15px; font-size: 0.8rem; background: #e74c3c;">PDF</button>
+              <button @click="downloadExport('graphml')" style="padding: 5px 15px; font-size: 0.8rem; background: #8e44ad;">GraphML</button>
+            </div>
+          </div>
           <div class="input-group">
             <input 
               v-model="targetUrl" 
@@ -555,5 +704,37 @@ th { background: #0d0d0d; color: #444; font-weight: 700; font-size: 0.75rem; tex
   .input-group { flex-direction: column; }
   .col-server, .col-id, .col-cat { display: none; }
   .legend { flex-wrap: wrap; }
+}
+
+.auth-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 50vh;
+}
+.auth-box {
+  background: #111;
+  padding: 40px;
+  border-radius: 16px;
+  border: 1px solid #222;
+  box-shadow: 0 4px 30px rgba(0,0,0,0.5);
+  width: 100%;
+  max-width: 400px;
+  text-align: center;
+}
+.auth-box h2 {
+  color: #ff3333;
+  margin-top: 0;
+  margin-bottom: 30px;
+}
+.auth-toggle {
+  color: #888;
+  margin-top: 20px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.auth-toggle:hover {
+  color: #fff;
+  text-decoration: underline;
 }
 </style>
