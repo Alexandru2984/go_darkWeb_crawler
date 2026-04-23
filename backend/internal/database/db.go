@@ -95,6 +95,13 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE edges ALTER COLUMN source_url TYPE TEXT`,
 		`ALTER TABLE edges ALTER COLUMN target_url TYPE TEXT`,
 		`UPDATE nodes SET processing_status = 'pending' WHERE processing_status = 'pending_v2'`,
+		`ALTER TABLE nodes DROP CONSTRAINT IF EXISTS nodes_url_key CASCADE`,
+		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS user_id INT NOT NULL DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE`,
+		`ALTER TABLE nodes ADD CONSTRAINT nodes_url_user_key UNIQUE (url, user_id)`,
+		`ALTER TABLE edges ADD COLUMN IF NOT EXISTS user_id INT NOT NULL DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE`,
+		`ALTER TABLE edges DROP CONSTRAINT IF EXISTS edges_pkey CASCADE`,
+		`ALTER TABLE edges ADD CONSTRAINT edges_pkey PRIMARY KEY (source_url, target_url, user_id)`,
+		`ALTER TABLE edges ADD CONSTRAINT edges_source_url_fkey FOREIGN KEY (source_url, user_id) REFERENCES nodes(url, user_id) ON DELETE CASCADE`,
 		`CREATE INDEX IF NOT EXISTS idx_nodes_search_vector ON nodes USING GIN(search_vector)`,
 		`CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(processing_status, next_crawl_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_nodes_category ON nodes(category)`,
@@ -140,6 +147,7 @@ type Node struct {
 	ProcessingStatus string `json:"processing_status"`
 	Category         string `json:"category"`
 	LastCrawledAt    string `json:"last_crawled_at,omitempty"`
+	UserID           int    `json:"user_id"`
 }
 
 // NodeDetail include si continutul complet — folosit pentru GET /api/node
@@ -165,7 +173,7 @@ func ContentHash(title, content string) string {
 // SaveNode salveaza sau actualizeaza informatiile despre un site onion dupa crawling.
 // Returneaza (contentChanged bool, error). Daca hash-ul continutului nu s-a schimbat,
 // face un update minimal (fara sa atinga continutul sau tsvector).
-func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status string, metadata string, content string, category string) (bool, error) {
+func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status string, metadata string, content string, category string, userID int) (bool, error) {
 	if metadata == "" {
 		metadata = "{}"
 	}
@@ -173,18 +181,14 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 
 	// Verificam daca hash-ul s-a schimbat fata de ultima vizita
 	var oldHash sql.NullString
-	_ = db.Conn.QueryRow(`SELECT content_hash FROM nodes WHERE url = $1`, nodeURL).Scan(&oldHash)
+	_ = db.Conn.QueryRow(`SELECT content_hash FROM nodes WHERE url = $1 AND user_id = $2`, nodeURL, userID).Scan(&oldHash)
 
 	contentChanged := !oldHash.Valid || oldHash.String != newHash
 
 	if contentChanged {
 		// Continut nou sau prima vizita: update complet
 		_, err := db.Conn.Exec(`
-		INSERT INTO nodes (url, title, status_code, server_header, processing_status, metadata, content, content_hash, category, last_crawled_at,
-		                   next_crawl_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP,
-		        CURRENT_TIMESTAMP + (INTERVAL '1 day' * 7))
-		ON CONFLICT (url) DO UPDATE SET
+		INSERT INTO nodes (url, title, status_code, server_header, processing_status, metadata, content, content_hash, category, last_crawled_at, next_crawl_at, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + (INTERVAL '1 day' * 7), $10) ON CONFLICT (url, user_id) DO UPDATE SET
 			title             = EXCLUDED.title,
 			status_code       = EXCLUDED.status_code,
 			server_header     = EXCLUDED.server_header,
@@ -196,7 +200,7 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 			last_crawled_at   = CURRENT_TIMESTAMP,
 			next_crawl_at     = CURRENT_TIMESTAMP + (INTERVAL '1 day' * nodes.re_crawl_interval_days)
 		WHERE nodes.processing_status != 'blocked';
-		`, nodeURL, title, statusCode, server, status, metadata, content, newHash, category)
+		`, nodeURL, userID, title, statusCode, server, status, metadata, content, newHash, category, userID)
 		return true, err
 	}
 
@@ -208,14 +212,14 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 		processing_status = $4,
 		last_crawled_at   = CURRENT_TIMESTAMP,
 		next_crawl_at     = CURRENT_TIMESTAMP + (INTERVAL '1 day' * re_crawl_interval_days)
-	WHERE url = $1 AND processing_status != 'blocked'
-	`, nodeURL, statusCode, server, status)
+	WHERE url = $1 AND user_id = $2 AND user_id = $2 AND user_id = $5 AND processing_status != 'blocked'
+	`, nodeURL, userID, statusCode, server, status, userID)
 	return false, err
 }
 
 // EnqueueURL adauga un URL in coada de crawling fara sa suprascrie date existente.
 // Returneaza ErrBlacklisted daca domeniul e pe blacklist.
-func (db *DB) EnqueueURL(rawURL string, depth int) error {
+func (db *DB) EnqueueURL(rawURL string, depth int, userID int) error {
 	if len(rawURL) > 2048 {
 		return fmt.Errorf("url prea lung (max 2048 caractere)")
 	}
@@ -230,25 +234,25 @@ func (db *DB) EnqueueURL(rawURL string, depth int) error {
 		return ErrBlacklisted
 	}
 	_, err = db.Conn.Exec(
-		`INSERT INTO nodes (url, host, processing_status, depth) VALUES ($1, $2, 'pending', $3) ON CONFLICT (url) DO NOTHING`,
-		rawURL, host, depth,
+		`INSERT INTO nodes (url, host, processing_status, depth, user_id) VALUES ($1, $2, 'pending', $3, $4) ON CONFLICT (url, user_id) DO NOTHING`,
+		rawURL, host, depth, userID,
 	)
 	return err
 }
 
 // SearchNodes efectueaza o cautare Full-Text pe titlu si continut folosind indexul GIN.
 // Daca category nu e gol, filtreaza si dupa categorie.
-func (db *DB) SearchNodes(searchQuery, category string) ([]Node, error) {
+func (db *DB) SearchNodes(searchQuery, category string, userID int, isAdmin bool) ([]Node, error) {
 	rows, err := db.Conn.Query(`
 		SELECT id, url, COALESCE(title, ''), COALESCE(status_code, 0), COALESCE(server_header, ''),
 		       processing_status, COALESCE(category, 'unknown'),
 		       to_char(last_crawled_at, 'YYYY-MM-DD HH24:MI:SS')
-		FROM nodes
+		FROM nodes WHERE user_id = $1
 		WHERE search_vector @@ plainto_tsquery('english', $1)
-		  AND ($2 = '' OR category = $2)
+		  AND ($2 = '' OR category = $2) AND (user_id = $3 OR $4)
 		ORDER BY ts_rank(search_vector, plainto_tsquery('english', $1)) DESC
 		LIMIT 50
-	`, searchQuery, category)
+	`, searchQuery, category, userID, isAdmin)
 	if err != nil {
 		return nil, err
 	}
@@ -272,7 +276,7 @@ func (db *DB) SearchNodes(searchQuery, category string) ([]Node, error) {
 // SaveEdge creeaza o legatura intre doua site-uri si adauga target-ul in coada daca e nou.
 // Daca URL-ul exista deja dar la adancime mai mare, actualizeaza adancimea (crawl mai eficient).
 // Domeniile de pe blacklist sunt sarite (nu se adauga in coada).
-func (db *DB) SaveEdge(source, target string, targetDepth int) error {
+func (db *DB) SaveEdge(source, target string, targetDepth int, userID int) error {
 	targetHost := ""
 	if parsed, err := url.Parse(target); err == nil {
 		targetHost = strings.ToLower(parsed.Host)
@@ -284,28 +288,26 @@ func (db *DB) SaveEdge(source, target string, targetDepth int) error {
 		db.Conn.QueryRow(`SELECT COUNT(*) FROM blacklist WHERE domain = $1`, targetHost).Scan(&count)
 		if count == 0 {
 			_, _ = db.Conn.Exec(
-				`INSERT INTO nodes (url, host, processing_status, depth) VALUES ($1, $2, 'pending', $3)
-				 ON CONFLICT (url) DO UPDATE
+				`INSERT INTO nodes (url, host, processing_status, depth, user_id) VALUES ($1, $2, 'pending', $3, $4) ON CONFLICT (url, user_id) DO UPDATE
 				   SET depth = EXCLUDED.depth
 				   WHERE nodes.depth > EXCLUDED.depth AND nodes.processing_status = 'pending'`,
-				target, targetHost, targetDepth,
+				target, targetHost, targetDepth, userID,
 			)
 		}
 	}
 
 	_, err := db.Conn.Exec(`
-	INSERT INTO edges (source_url, target_url)
-	VALUES ($1, $2)
-	ON CONFLICT (source_url, target_url) DO NOTHING
-	`, source, target)
+	INSERT INTO edges (source_url, target_url, user_id) VALUES ($1, $2, $3) ON CONFLICT (source_url, target_url, user_id) DO NOTHING
+	`, source, target, userID)
 	return err
 }
 
 // GetNextPendingNode extrage atomic urmatorul URL care trebuie scanat.
 // Prioritate: noduri 'pending' > noduri 'completed' cu next_crawl_at expirat.
-func (db *DB) GetNextPendingNode() (string, int, error) {
+func (db *DB) GetNextPendingNode() (string, int, int, error) {
 	var nodeURL string
 	var depth int
+	var userID int
 	err := db.Conn.QueryRow(`
 		UPDATE nodes
 		SET processing_status = 'crawling'
@@ -322,17 +324,17 @@ func (db *DB) GetNextPendingNode() (string, int, error) {
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING url, depth
-	`).Scan(&nodeURL, &depth)
+		RETURNING url, depth, user_id
+	`).Scan(&nodeURL, &depth, &userID)
 	if err == sql.ErrNoRows {
-		return "", 0, nil
+		return "", 0, 0, nil
 	}
-	return nodeURL, depth, err
+	return nodeURL, depth, userID, err
 }
 
 // FailNodeWithRetry inregistreaza un esec si programeaza o reincercare cu exponential backoff.
 // Formula: min(2^retry * 10min, 48h). Nodurile 'blocked' nu sunt niciodata modificate.
-func (db *DB) FailNodeWithRetry(nodeURL string) error {
+func (db *DB) FailNodeWithRetry(nodeURL string, userID int) error {
 	_, err := db.Conn.Exec(`
 		UPDATE nodes
 		SET retry_count       = retry_count + 1,
@@ -343,8 +345,8 @@ func (db *DB) FailNodeWithRetry(nodeURL string) error {
 		            INTERVAL '48 hours'
 		        )
 		    )
-		WHERE url = $1 AND processing_status != 'blocked'
-	`, nodeURL)
+		WHERE url = $1 AND user_id = $2 AND processing_status != 'blocked'
+	`, nodeURL, userID)
 	return err
 }
 
@@ -359,26 +361,18 @@ type Stats struct {
 }
 
 // GetStats returneaza statistici complete despre starea crawlingului
-func (db *DB) GetStats() (Stats, error) {
+func (db *DB) GetStats(userID int, isAdmin bool) (Stats, error) {
 	var s Stats
-	err := db.Conn.QueryRow(`
-		SELECT
-			COUNT(*) FILTER (WHERE processing_status = 'completed'),
-			COUNT(*) FILTER (WHERE processing_status = 'pending'),
-			COUNT(*) FILTER (WHERE processing_status = 'failed'),
-			COUNT(*) FILTER (WHERE processing_status = 'crawling'),
-			COUNT(*) FILTER (WHERE processing_status = 'blocked')
-		FROM nodes
-	`).Scan(&s.NodesCrawled, &s.PendingNodes, &s.FailedNodes, &s.CrawlingNodes, &s.BlockedNodes)
+	err := db.Conn.QueryRow(`SELECT COUNT(*) FILTER (WHERE processing_status = 'completed'), COUNT(*) FILTER (WHERE processing_status = 'pending' AND user_id = $1), COUNT(*) FILTER (WHERE processing_status = 'failed'), COUNT(*) FILTER (WHERE processing_status = 'crawling'), COUNT(*) FILTER (WHERE processing_status = 'blocked') FROM nodes WHERE (user_id = $1 OR $2) `, userID, isAdmin).Scan(&s.NodesCrawled, &s.PendingNodes, &s.FailedNodes, &s.CrawlingNodes, &s.BlockedNodes)
 	if err != nil {
 		return s, err
 	}
-	err = db.Conn.QueryRow(`SELECT COUNT(*) FROM edges`).Scan(&s.TotalEdges)
+	err = db.Conn.QueryRow(`SELECT COUNT(*) FROM edges WHERE (user_id = $1 OR $2)`, userID, isAdmin).Scan(&s.TotalEdges)
 	return s, err
 }
 
 // GetNodeByURL returneaza detaliile complete ale unui nod dupa URL
-func (db *DB) GetNodeByURL(nodeURL string) (*NodeDetail, error) {
+func (db *DB) GetNodeByURL(nodeURL string, userID int, isAdmin bool) (*NodeDetail, error) {
 	var n NodeDetail
 	var lastCrawled, discovered sql.NullString
 	var contentHash sql.NullString
@@ -388,8 +382,8 @@ func (db *DB) GetNodeByURL(nodeURL string) (*NodeDetail, error) {
 		       COALESCE(content,''), COALESCE(metadata,'{}'), content_hash,
 		       to_char(last_crawled_at,'YYYY-MM-DD HH24:MI:SS'),
 		       to_char(discovered_at,'YYYY-MM-DD HH24:MI:SS')
-		FROM nodes WHERE url = $1
-	`, nodeURL).Scan(
+		FROM nodes WHERE url = $1 AND (user_id = $2 OR $3)
+	`, nodeURL, userID, isAdmin).Scan(
 		&n.ID, &n.URL, &n.Title, &n.StatusCode, &n.ServerHeader,
 		&n.ProcessingStatus, &n.Category,
 		&n.Content, &n.Metadata, &contentHash,
@@ -416,9 +410,9 @@ func (db *DB) GetNodeByURL(nodeURL string) (*NodeDetail, error) {
 // RequeueForCrawl reseteaza un nod la 'pending' pentru re-crawl imediat.
 // Returneaza (found bool, canRequeue bool, error).
 // canRequeue=false daca nodul e deja in starea 'crawling'.
-func (db *DB) RequeueForCrawl(nodeURL string) (found bool, canRequeue bool, err error) {
+func (db *DB) RequeueForCrawl(nodeURL string, userID int) (found bool, canRequeue bool, err error) {
 	var status string
-	err = db.Conn.QueryRow(`SELECT processing_status FROM nodes WHERE url = $1`, nodeURL).Scan(&status)
+	err = db.Conn.QueryRow(`SELECT processing_status FROM nodes WHERE user_id = $1 WHERE url = $1 AND user_id = $2 AND user_id = $2`, nodeURL, userID, userID).Scan(&status)
 	if err == sql.ErrNoRows {
 		return false, false, nil
 	}
@@ -429,8 +423,8 @@ func (db *DB) RequeueForCrawl(nodeURL string) (found bool, canRequeue bool, err 
 		return true, false, nil
 	}
 	_, err = db.Conn.Exec(
-		`UPDATE nodes SET processing_status = 'pending', next_crawl_at = CURRENT_TIMESTAMP WHERE url = $1`,
-		nodeURL,
+		`UPDATE nodes SET processing_status = 'pending', next_crawl_at = CURRENT_TIMESTAMP WHERE url = $1 AND user_id = $2 AND user_id = $2`,
+		nodeURL, userID,
 	)
 	return true, true, err
 }
@@ -438,18 +432,18 @@ func (db *DB) RequeueForCrawl(nodeURL string) (found bool, canRequeue bool, err 
 // MarkRobotsBlocked marcheaza un nod ca interzis de robots.txt.
 // Seteaza next_crawl_at la 30 de zile si retry_count=10 pentru a preveni re-incercari inutile.
 // Nu suprascrie nodurile blocate explicit prin blacklist.
-func (db *DB) MarkRobotsBlocked(nodeURL string) error {
+func (db *DB) MarkRobotsBlocked(nodeURL string, userID int) error {
 	_, err := db.Conn.Exec(`
 		UPDATE nodes SET
 			processing_status = 'failed',
 			retry_count       = 10,
 			next_crawl_at     = CURRENT_TIMESTAMP + INTERVAL '30 days'
-		WHERE url = $1 AND processing_status != 'blocked'
-	`, nodeURL)
+		WHERE url = $1 AND user_id = $2 AND processing_status != 'blocked'
+	`, nodeURL, userID)
 	return err
 }
 
-func (db *DB) GetNodes(limit, offset int) ([]Node, error) {
+func (db *DB) GetNodes(limit, offset int, userID int, isAdmin bool) ([]Node, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
@@ -457,7 +451,7 @@ func (db *DB) GetNodes(limit, offset int) ([]Node, error) {
 		SELECT id, url, COALESCE(title, ''), COALESCE(status_code, 0), COALESCE(server_header, ''),
 		       processing_status, COALESCE(category, 'unknown'),
 		       to_char(last_crawled_at, 'YYYY-MM-DD HH24:MI:SS')
-		FROM nodes ORDER BY discovered_at DESC LIMIT $1 OFFSET $2`, limit, offset)
+		FROM nodes WHERE (user_id = $3 OR $4) ORDER BY discovered_at DESC LIMIT $1 OFFSET $2`, limit, offset, userID, isAdmin)
 	if err != nil {
 		return nil, err
 	}
@@ -478,11 +472,11 @@ func (db *DB) GetNodes(limit, offset int) ([]Node, error) {
 	return nodes, rows.Err()
 }
 
-func (db *DB) GetEdges(limit, offset int) ([]Edge, error) {
+func (db *DB) GetEdges(limit, offset int, userID int, isAdmin bool) ([]Edge, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
-	rows, err := db.Conn.Query("SELECT source_url, target_url FROM edges LIMIT $1 OFFSET $2", limit, offset)
+	rows, err := db.Conn.Query(`SELECT source_url, target_url FROM edges WHERE (user_id = $3 OR $4) LIMIT $1 OFFSET $2`, limit, offset, userID, isAdmin)
 	if err != nil {
 		return nil, err
 	}
@@ -514,9 +508,9 @@ type QueueItem struct {
 }
 
 // GetQueueSummary returneaza numaratori pe status si urmatoarele 10 URL-uri din coada
-func (db *DB) GetQueueSummary() (*QueueSummary, error) {
+func (db *DB) GetQueueSummary(userID int, isAdmin bool) (*QueueSummary, error) {
 	rows, err := db.Conn.Query(`
-		SELECT processing_status, COUNT(*) FROM nodes GROUP BY processing_status
+		SELECT processing_status, COUNT(*) FROM nodes WHERE user_id = $1 WHERE user_id = $1 GROUP BY processing_status
 	`)
 	if err != nil {
 		return nil, err
@@ -538,11 +532,11 @@ func (db *DB) GetQueueSummary() (*QueueSummary, error) {
 
 	next, err := db.Conn.Query(`
 		SELECT url, depth, processing_status, to_char(discovered_at, 'YYYY-MM-DD HH24:MI:SS')
-		FROM nodes
-		WHERE processing_status = 'pending'
+		FROM nodes WHERE user_id = $1
+		WHERE processing_status = 'pending' AND (user_id = $1 OR $2)
 		ORDER BY next_crawl_at ASC
 		LIMIT 10
-	`)
+	`, userID, isAdmin)
 	if err != nil {
 		return nil, err
 	}
@@ -609,15 +603,15 @@ func (db *DB) IsDomainBlacklisted(domain string) (bool, error) {
 // ExportNodes returneaza toate nodurile crawlate complet, in ordine de descoperire.
 // ctx permite anularea exportului daca clientul se deconecteaza.
 // Foloseste un cursor pentru a nu incarca toata tabela in memorie.
-func (db *DB) ExportNodes(ctx context.Context, fn func(Node) error) error {
+func (db *DB) ExportNodes(ctx context.Context, userID int, isAdmin bool, fn func(Node) error) error {
 	rows, err := db.Conn.QueryContext(ctx, `
 		SELECT id, url, COALESCE(title,''), COALESCE(status_code,0), COALESCE(server_header,''),
 		       processing_status, COALESCE(category,'unknown'),
 		       to_char(last_crawled_at,'YYYY-MM-DD HH24:MI:SS')
 		FROM nodes
-		WHERE processing_status = 'completed'
+		WHERE processing_status = 'completed' AND (user_id = $1 OR $2)
 		ORDER BY discovered_at ASC
-	`)
+	`, userID, isAdmin)
 	if err != nil {
 		return err
 	}
@@ -666,13 +660,14 @@ type GraphMLEdge struct {
 
 // ExportGraphMLEdges returneaza muchiile unde ambele noduri (source si target) sunt completed.
 // Foloseste JOIN pentru a garanta consistenta grafului exportat.
-func (db *DB) ExportGraphMLEdges(ctx context.Context, fn func(GraphMLEdge) error) error {
+func (db *DB) ExportGraphMLEdges(ctx context.Context, userID int, isAdmin bool, fn func(GraphMLEdge) error) error {
 	rows, err := db.Conn.QueryContext(ctx, `
 		SELECT n1.id, n2.id
 		FROM edges e
 		JOIN nodes n1 ON n1.url = e.source_url AND n1.processing_status = 'completed'
 		JOIN nodes n2 ON n2.url = e.target_url AND n2.processing_status = 'completed'
-	`)
+		WHERE (e.user_id = $1 OR $2)
+	`, userID, isAdmin)
 	if err != nil {
 		return err
 	}
@@ -695,14 +690,14 @@ type TimelineStat struct {
 }
 
 // GetTimelineStats returneaza numarul de noduri descoperite pe zi in ultimele 30 de zile.
-func (db *DB) GetTimelineStats() ([]TimelineStat, error) {
+func (db *DB) GetTimelineStats(userID int, isAdmin bool) ([]TimelineStat, error) {
 	rows, err := db.Conn.Query(`
 		SELECT to_char(discovered_at, 'YYYY-MM-DD') AS date, COUNT(*) AS count
 		FROM nodes
-		WHERE discovered_at >= CURRENT_DATE - INTERVAL '30 days'
+		WHERE discovered_at >= CURRENT_DATE - INTERVAL '30 days' AND (user_id = $1 OR $2)
 		GROUP BY date
 		ORDER BY date ASC
-	`)
+	`, userID, isAdmin)
 	if err != nil {
 		return nil, err
 	}
@@ -717,3 +712,53 @@ func (db *DB) GetTimelineStats() ([]TimelineStat, error) {
 	}
 	return stats, rows.Err()
 }
+
+// Model pentru Useri
+type User struct {
+	ID                int    `json:"id"`
+	Email             string `json:"email"`
+	PasswordHash      string `json:"-"`
+	Role              string `json:"role"`
+	IsVerified        bool   `json:"is_verified"`
+	VerificationToken string `json:"-"`
+	CreatedAt         string `json:"created_at"`
+}
+
+// CreateUser adauga un nou utilizator
+func (db *DB) CreateUser(email, passwordHash, role, token string) error {
+	_, err := db.Conn.Exec(`
+		INSERT INTO users (email, password_hash, role, verification_token)
+		VALUES ($1, $2, $3, $4)
+	`, email, passwordHash, role, token)
+	return err
+}
+
+// GetUserByEmail extrage un utilizator folosind email-ul
+func (db *DB) GetUserByEmail(email string) (*User, error) {
+	var u User
+	err := db.Conn.QueryRow(`
+		SELECT id, email, password_hash, role, is_verified, COALESCE(verification_token, ''), to_char(created_at, 'YYYY-MM-DD HH24:MI:SS')
+		FROM users WHERE email = $1
+	`, email).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.IsVerified, &u.VerificationToken, &u.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &u, err
+}
+
+// VerifyUser seteaza utilizatorul ca verificat
+func (db *DB) VerifyUser(token string) error {
+	res, err := db.Conn.Exec(`
+		UPDATE users SET is_verified = TRUE, verification_token = NULL
+		WHERE verification_token = $1 AND is_verified = FALSE
+	`, token)
+	if err != nil {
+		return err
+	}
+	aff, _ := res.RowsAffected()
+	if aff == 0 {
+		return errors.New("token invalid sau deja verificat")
+	}
+	return nil
+}
+

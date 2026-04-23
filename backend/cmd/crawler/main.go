@@ -52,12 +52,12 @@ func main() {
 	fmt.Printf("🔗 Link-uri .onion gasite (%d):\n", len(result.FoundOnions))
 
 	if dbConn != nil {
-		_, err = dbConn.SaveNode(*targetURL, result.Title, result.ServerHeader, result.StatusCode, "completed", result.Metadata, result.Content, result.Category)
+		_, err = dbConn.SaveNode(*targetURL, result.Title, result.ServerHeader, result.StatusCode, "completed", result.Metadata, result.Content, result.Category, 1)
 		if err != nil {
 			log.Printf("❌ Eroare la salvarea nodului: %v", err)
 		}
 		for _, link := range result.FoundOnions {
-			if err = dbConn.SaveEdge(*targetURL, link, 1); err != nil {
+			if err = dbConn.SaveEdge(*targetURL, link, 1, 1); err != nil {
 				log.Printf("❌ Eroare la salvarea legaturii %s -> %s: %v", *targetURL, link, err)
 			}
 		}

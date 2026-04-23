@@ -21,8 +21,10 @@ import (
 	"syscall"
 	"time"
 
+	"onion-spider/internal/auth"
 	"onion-spider/internal/crawler"
 	"onion-spider/internal/database"
+	"onion-spider/internal/email"
 	"onion-spider/internal/proxy"
 
 	"github.com/go-chi/chi/v5"
@@ -150,6 +152,51 @@ func clientIP(r *http.Request) string {
 	return ip
 }
 
+type contextKey string
+const userContextKey contextKey = "user"
+
+func jwtMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+		claims, err := auth.ValidateToken(tokenStr)
+		if err != nil {
+			writeJSONError(w, http.StatusUnauthorized, "Token invalid sau expirat")
+			return
+		}
+		ctx := context.WithValue(r.Context(), userContextKey, claims)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func requireAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, ok := r.Context().Value(userContextKey).(*auth.Claims)
+		if !ok {
+			writeJSONError(w, http.StatusUnauthorized, "Necesita autentificare")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func getUserID(r *http.Request) int {
+	claims, ok := r.Context().Value(userContextKey).(*auth.Claims)
+	if !ok || claims == nil {
+		return 0 // Utilizator neautentificat (ID invalid in DB)
+	}
+	return claims.UserID
+}
+
+func isAdmin(r *http.Request) bool {
+	claims, ok := r.Context().Value(userContextKey).(*auth.Claims)
+	return ok && claims != nil && claims.Role == "admin"
+}
+
 func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("⚠️ Nu am gasit un fisier .env, folosesc variabilele din sistem")
@@ -191,28 +238,89 @@ func main() {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(jwtMiddleware)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: strings.Split(corsOrigin, ","),
 		AllowedMethods: []string{"GET", "POST", "DELETE", "OPTIONS"},
-		AllowedHeaders: []string{"Accept", "Content-Type", "X-API-Key"},
+		AllowedHeaders: []string{"Accept", "Content-Type", "Authorization"},
 		MaxAge:         300,
 	}))
 
-	// Daca API_KEY e setat in env, toate request-urile trebuie sa il includa
-	if apiKey := os.Getenv("API_KEY"); apiKey != "" {
-		r.Use(apiKeyMiddleware(apiKey))
-		log.Println("🔒 Autentificare API key activata.")
-	} else {
-		log.Println("⚠️ API_KEY nu este setat — API-ul este public (recomandat doar pentru dezvoltare).")
-	}
-
 	limiter := newCrawlLimiter(20, time.Minute)
 	searchLimiter := newCrawlLimiter(60, time.Minute)
+	// exportLimiter si readLimiter ignorate pentru proof of concept
+	_ = newCrawlLimiter(2, 5*time.Minute)
+	_ = newCrawlLimiter(30, time.Minute)
 
 	dbConn, err := database.InitDB(dsn)
 	if err != nil {
 		log.Fatalf("Eroare critica la conectarea la DB: %v", err)
 	}
+
+	r.Post("/api/auth/register", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "Date invalide")
+			return
+		}
+		if req.Email == "" || len(req.Password) < 6 {
+			writeJSONError(w, http.StatusBadRequest, "Email invalid sau parola sub 6 caractere")
+			return
+		}
+		
+		role := "user"
+		if req.Email == "micu@micutu.com" { 
+			role = "admin"
+		}
+
+		hash, _ := auth.HashPassword(req.Password)
+		token := auth.GenerateVerificationToken()
+		
+		if err := dbConn.CreateUser(req.Email, hash, role, token); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "Eroare: Email deja folosit sau date invalide")
+			return
+		}
+
+		go email.SendVerificationEmail(req.Email, token)
+
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]string{"message": "Cont creat! Verifica emailul."})
+	})
+
+	r.Post("/api/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		
+		user, err := dbConn.GetUserByEmail(req.Email)
+		if err != nil || user == nil || !auth.CheckPasswordHash(req.Password, user.PasswordHash) {
+			writeJSONError(w, http.StatusUnauthorized, "Credentials invalid")
+			return
+		}
+
+		if !user.IsVerified {
+			writeJSONError(w, http.StatusForbidden, "Contul nu este verificat inca")
+			return
+		}
+
+		token, _ := auth.GenerateToken(user.ID, user.Email, user.Role)
+		json.NewEncoder(w).Encode(map[string]string{"token": token, "role": user.Role, "email": user.Email})
+	})
+
+	r.Get("/api/auth/verify", func(w http.ResponseWriter, r *http.Request) {
+		token := r.URL.Query().Get("token")
+		if err := dbConn.VerifyUser(token); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "Token invalid sau deja verificat")
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(`<h1>Contul a fost verificat cu succes!</h1><p><a href="/">Inapoi la login</a></p>`))
+	})
 
 	engine := crawler.NewEngine(dbConn, torProxy, workers, maxDepth)
 
@@ -255,7 +363,7 @@ func main() {
 		}
 		resp.Status = "online"
 		resp.ActiveWorkers = workers
-		stats, err := dbConn.GetStats()
+		stats, err := dbConn.GetStats(getUserID(r), isAdmin(r))
 		if err == nil {
 			resp.DBConnected = true
 			resp.NodesCrawled = stats.NodesCrawled
@@ -271,7 +379,7 @@ func main() {
 	r.Get("/api/nodes", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		limit, offset := parsePagination(r)
-		nodes, err := dbConn.GetNodes(limit, offset)
+		nodes, err := dbConn.GetNodes(limit, offset, getUserID(r), isAdmin(r))
 		if err != nil {
 			log.Printf("[ERROR] GET /api/nodes: %v", err)
 			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
@@ -287,7 +395,7 @@ func main() {
 			writeJSONError(w, http.StatusBadRequest, "Parametrul 'url' este obligatoriu")
 			return
 		}
-		node, err := dbConn.GetNodeByURL(nodeURL)
+		node, err := dbConn.GetNodeByURL(nodeURL, getUserID(r), isAdmin(r))
 		if err != nil {
 			log.Printf("[ERROR] GET /api/node url=%s: %v", sanitizeForLog(nodeURL), err)
 			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
@@ -303,7 +411,7 @@ func main() {
 	r.Get("/api/edges", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		limit, offset := parsePagination(r)
-		edges, err := dbConn.GetEdges(limit, offset)
+		edges, err := dbConn.GetEdges(limit, offset, getUserID(r), isAdmin(r))
 		if err != nil {
 			log.Printf("[ERROR] GET /api/edges: %v", err)
 			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
@@ -329,7 +437,7 @@ func main() {
 			return
 		}
 		category := r.URL.Query().Get("category")
-		nodes, err := dbConn.SearchNodes(q, category)
+		nodes, err := dbConn.SearchNodes(q, category, getUserID(r), isAdmin(r))
 		if err != nil {
 			log.Printf("[ERROR] GET /api/search q=%s: %v", sanitizeForLog(q), err)
 			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
@@ -340,9 +448,11 @@ func main() {
 
 	r.Post("/api/crawl", func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
-		if !limiter.allow(ip) {
-			writeJSONError(w, http.StatusTooManyRequests, "Prea multe cereri. Incearca din nou in cateva minute.")
-			return
+		if !isAdmin(r) {
+			if !limiter.allow(ip) {
+				writeJSONError(w, http.StatusTooManyRequests, "Prea multe cereri. Incearca din nou in cateva minute.")
+				return
+			}
 		}
 		var req struct {
 			URL string `json:"url"`
@@ -357,7 +467,7 @@ func main() {
 			return
 		}
 		log.Printf("[AUDIT] POST /api/crawl ip=%s url=%s", sanitizeForLog(ip), sanitizeForLog(req.URL))
-		if err := engine.AddToQueue(req.URL); err != nil {
+		if err := engine.AddToQueue(req.URL, getUserID(r)); err != nil {
 			if errors.Is(err, database.ErrBlacklisted) {
 				writeJSONError(w, http.StatusForbidden, "Domeniu blocat")
 				return
@@ -389,7 +499,7 @@ func main() {
 			writeJSONError(w, http.StatusBadRequest, "Campul 'url' este obligatoriu")
 			return
 		}
-		found, canRequeue, err := dbConn.RequeueForCrawl(req.URL)
+		found, canRequeue, err := dbConn.RequeueForCrawl(req.URL, getUserID(r))
 		if err != nil {
 			log.Printf("[ERROR] POST /api/recrawl url=%s: %v", sanitizeForLog(req.URL), err)
 			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
@@ -411,7 +521,7 @@ func main() {
 	// GET /api/queue — statistici coada + urmatoarele 10 URL-uri pending
 	r.Get("/api/queue", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		summary, err := dbConn.GetQueueSummary()
+		summary, err := dbConn.GetQueueSummary(getUserID(r), isAdmin(r))
 		if err != nil {
 			log.Printf("[ERROR] GET /api/queue: %v", err)
 			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
@@ -486,7 +596,7 @@ case "json":
 w.Header().Set("Content-Type", "application/json")
 w.Write([]byte("["))
 first := true
-err := dbConn.ExportNodes(r.Context(), func(n database.Node) error {
+err := dbConn.ExportNodes(r.Context(), getUserID(r), isAdmin(r), func(n database.Node) error {
 b, marshalErr := json.Marshal(n)
 if marshalErr != nil { return marshalErr }
 if !first { w.Write([]byte(",")) }
@@ -500,14 +610,14 @@ case "ndjson":
 w.Header().Set("Content-Type", "application/x-ndjson")
 w.Header().Set("Content-Disposition", "attachment; filename=onion_spider_export.ndjson")
 enc := json.NewEncoder(w)
-err := dbConn.ExportNodes(r.Context(), func(n database.Node) error { return enc.Encode(n) })
+err := dbConn.ExportNodes(r.Context(), getUserID(r), isAdmin(r), func(n database.Node) error { return enc.Encode(n) })
 if err != nil { log.Printf("[EXPORT] NDJSON error: %v", err) }
 case "csv":
 w.Header().Set("Content-Type", "text/csv")
 w.Header().Set("Content-Disposition", "attachment; filename=onion_spider_export.csv")
 cw := csv.NewWriter(w)
 cw.Write([]string{"id", "url", "title", "status_code", "server_header", "processing_status", "category", "last_crawled_at"})
-err := dbConn.ExportNodes(r.Context(), func(n database.Node) error {
+err := dbConn.ExportNodes(r.Context(), getUserID(r), isAdmin(r), func(n database.Node) error {
 return cw.Write([]string{
 strconv.Itoa(n.ID), sanitizeCSVField(n.URL), sanitizeCSVField(n.Title),
 strconv.Itoa(n.StatusCode), sanitizeCSVField(n.ServerHeader),
@@ -527,7 +637,7 @@ cell, _ := excelize.CoordinatesToCellName(col+1, 1)
 xf.SetCellValue(sheet, cell, h)
 }
 xlsxRow := 2
-err := dbConn.ExportNodes(r.Context(), func(n database.Node) error {
+err := dbConn.ExportNodes(r.Context(), getUserID(r), isAdmin(r), func(n database.Node) error {
 if xlsxRow-1 > xlsxRowCap { return nil }
 for col, v := range []interface{}{n.ID, sanitizeCSVField(n.URL), sanitizeCSVField(n.Title), n.StatusCode, sanitizeCSVField(n.ServerHeader), n.ProcessingStatus, n.Category, n.LastCrawledAt} {
 cell, _ := excelize.CoordinatesToCellName(col+1, xlsxRow)
@@ -552,7 +662,7 @@ pf.AddPage()
 pf.SetTitle("Onion Spider Export", false)
 pf.SetFont("Helvetica", "B", 8)
 type pdfCol struct{ name string; width float64 }
-cols := []pdfCol{{"ID",12},{"URL",90},{"Title",70},{"Status",14},{"Category",28},{"Last Crawled",35}}
+cols := []pdfCol{{"ID",12},{"URL",110},{"Title",50},{"Status",14},{"Category",28},{"Last Crawled",35}}
 pf.SetFillColor(50, 50, 50)
 pf.SetTextColor(255, 255, 255)
 for _, c := range cols { pf.CellFormat(c.width, 7, c.name, "1", 0, "C", true, 0, "") }
@@ -566,12 +676,12 @@ runes := []rune(s)
 if len(runes) > max { return string(runes[:max-1]) + "..." }
 return s
 }
-err := dbConn.ExportNodes(r.Context(), func(n database.Node) error {
+err := dbConn.ExportNodes(r.Context(), getUserID(r), isAdmin(r), func(n database.Node) error {
 if pdfRows >= pdfRowCap { return nil }
 if fillRow { pf.SetFillColor(240, 240, 240) } else { pf.SetFillColor(255, 255, 255) }
 pf.CellFormat(cols[0].width, 6, strconv.Itoa(n.ID), "1", 0, "R", true, 0, "")
-pf.CellFormat(cols[1].width, 6, trunc(n.URL, 60), "1", 0, "L", true, 0, "")
-pf.CellFormat(cols[2].width, 6, trunc(n.Title, 50), "1", 0, "L", true, 0, "")
+pf.CellFormat(cols[1].width, 6, trunc(n.URL, 100), "1", 0, "L", true, 0, "")
+pf.CellFormat(cols[2].width, 6, trunc(n.Title, 40), "1", 0, "L", true, 0, "")
 pf.CellFormat(cols[3].width, 6, strconv.Itoa(n.StatusCode), "1", 0, "C", true, 0, "")
 pf.CellFormat(cols[4].width, 6, n.Category, "1", 0, "L", true, 0, "")
 pf.CellFormat(cols[5].width, 6, n.LastCrawledAt, "1", 1, "L", true, 0, "")
@@ -601,7 +711,7 @@ var sb strings.Builder
 xml.EscapeText(&sb, []byte(s))
 return sb.String()
 }
-err := dbConn.ExportNodes(r.Context(), func(n database.Node) error {
+err := dbConn.ExportNodes(r.Context(), getUserID(r), isAdmin(r), func(n database.Node) error {
 fmt.Fprintf(w, "    <node id=\"n%d\">\n", n.ID)
 fmt.Fprintf(w, "      <data key=\"d0\">%s</data>\n", xmlEsc(n.URL))
 fmt.Fprintf(w, "      <data key=\"d1\">%s</data>\n", xmlEsc(n.Title))
@@ -610,7 +720,7 @@ fmt.Fprint(w, "    </node>\n")
 return nil
 })
 if err != nil { log.Printf("[EXPORT] GraphML nodes error: %v", err) }
-err = dbConn.ExportGraphMLEdges(r.Context(), func(ge database.GraphMLEdge) error {
+err = dbConn.ExportGraphMLEdges(r.Context(), getUserID(r), isAdmin(r), func(ge database.GraphMLEdge) error {
 fmt.Fprintf(w, "    <edge source=\"n%d\" target=\"n%d\"/>\n", ge.SourceID, ge.TargetID)
 return nil
 })
@@ -645,7 +755,7 @@ fmt.Fprint(w, "  </graph>\n</graphml>\n")
 				continue
 			}
 			log.Printf("[AUDIT] POST /api/crawl/bulk ip=%s url=%s", sanitizeForLog(ip), sanitizeForLog(u))
-			if err := engine.AddToQueue(u); err != nil {
+			if err := engine.AddToQueue(u, getUserID(r)); err != nil {
 				skipped++
 			} else {
 				added++
@@ -680,7 +790,7 @@ fmt.Fprint(w, "  </graph>\n</graphml>\n")
 	// GET /api/stats/timeline — noduri descoperite pe zi in ultimele 30 de zile
 	r.Get("/api/stats/timeline", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		stats, err := dbConn.GetTimelineStats()
+		stats, err := dbConn.GetTimelineStats(getUserID(r), isAdmin(r))
 		if err != nil {
 			log.Printf("[ERROR] GET /api/stats/timeline: %v", err)
 			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
