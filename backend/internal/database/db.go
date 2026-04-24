@@ -863,6 +863,20 @@ func (db *DB) CountRecentAuthEvents(event, email string, windowMinutes int) (int
 	return count, err
 }
 
+// PurgeOldAuditLogs sterge evenimentele din auth_audit mai vechi de `olderThan`.
+// Returneaza numarul de randuri sterse. Folosit de retention job (GDPR + unbounded growth).
+func (db *DB) PurgeOldAuditLogs(olderThan time.Duration) (int64, error) {
+	res, err := db.Conn.Exec(
+		`DELETE FROM auth_audit WHERE created_at < CURRENT_TIMESTAMP - ($1 || ' seconds')::INTERVAL`,
+		fmt.Sprintf("%d", int64(olderThan.Seconds())),
+	)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // GetUserRole returneaza rolul curent al utilizatorului din DB (bypass JWT claims).
 // Folosit pe endpointurile admin-only pentru a invalida imediat demotion-urile,
 // in loc sa astepti expirarea JWT-ului.

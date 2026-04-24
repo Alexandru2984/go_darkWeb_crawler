@@ -266,6 +266,7 @@ func main() {
 	if corsOrigin == "" {
 		corsOrigin = "http://localhost:5173"
 	}
+	corsOrigins := splitAndTrim(corsOrigin, ",")
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -274,7 +275,7 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(jwtMiddleware)
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins: strings.Split(corsOrigin, ","),
+		AllowedOrigins: corsOrigins,
 		AllowedMethods: []string{"GET", "POST", "DELETE", "OPTIONS"},
 		AllowedHeaders: []string{"Accept", "Content-Type", "Authorization"},
 		MaxAge:         300,
@@ -307,7 +308,9 @@ func main() {
 			Password string `json:"password"`
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1024)
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "Date invalide")
 			return
 		}
@@ -379,7 +382,9 @@ func main() {
 			Password string `json:"password"`
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1024)
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "Date invalide")
 			return
 		}
@@ -445,6 +450,9 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"token": token, "role": user.Role, "email": user.Email})
 	})
 
+	// GET /api/auth/verify?token=X — afiseaza doar o pagina de confirmare cu un buton POST.
+	// NU consuma tokenul. Protejeaza impotriva link-preview bots (Outlook/Gmail/Slack)
+	// care dau GET pe link si ar auto-verifica contul in absenta userului.
 	r.Get("/api/auth/verify", func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
 		if !verifyLim.allow(ip) {
@@ -456,6 +464,58 @@ func main() {
 			writeJSONError(w, http.StatusBadRequest, "Token invalid")
 			return
 		}
+		// Nu trimitem tokenul direct in pagina ca plaintext — il punem intr-un input hidden
+		// dupa ce verificam ca are doar caractere safe pentru HTML (hex/base64 URL-safe).
+		if !tokenSafeRE.MatchString(token) {
+			writeJSONError(w, http.StatusBadRequest, "Token invalid")
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+		fmt.Fprintf(w, `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Confirmare cont</title>
+<meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"></head>
+<body style="font-family:sans-serif;max-width:480px;margin:4rem auto;text-align:center">
+<h1>Confirma activarea contului</h1>
+<p>Apasa butonul de mai jos pentru a finaliza verificarea email-ului.</p>
+<form method="POST" action="/api/auth/verify">
+<input type="hidden" name="token" value="%s">
+<button type="submit" style="padding:0.75rem 1.5rem;font-size:1rem;cursor:pointer">Confirma</button>
+</form></body></html>`, token)
+	})
+
+	// POST /api/auth/verify — consuma efectiv tokenul (accepta body JSON sau form-encoded).
+	r.Post("/api/auth/verify", func(w http.ResponseWriter, r *http.Request) {
+		ip := clientIP(r)
+		if !verifyLim.allow(ip) {
+			writeJSONError(w, http.StatusTooManyRequests, "Prea multe incercari. Incearca din nou in 1 minut.")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 1024)
+		var token string
+		ct := r.Header.Get("Content-Type")
+		if strings.HasPrefix(ct, "application/json") {
+			var req struct {
+				Token string `json:"token"`
+			}
+			dec := json.NewDecoder(r.Body)
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&req); err != nil {
+				writeJSONError(w, http.StatusBadRequest, "Body invalid")
+				return
+			}
+			token = req.Token
+		} else {
+			if err := r.ParseForm(); err != nil {
+				writeJSONError(w, http.StatusBadRequest, "Form invalid")
+				return
+			}
+			token = r.PostFormValue("token")
+		}
+		if len(token) < 16 || len(token) > 128 || !tokenSafeRE.MatchString(token) {
+			writeJSONError(w, http.StatusBadRequest, "Token invalid")
+			return
+		}
 		if err := dbConn.VerifyUser(token); err != nil {
 			log.Printf("[AUDIT] verify_fail ip=%s: %v", sanitizeForLog(ip), err)
 			writeJSONError(w, http.StatusBadRequest, "Token invalid, expirat sau deja folosit")
@@ -463,7 +523,8 @@ func main() {
 		}
 		log.Printf("[AUDIT] verify_ok ip=%s", sanitizeForLog(ip))
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write([]byte(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Cont verificat</title></head><body><h1>Contul a fost verificat cu succes!</h1><p><a href="/">Inapoi la login</a></p></body></html>`))
+		w.Header().Set("Cache-Control", "no-store")
+		w.Write([]byte(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Cont verificat</title></head><body style="font-family:sans-serif;max-width:480px;margin:4rem auto;text-align:center"><h1>Contul a fost verificat cu succes!</h1><p><a href="/">Inapoi la login</a></p></body></html>`))
 	})
 
 	// =========================================================================
@@ -505,6 +566,33 @@ func main() {
 			if n > 0 {
 				log.Printf("[sweeper] recuperat %d noduri stuck in 'crawling'", n)
 			}
+		}
+	}()
+
+	// Retention auth_audit: sterge entry-urile mai vechi de 90 zile.
+	// Rezolva GDPR (PII = email) + crestere nelimitata a tabelei. Ruleaza la pornire + la 24h.
+	auditRetention := 90 * 24 * time.Hour
+	if v := os.Getenv("AUDIT_RETENTION_DAYS"); v != "" {
+		if d, err := strconv.Atoi(v); err == nil && d > 0 {
+			auditRetention = time.Duration(d) * 24 * time.Hour
+		}
+	}
+	go func() {
+		run := func() {
+			n, err := dbConn.PurgeOldAuditLogs(auditRetention)
+			if err != nil {
+				log.Printf("[retention] PurgeOldAuditLogs: %v", err)
+				return
+			}
+			if n > 0 {
+				log.Printf("[retention] sters %d entry-uri auth_audit mai vechi de %v", n, auditRetention)
+			}
+		}
+		run()
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			run()
 		}
 	}()
 
@@ -629,12 +717,15 @@ func main() {
 				URL string `json:"url"`
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, 2048)
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			dec := json.NewDecoder(r.Body)
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&req); err != nil {
 				writeJSONError(w, http.StatusBadRequest, "Body invalid")
 				return
 			}
+			req.URL = normalizeOnionURL(req.URL)
 			if !isValidOnionURL(req.URL) {
-				writeJSONError(w, http.StatusBadRequest, "URL invalid: trebuie sa fie un URL .onion valid (http/https)")
+				writeJSONError(w, http.StatusBadRequest, "URL invalid: trebuie sa fie un URL .onion v3 valid (http/https)")
 				return
 			}
 			log.Printf("[AUDIT] POST /api/crawl ip=%s user=%d url=%s", sanitizeForLog(ip), getUserID(r), sanitizeForLog(req.URL))
@@ -662,10 +753,13 @@ func main() {
 				URL string `json:"url"`
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, 2048)
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			dec := json.NewDecoder(r.Body)
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&req); err != nil {
 				writeJSONError(w, http.StatusBadRequest, "Body invalid")
 				return
 			}
+			req.URL = normalizeOnionURL(req.URL)
 			if !isValidOnionURL(req.URL) {
 				writeJSONError(w, http.StatusBadRequest, "URL invalid")
 				return
@@ -699,7 +793,9 @@ func main() {
 				URLs []string `json:"urls"`
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, 10*1024)
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			dec := json.NewDecoder(r.Body)
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&req); err != nil {
 				writeJSONError(w, http.StatusBadRequest, "Body invalid")
 				return
 			}
@@ -709,6 +805,7 @@ func main() {
 			}
 			var added, skipped int
 			for _, u := range req.URLs {
+				u = normalizeOnionURL(u)
 				if !isValidOnionURL(u) {
 					skipped++
 					continue
@@ -977,7 +1074,9 @@ func main() {
 				Domain string `json:"domain"`
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, 512)
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			dec := json.NewDecoder(r.Body)
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&req); err != nil {
 				writeJSONError(w, http.StatusBadRequest, "Body invalid")
 				return
 			}
@@ -1052,6 +1151,14 @@ func main() {
 	log.Println("Server oprit.")
 }
 
+// v3OnionHostRE accepta doar adrese onion v3 valide: 56 caractere base32 (a-z2-7) + ".onion"
+// optional cu port (":" + cifre). v2 (16 chars) a fost deprecated de Tor.
+var v3OnionHostRE = regexp.MustCompile(`^[a-z2-7]{56}\.onion(:[0-9]{1,5})?$`)
+
+// tokenSafeRE valideaza tokene de verificare email/password-reset: hex, base64url sau alfanumeric + '-_'.
+// Elimina orice risc de HTML/URL injection cand tokenul e reafisat intr-o pagina.
+var tokenSafeRE = regexp.MustCompile(`^[A-Za-z0-9_\-]{16,128}$`)
+
 func isValidOnionURL(rawURL string) bool {
 	if rawURL == "" || len(rawURL) > 2048 {
 		return false
@@ -1060,8 +1167,36 @@ func isValidOnionURL(rawURL string) bool {
 	if err != nil {
 		return false
 	}
-	return (parsed.Scheme == "http" || parsed.Scheme == "https") &&
-		strings.HasSuffix(parsed.Host, ".onion")
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(parsed.Host)
+	return v3OnionHostRE.MatchString(host)
+}
+
+// normalizeOnionURL produce forma canonica pentru un URL onion: scheme + host lowercase,
+// path/query pastrate. Returneaza "" daca URL-ul nu e valid.
+func normalizeOnionURL(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Host == "" {
+		return ""
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = strings.ToLower(parsed.Host)
+	return parsed.String()
+}
+
+// splitAndTrim imparte un string dupa separator si taie spatiile din jurul fiecarei piese,
+// eliminand rezultatele goale.
+func splitAndTrim(s, sep string) []string {
+	parts := strings.Split(s, sep)
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // sanitizeCSVField previne formula injection in CSV/XLSX.
