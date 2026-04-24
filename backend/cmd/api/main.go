@@ -138,7 +138,10 @@ func clientIP(r *http.Request) string {
 
 type contextKey string
 
-const userContextKey contextKey = "user"
+const (
+	userContextKey   contextKey = "user"
+	dbRoleContextKey contextKey = "db_role"
+)
 
 // jwtMiddleware extrage claims-urile din Authorization header daca exista si sunt valide.
 // Fara header: pass-through (endpointurile publice functioneaza).
@@ -171,30 +174,43 @@ func requireAuth(next http.Handler) http.Handler {
 	})
 }
 
-// requireAdminDB valideaza rolul admin prin re-citire din DB, nu din JWT claims.
-// Protejeaza impotriva situatiilor unde un admin demotiv la user prin UPDATE SQL
-// ar continua sa aiba privilegii timp de pana la 4h (pana expira JWT-ul).
-func requireAdminDB(db *database.DB) func(http.Handler) http.Handler {
+// loadDBRole citeste rolul curent din DB si il pune in context.
+// Previne ca un admin demotiv prin UPDATE SQL sa pastreze privilegii pana
+// expira JWT-ul (4h). Valoarea din JWT claims NU mai e folosita pentru authz.
+func loadDBRole(db *database.DB) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			uid := getUserID(r)
 			if uid == 0 {
-				writeJSONError(w, http.StatusUnauthorized, "Necesita autentificare")
+				next.ServeHTTP(w, r)
 				return
 			}
 			role, err := db.GetUserRole(uid)
 			if err != nil {
-				log.Printf("[ERROR] GetUserRole %d: %v", uid, err)
+				log.Printf("[ERROR] loadDBRole uid=%d: %v", uid, err)
 				writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
 				return
 			}
-			if role != "admin" {
-				writeJSONError(w, http.StatusForbidden, "Necesita rol admin")
-				return
-			}
-			next.ServeHTTP(w, r)
+			ctx := context.WithValue(r.Context(), dbRoleContextKey, role)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// requireAdminDB blocheaza requesturile daca rolul din DB (incarcat de loadDBRole)
+// nu e 'admin'. TREBUIE precedat de loadDBRole in lantul de middleware.
+func requireAdminDB(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if getUserID(r) == 0 {
+			writeJSONError(w, http.StatusUnauthorized, "Necesita autentificare")
+			return
+		}
+		if !isAdmin(r) {
+			writeJSONError(w, http.StatusForbidden, "Necesita rol admin")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func getUserID(r *http.Request) int {
@@ -205,9 +221,12 @@ func getUserID(r *http.Request) int {
 	return claims.UserID
 }
 
+// isAdmin citeste rolul din DB (via loadDBRole middleware), NU din JWT claims.
+// Asigura ca un admin demotiv pierde imediat privilegiile, fara sa astepte expirarea JWT.
+// Daca middleware-ul loadDBRole nu a rulat (endpoint public), returneaza false.
 func isAdmin(r *http.Request) bool {
-	claims, ok := r.Context().Value(userContextKey).(*auth.Claims)
-	return ok && claims != nil && claims.Role == "admin"
+	role, ok := r.Context().Value(dbRoleContextKey).(string)
+	return ok && role == "admin"
 }
 
 func main() {
@@ -251,7 +270,7 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
+	r.Use(safeLogger("/api/auth/verify"))
 	r.Use(middleware.Recoverer)
 	r.Use(jwtMiddleware)
 	r.Use(cors.Handler(cors.Options{
@@ -297,8 +316,8 @@ func main() {
 			writeJSONError(w, http.StatusBadRequest, "Email invalid")
 			return
 		}
-		if len(req.Password) < 10 || len(req.Password) > 72 {
-			writeJSONError(w, http.StatusBadRequest, "Parola trebuie sa aiba intre 10 si 72 caractere")
+		if err := validatePassword(req.Password); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -489,9 +508,12 @@ func main() {
 		}
 	}()
 
-	exportSem := make(chan struct{}, 1)
+	// Export limiter: max 1 export concurent PER USER (nu global), cu limita globala
+	// totala la 4 ca sa nu se ajunga la OOM daca multi useri pornesc exporturi mari in acelasi timp.
+	exportGlobalSem := make(chan struct{}, 4)
+	exportPerUser := &sync.Map{} // map[int]chan struct{}
 
-	r.Get("/api/status", func(w http.ResponseWriter, r *http.Request) {
+	r.With(loadDBRole(dbConn)).Get("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		var resp struct {
 			Status        string `json:"status"`
@@ -525,6 +547,7 @@ func main() {
 
 	r.Group(func(r chi.Router) {
 		r.Use(requireAuth)
+		r.Use(loadDBRole(dbConn))
 
 		r.Get("/api/nodes", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -729,11 +752,21 @@ func main() {
 
 		// GET /api/export?format=json|csv|ndjson|xlsx|pdf|graphml
 		r.Get("/api/export", func(w http.ResponseWriter, r *http.Request) {
+			uid := getUserID(r)
+			userSemAny, _ := exportPerUser.LoadOrStore(uid, make(chan struct{}, 1))
+			userSem := userSemAny.(chan struct{})
 			select {
-			case exportSem <- struct{}{}:
-				defer func() { <-exportSem }()
+			case userSem <- struct{}{}:
+				defer func() { <-userSem }()
 			default:
-				writeJSONError(w, http.StatusTooManyRequests, "Export in desfasurare — incearca din nou in cateva momente")
+				writeJSONError(w, http.StatusTooManyRequests, "Ai deja un export in desfasurare — asteapta sa se termine")
+				return
+			}
+			select {
+			case exportGlobalSem <- struct{}{}:
+				defer func() { <-exportGlobalSem }()
+			default:
+				writeJSONError(w, http.StatusTooManyRequests, "Prea multe exporturi simultane pe server — incearca din nou in cateva momente")
 				return
 			}
 			format := r.URL.Query().Get("format")
@@ -922,7 +955,8 @@ func main() {
 
 	r.Group(func(r chi.Router) {
 		r.Use(requireAuth)
-		r.Use(requireAdminDB(dbConn))
+		r.Use(loadDBRole(dbConn))
+		r.Use(requireAdminDB)
 
 		r.Get("/api/blacklist", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -1039,6 +1073,68 @@ func sanitizeCSVField(s string) string {
 		}
 	}
 	return s
+}
+
+// safeLogger inlocuieste middleware.Logger standard: loghează request-urile dar
+// OMITE query string-ul pentru path-urile sensibile (ex: /api/auth/verify care
+// primeste token in URL — ar ajunge in syslog/journald).
+func safeLogger(sensitivePaths ...string) func(http.Handler) http.Handler {
+	sensitive := make(map[string]struct{}, len(sensitivePaths))
+	for _, p := range sensitivePaths {
+		sensitive[p] = struct{}{}
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+			defer func() {
+				uri := r.URL.Path
+				if r.URL.RawQuery != "" {
+					if _, isSensitive := sensitive[r.URL.Path]; !isSensitive {
+						uri = r.URL.Path + "?" + r.URL.RawQuery
+					} else {
+						uri = r.URL.Path + "?[REDACTED]"
+					}
+				}
+				log.Printf("%s %s %d %dB %s from %s",
+					r.Method, uri, ww.Status(), ww.BytesWritten(),
+					time.Since(start).Round(time.Millisecond), sanitizeForLog(clientIP(r)))
+			}()
+			next.ServeHTTP(ww, r)
+		})
+	}
+}
+
+// validatePassword impune minim 10 caractere, max 72 (limita bcrypt),
+// si cere diversitate (cel putin 3 din: litera mica, litera mare, cifra, simbol).
+// Previne parole triviale gen "passwordaa" sau "aaaaaaaaaa".
+func validatePassword(p string) error {
+	if len(p) < 10 || len(p) > 72 {
+		return errors.New("Parola trebuie sa aiba intre 10 si 72 caractere")
+	}
+	var hasLower, hasUpper, hasDigit, hasSymbol bool
+	for _, r := range p {
+		switch {
+		case r >= 'a' && r <= 'z':
+			hasLower = true
+		case r >= 'A' && r <= 'Z':
+			hasUpper = true
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		case r > 32 && r < 127:
+			hasSymbol = true
+		}
+	}
+	classes := 0
+	for _, ok := range []bool{hasLower, hasUpper, hasDigit, hasSymbol} {
+		if ok {
+			classes++
+		}
+	}
+	if classes < 3 {
+		return errors.New("Parola trebuie sa combine cel putin 3 categorii: litere mici, litere mari, cifre, simboluri")
+	}
+	return nil
 }
 
 // sanitizeForLog previne log injection prin newline-uri.

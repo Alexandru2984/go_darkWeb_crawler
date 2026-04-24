@@ -52,6 +52,22 @@ func InitDB(dsn string) (*DB, error) {
 }
 
 func migrate(db *sql.DB) error {
+	// Tabelul users e creat intai pentru ca nodes/edges il refera prin FK.
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS users (
+			id                       SERIAL PRIMARY KEY,
+			email                    VARCHAR(255) UNIQUE NOT NULL,
+			password_hash            VARCHAR(255) NOT NULL,
+			role                     VARCHAR(50) DEFAULT 'user',
+			is_verified              BOOLEAN DEFAULT FALSE,
+			verification_token       VARCHAR(255),
+			verification_expires_at  TIMESTAMP,
+			created_at               TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)
+	`); err != nil {
+		return fmt.Errorf("create users: %w", err)
+	}
+
 	// Cream tabelele de baza daca nu exista (instalare noua)
 	_, err := db.Exec(`
 	CREATE TABLE IF NOT EXISTS nodes (
