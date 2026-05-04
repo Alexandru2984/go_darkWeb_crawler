@@ -10,12 +10,12 @@ import (
 	"time"
 )
 
-// mockTorControlServer porneste un server TCP care simuleaza control port-ul Tor.
+// mockTorControlServer starts a TCP server that simulates the Tor control port.
 func mockTorControlServer(t *testing.T, authResponse, newnymResponse string) (addr string, cleanup func()) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("nu pot porni mock server: %v", err)
+		t.Fatalf("cannot start mock server: %v", err)
 	}
 
 	go func() {
@@ -53,10 +53,10 @@ func TestRenewCircuit_Success(t *testing.T) {
 	ctrl := NewTorController(addr, "", "", 0)
 	renewed, err := ctrl.RenewCircuit()
 	if err != nil {
-		t.Fatalf("eroare neasteptata: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if !renewed {
-		t.Error("asteptat renewed=true, primit false")
+		t.Error("expected renewed=true, got false")
 	}
 }
 
@@ -67,13 +67,13 @@ func TestRenewCircuit_AuthFailed(t *testing.T) {
 	ctrl := NewTorController(addr, "badpassword", "", 0)
 	renewed, err := ctrl.RenewCircuit()
 	if err == nil {
-		t.Fatal("asteptat eroare la autentificare esuata, primit nil")
+		t.Fatal("expected error on failed authentication, got nil")
 	}
 	if renewed {
-		t.Error("asteptat renewed=false la eroare auth")
+		t.Error("expected renewed=false on auth error")
 	}
-	if !strings.Contains(err.Error(), "autentificare Tor esuata") {
-		t.Errorf("mesaj de eroare neasteptat: %v", err)
+	if !strings.Contains(err.Error(), "Tor authentication failed") {
+		t.Errorf("unexpected error message: %v", err)
 	}
 }
 
@@ -84,10 +84,10 @@ func TestRenewCircuit_NewnymFailed(t *testing.T) {
 	ctrl := NewTorController(addr, "", "", 0)
 	_, err := ctrl.RenewCircuit()
 	if err == nil {
-		t.Fatal("asteptat eroare la NEWNYM esuata")
+		t.Fatal("expected error on failed NEWNYM")
 	}
-	if !strings.Contains(err.Error(), "NEWNYM esuata") {
-		t.Errorf("mesaj de eroare neasteptat: %v", err)
+	if !strings.Contains(err.Error(), "NEWNYM failed") {
+		t.Errorf("unexpected error message: %v", err)
 	}
 }
 
@@ -99,19 +99,19 @@ func TestRenewCircuit_Cooldown(t *testing.T) {
 
 	renewed, err := ctrl.RenewCircuit()
 	if err != nil {
-		t.Fatalf("prima cerere esuata: %v", err)
+		t.Fatalf("first request failed: %v", err)
 	}
 	if !renewed {
-		t.Fatal("prima cerere: asteptat renewed=true")
+		t.Fatal("first request: expected renewed=true")
 	}
 
-	// A doua cerere imediata — in cooldown, nu mai e server disponibil
+	// Second immediate request — in cooldown, no server available
 	renewed, err = ctrl.RenewCircuit()
 	if err != nil {
-		t.Fatalf("a doua cerere a returnat eroare: %v", err)
+		t.Fatalf("second request returned error: %v", err)
 	}
 	if renewed {
-		t.Error("a doua cerere in cooldown: asteptat renewed=false")
+		t.Error("second request in cooldown: expected renewed=false")
 	}
 }
 
@@ -119,7 +119,7 @@ func TestRenewCircuit_NoServer(t *testing.T) {
 	ctrl := NewTorController("127.0.0.1:1", "", "", 0)
 	_, err := ctrl.RenewCircuit()
 	if err == nil {
-		t.Fatal("asteptat eroare la conexiune refuzata")
+		t.Fatal("expected error on refused connection")
 	}
 }
 
@@ -132,10 +132,10 @@ func TestBuildAuthCommand_Cookie(t *testing.T) {
 	ctrl := &TorController{cookiePath: tmpFile}
 	cmd, err := ctrl.buildAuthCommand()
 	if err != nil {
-		t.Fatalf("eroare la buildAuthCommand: %v", err)
+		t.Fatalf("error in buildAuthCommand: %v", err)
 	}
 	if cmd != "AUTHENTICATE deadbeef" {
-		t.Errorf("asteptat 'AUTHENTICATE deadbeef', primit '%s'", cmd)
+		t.Errorf("expected 'AUTHENTICATE deadbeef', got '%s'", cmd)
 	}
 }
 
@@ -146,7 +146,7 @@ func TestBuildAuthCommand_Password(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cmd != fmt.Sprintf("AUTHENTICATE %x", []byte("supersecret")) {
-		t.Errorf("comanda incorecta: %s", cmd)
+		t.Errorf("incorrect command: %s", cmd)
 	}
 }
 
@@ -157,6 +157,6 @@ func TestBuildAuthCommand_NoAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cmd != `AUTHENTICATE ""` {
-		t.Errorf("comanda incorecta: %s", cmd)
+		t.Errorf("incorrect command: %s", cmd)
 	}
 }

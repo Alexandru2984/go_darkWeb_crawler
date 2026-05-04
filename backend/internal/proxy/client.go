@@ -12,7 +12,7 @@ import (
 	"golang.org/x/net/proxy"
 )
 
-// NewTorClient creeaza un client HTTP care ruteaza exclusiv prin SOCKS5 (Tor)
+// NewTorClient creates an HTTP client that routes exclusively through SOCKS5 (Tor)
 func NewTorClient(socksProxyAddress string) (*http.Client, error) {
 	_, client, err := NewTorClientWithTransport(socksProxyAddress)
 	return client, err
@@ -23,10 +23,10 @@ func NewTorClient(socksProxyAddress string) (*http.Client, error) {
 func NewTorClientWithTransport(socksProxyAddress string) (*http.Transport, *http.Client, error) {
 	dialer, err := proxy.SOCKS5("tcp", socksProxyAddress, nil, proxy.Direct)
 	if err != nil {
-		return nil, nil, fmt.Errorf("eroare la initializarea SOCKS5: %w", err)
+		return nil, nil, fmt.Errorf("error initializing SOCKS5: %w", err)
 	}
 
-	// Folosim DialContext daca dialer-ul SOCKS5 il suporta (context cancelabil).
+	// Use DialContext if the SOCKS5 dialer supports it (cancellable context).
 	// Altfel, wrap cu verificare context inainte de dial.
 	type contextDialer interface {
 		DialContext(ctx context.Context, network, address string) (net.Conn, error)
@@ -47,7 +47,7 @@ func NewTorClientWithTransport(socksProxyAddress string) (*http.Transport, *http
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true}, // Multe site-uri onion au certificate self-signed
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true}, // Many onion sites have self-signed certificates
 	}
 
 	client := &http.Client{
@@ -55,15 +55,15 @@ func NewTorClientWithTransport(socksProxyAddress string) (*http.Transport, *http
 		Timeout:   30 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 3 {
-				return fmt.Errorf("prea multe redirect-uri")
+				return fmt.Errorf("too many redirects")
 			}
-			// Permitem redirect-uri numai in spatiul .onion — clearnet-ul e interzis
+			// Only allow redirects within the .onion space — clearnet is forbidden
 			if !strings.HasSuffix(req.URL.Hostname(), ".onion") {
-				return fmt.Errorf("redirect catre clearnet blocat: %s", req.URL.Host)
+				return fmt.Errorf("redirect to clearnet blocked: %s", req.URL.Host)
 			}
-			// Nu urmarim redirect-uri catre alt domeniu onion (previne tracking cross-site)
+			// Do not follow redirects to another onion domain (prevents cross-site tracking)
 			if req.URL.Hostname() != via[0].URL.Hostname() {
-				return fmt.Errorf("redirect catre alt domeniu onion blocat: %s -> %s", via[0].URL.Host, req.URL.Host)
+				return fmt.Errorf("redirect to another onion domain blocked: %s -> %s", via[0].URL.Host, req.URL.Host)
 			}
 			return nil
 		},

@@ -14,45 +14,45 @@ import (
 	_ "github.com/lib/pq"
 )
 
-// ErrBlacklisted este returnat de EnqueueURL cand domeniul e pe blacklist.
-var ErrBlacklisted = errors.New("domeniu blocat")
+// ErrBlacklisted is returned by EnqueueURL when the domain is on the blacklist.
+var ErrBlacklisted = errors.New("domain blocked")
 
 type DB struct {
 	Conn *sql.DB
 }
 
-// InitDB initializeaza conexiunea la PostgreSQL si ruleaza migrarile de schema
+// InitDB initializes the PostgreSQL connection and runs schema migrations
 func InitDB(dsn string) (*DB, error) {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("eroare la deschiderea bazei de date: %w", err)
+		return nil, fmt.Errorf("error opening database: %w", err)
 	}
 
 	if err = db.Ping(); err != nil {
-		return nil, fmt.Errorf("eroare la conectarea fizica la db: %w", err)
+		return nil, fmt.Errorf("error connecting to database: %w", err)
 	}
 
 	db.SetMaxOpenConns(25)
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
-	log.Println("Conexiune la PostgreSQL reusita!")
+	log.Println("PostgreSQL connection successful!")
 
 	if err = migrate(db); err != nil {
-		return nil, fmt.Errorf("eroare la migrarea bazei de date: %w", err)
+		return nil, fmt.Errorf("error running database migrations: %w", err)
 	}
 
-	// Nodurile ramase in 'crawling' la un crash anterior nu vor fi niciodata reluate.
-	// Le resetam la 'pending' la fiecare pornire.
+	// Nodes left in 'crawling' from a previous crash will never be retried.
+	// Reset them to 'pending' on every startup.
 	if _, err = db.Exec(`UPDATE nodes SET processing_status = 'pending' WHERE processing_status = 'crawling'`); err != nil {
-		log.Printf("⚠️ Nu am putut reseta nodurile 'crawling': %v", err)
+		log.Printf("⚠️ Could not reset 'crawling' nodes: %v", err)
 	}
 
 	return &DB{Conn: db}, nil
 }
 
 func migrate(db *sql.DB) error {
-	// Tabelul users e creat intai pentru ca nodes/edges il refera prin FK.
+	// The users table is created first because nodes/edges reference it via FK.
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS users (
 			id                       SERIAL PRIMARY KEY,
@@ -68,7 +68,7 @@ func migrate(db *sql.DB) error {
 		return fmt.Errorf("create users: %w", err)
 	}
 
-	// Cream tabelele de baza daca nu exista (instalare noua)
+	// Create base tables if they don't exist (fresh installation)
 	_, err := db.Exec(`
 	CREATE TABLE IF NOT EXISTS nodes (
 		id              SERIAL PRIMARY KEY,
@@ -98,7 +98,7 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 
-	// Migrari incrementale pentru instalatii existente (sunt idempotente)
+	// Incremental migrations for existing installations (idempotent)
 	incremental := []string{
 		`ALTER TABLE nodes ALTER COLUMN url TYPE TEXT`,
 		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS content TEXT`,
@@ -125,7 +125,7 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_expires_at TIMESTAMP`,
 		`UPDATE users SET verification_expires_at = CURRENT_TIMESTAMP + INTERVAL '24 hours'
 		   WHERE is_verified = FALSE AND verification_token IS NOT NULL AND verification_expires_at IS NULL`,
-		// Audit log pentru evenimente de securitate (login, register, token invalid etc)
+		// Audit log for security events (login, register, invalid token etc)
 		`CREATE TABLE IF NOT EXISTS auth_audit (
 			id         SERIAL PRIMARY KEY,
 			event      TEXT NOT NULL,
@@ -135,9 +135,9 @@ func migrate(db *sql.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_auth_audit_created ON auth_audit(created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_auth_audit_email_event ON auth_audit(email, event, created_at DESC)`,
-		// Heartbeat pentru detectarea nodurilor blocate in 'crawling' dupa crash brutal
+		// Heartbeat for detecting nodes stuck in 'crawling' after a hard crash
 		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS crawl_started_at TIMESTAMP`,
-		// Tabel blacklist pentru domenii blocate
+		// Blacklist table for blocked domains
 		`CREATE TABLE IF NOT EXISTS blacklist (
 			domain   TEXT PRIMARY KEY,
 			added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -145,7 +145,7 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS host TEXT`,
 		`CREATE INDEX IF NOT EXISTS idx_nodes_host ON nodes(host)`,
 		`UPDATE nodes SET host = (regexp_match(url, '^https?://([^/?#]+)'))[1] WHERE host IS NULL`,
-		// Trigger conditional: recalculeaza search_vector doar cand titlul sau continutul se schimba
+		// Conditional trigger: recalculate search_vector only when title or content changes
 		`CREATE OR REPLACE FUNCTION nodes_search_vector_update() RETURNS trigger AS $$
 		 BEGIN
 		   IF TG_OP = 'INSERT' OR NEW.title IS DISTINCT FROM OLD.title OR NEW.content IS DISTINCT FROM OLD.content THEN
@@ -162,14 +162,14 @@ func migrate(db *sql.DB) error {
 	}
 	for _, m := range incremental {
 		if _, err := db.Exec(m); err != nil {
-			log.Printf("⚠️ Migrare ignorata (probabil deja aplicata): %v", err)
+			log.Printf("⚠️ Migration skipped (probably already applied): %v", err)
 		}
 	}
 
 	return nil
 }
 
-// Node reprezinta un site onion stocat in DB
+// Node represents an onion site stored in the DB
 type Node struct {
 	ID               int    `json:"id"`
 	URL              string `json:"url"`
@@ -182,7 +182,7 @@ type Node struct {
 	UserID           int    `json:"user_id"`
 }
 
-// NodeDetail include si continutul complet — folosit pentru GET /api/node
+// NodeDetail includes the full content — used for GET /api/node
 type NodeDetail struct {
 	Node
 	Content      string `json:"content"`
@@ -196,29 +196,29 @@ type Edge struct {
 	Target string `json:"target"`
 }
 
-// ContentHash calculeaza sha256(title + "|" + content) pentru detectia schimbarilor
+// ContentHash computes sha256(title + "|" + content) for change detection
 func ContentHash(title, content string) string {
 	h := sha256.Sum256([]byte(title + "|" + content))
 	return fmt.Sprintf("%x", h)
 }
 
-// SaveNode salveaza sau actualizeaza informatiile despre un site onion dupa crawling.
-// Returneaza (contentChanged bool, error). Daca hash-ul continutului nu s-a schimbat,
-// face un update minimal (fara sa atinga continutul sau tsvector).
+// SaveNode saves or updates information about an onion site after crawling.
+// Returns (contentChanged bool, error). If the content hash hasn't changed,
+// performs a minimal update (without touching content or tsvector).
 func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status string, metadata string, content string, category string, userID int) (bool, error) {
 	if metadata == "" {
 		metadata = "{}"
 	}
 	newHash := ContentHash(title, content)
 
-	// Verificam daca hash-ul s-a schimbat fata de ultima vizita
+	// Check if the hash has changed since the last visit
 	var oldHash sql.NullString
 	_ = db.Conn.QueryRow(`SELECT content_hash FROM nodes WHERE url = $1 AND user_id = $2`, nodeURL, userID).Scan(&oldHash)
 
 	contentChanged := !oldHash.Valid || oldHash.String != newHash
 
 	if contentChanged {
-		// Continut nou sau prima vizita: update complet
+		// New content or first visit: full update
 		_, err := db.Conn.Exec(`
 		INSERT INTO nodes (url, title, status_code, server_header, processing_status, metadata, content, content_hash, category, last_crawled_at, next_crawl_at, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + (INTERVAL '1 day' * 7), $10) ON CONFLICT (url, user_id) DO UPDATE SET
 			title             = EXCLUDED.title,
@@ -236,7 +236,7 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 		return true, err
 	}
 
-	// Continut nemodificat: update minimal — nu atinge content/tsvector/category
+	// Unchanged content: minimal update — don't touch content/tsvector/category
 	_, err := db.Conn.Exec(`
 	UPDATE nodes SET
 		status_code       = $3,
@@ -249,15 +249,15 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 	return false, err
 }
 
-// EnqueueURL adauga un URL in coada de crawling fara sa suprascrie date existente.
-// Returneaza ErrBlacklisted daca domeniul e pe blacklist.
+// EnqueueURL adds a URL to the crawling queue without overwriting existing data.
+// Returns ErrBlacklisted if the domain is on the blacklist.
 func (db *DB) EnqueueURL(rawURL string, depth int, userID int) error {
 	if len(rawURL) > 2048 {
-		return fmt.Errorf("url prea lung (max 2048 caractere)")
+		return fmt.Errorf("url too long (max 2048 characters)")
 	}
 	parsed, err := url.Parse(rawURL)
 	if err != nil || parsed.Host == "" {
-		return fmt.Errorf("url invalid: %s", rawURL)
+		return fmt.Errorf("invalid url: %s", rawURL)
 	}
 	host := strings.ToLower(parsed.Host)
 	var count int
@@ -272,8 +272,8 @@ func (db *DB) EnqueueURL(rawURL string, depth int, userID int) error {
 	return err
 }
 
-// SearchNodes efectueaza o cautare Full-Text pe titlu si continut folosind indexul GIN.
-// Daca category nu e gol, filtreaza si dupa categorie.
+// SearchNodes performs a Full-Text search on title and content using the GIN index.
+// If category is non-empty, also filters by category.
 func (db *DB) SearchNodes(searchQuery, category string, userID int, isAdmin bool) ([]Node, error) {
 	rows, err := db.Conn.Query(`
 		SELECT id, url, COALESCE(title, ''), COALESCE(status_code, 0), COALESCE(server_header, ''),
@@ -306,16 +306,16 @@ func (db *DB) SearchNodes(searchQuery, category string, userID int, isAdmin bool
 	return nodes, rows.Err()
 }
 
-// SaveEdge creeaza o legatura intre doua site-uri si adauga target-ul in coada daca e nou.
-// Daca URL-ul exista deja dar la adancime mai mare, actualizeaza adancimea (crawl mai eficient).
-// Domeniile de pe blacklist sunt sarite (nu se adauga in coada).
+// SaveEdge creates a link between two sites and adds the target to the queue if new.
+// If the URL already exists at a greater depth, updates the depth (more efficient crawl).
+// Domains on the blacklist are skipped (not added to the queue).
 func (db *DB) SaveEdge(source, target string, targetDepth int, userID int) error {
 	targetHost := ""
 	if parsed, err := url.Parse(target); err == nil {
 		targetHost = strings.ToLower(parsed.Host)
 	}
 
-	// Verificam blacklist-ul inainte sa adaugam nodul tinta in coada
+	// Check the blacklist before adding the target node to the queue
 	if targetHost != "" {
 		var count int
 		db.Conn.QueryRow(`SELECT COUNT(*) FROM blacklist WHERE domain = $1`, targetHost).Scan(&count)
@@ -335,9 +335,9 @@ func (db *DB) SaveEdge(source, target string, targetDepth int, userID int) error
 	return err
 }
 
-// GetNextPendingNode extrage atomic urmatorul URL care trebuie scanat.
-// Prioritate: noduri 'pending' > noduri 'completed' cu next_crawl_at expirat.
-// Seteaza crawl_started_at pentru a permite sweeperul sa recupereze noduri stuck.
+// GetNextPendingNode atomically fetches the next URL to be crawled.
+// Priority: 'pending' nodes > 'completed' nodes with expired next_crawl_at.
+// Sets crawl_started_at to allow the sweeper to recover stuck nodes.
 func (db *DB) GetNextPendingNode() (string, int, int, error) {
 	var nodeURL string
 	var depth int
@@ -367,9 +367,9 @@ func (db *DB) GetNextPendingNode() (string, int, int, error) {
 	return nodeURL, depth, userID, err
 }
 
-// ResetStuckCrawling reseteaza nodurile ramase in starea 'crawling' mai mult
-// decat olderThan (ex: dupa crash brutal al unui worker). Returneaza numarul
-// de noduri recuperate.
+// ResetStuckCrawling resets nodes that have been in the 'crawling' state longer
+// than olderThan (e.g., after a hard crash of a worker). Returns the number
+// of recovered nodes.
 func (db *DB) ResetStuckCrawling(olderThan time.Duration) (int64, error) {
 	res, err := db.Conn.Exec(`
 		UPDATE nodes
@@ -386,8 +386,8 @@ func (db *DB) ResetStuckCrawling(olderThan time.Duration) (int64, error) {
 	return n, nil
 }
 
-// FailNodeWithRetry inregistreaza un esec si programeaza o reincercare cu exponential backoff.
-// Formula: min(2^retry * 10min, 48h). Nodurile 'blocked' nu sunt niciodata modificate.
+// FailNodeWithRetry records a failure and schedules a retry with exponential backoff.
+// Formula: min(2^retry * 10min, 48h). 'blocked' nodes are never modified.
 func (db *DB) FailNodeWithRetry(nodeURL string, userID int) error {
 	_, err := db.Conn.Exec(`
 		UPDATE nodes
@@ -404,7 +404,7 @@ func (db *DB) FailNodeWithRetry(nodeURL string, userID int) error {
 	return err
 }
 
-// Stats retine statistici sumare despre starea crawlingului
+// Stats holds summary statistics about the crawling state
 type Stats struct {
 	NodesCrawled  int
 	PendingNodes  int
@@ -414,7 +414,7 @@ type Stats struct {
 	TotalEdges    int
 }
 
-// GetStats returneaza statistici complete despre starea crawlingului
+// GetStats returns complete statistics about the crawling state
 func (db *DB) GetStats(userID int, isAdmin bool) (Stats, error) {
 	var s Stats
 	err := db.Conn.QueryRow(`SELECT COUNT(*) FILTER (WHERE processing_status = 'completed'), COUNT(*) FILTER (WHERE processing_status = 'pending' AND user_id = $1), COUNT(*) FILTER (WHERE processing_status = 'failed'), COUNT(*) FILTER (WHERE processing_status = 'crawling'), COUNT(*) FILTER (WHERE processing_status = 'blocked') FROM nodes WHERE (user_id = $1 OR $2) `, userID, isAdmin).Scan(&s.NodesCrawled, &s.PendingNodes, &s.FailedNodes, &s.CrawlingNodes, &s.BlockedNodes)
@@ -425,7 +425,7 @@ func (db *DB) GetStats(userID int, isAdmin bool) (Stats, error) {
 	return s, err
 }
 
-// GetNodeByURL returneaza detaliile complete ale unui nod dupa URL
+// GetNodeByURL returns the complete details of a node by URL
 func (db *DB) GetNodeByURL(nodeURL string, userID int, isAdmin bool) (*NodeDetail, error) {
 	var n NodeDetail
 	var lastCrawled, discovered sql.NullString
@@ -461,9 +461,9 @@ func (db *DB) GetNodeByURL(nodeURL string, userID int, isAdmin bool) (*NodeDetai
 	return &n, nil
 }
 
-// RequeueForCrawl reseteaza un nod la 'pending' pentru re-crawl imediat.
-// Returneaza (found bool, canRequeue bool, error).
-// canRequeue=false daca nodul e deja in starea 'crawling'.
+// RequeueForCrawl resets a node to 'pending' for immediate re-crawl.
+// Returns (found bool, canRequeue bool, error).
+// canRequeue=false if the node is already in the 'crawling' state.
 func (db *DB) RequeueForCrawl(nodeURL string, userID int) (found bool, canRequeue bool, err error) {
 	var status string
 	err = db.Conn.QueryRow(`SELECT processing_status FROM nodes WHERE url = $1 AND user_id = $2`, nodeURL, userID).Scan(&status)
@@ -483,9 +483,9 @@ func (db *DB) RequeueForCrawl(nodeURL string, userID int) (found bool, canRequeu
 	return true, true, err
 }
 
-// MarkRobotsBlocked marcheaza un nod ca interzis de robots.txt.
-// Seteaza next_crawl_at la 30 de zile si retry_count=10 pentru a preveni re-incercari inutile.
-// Nu suprascrie nodurile blocate explicit prin blacklist.
+// MarkRobotsBlocked marks a node as disallowed by robots.txt.
+// Sets next_crawl_at to 30 days and retry_count=10 to prevent unnecessary retries.
+// Does not overwrite nodes explicitly blocked via the blacklist.
 func (db *DB) MarkRobotsBlocked(nodeURL string, userID int) error {
 	_, err := db.Conn.Exec(`
 		UPDATE nodes SET
@@ -547,13 +547,13 @@ func (db *DB) GetEdges(limit, offset int, userID int, isAdmin bool) ([]Edge, err
 	return edges, rows.Err()
 }
 
-// QueueSummary contine statistici despre coada de crawling
+// QueueSummary contains statistics about the crawling queue
 type QueueSummary struct {
 	StatusCounts map[string]int `json:"status_counts"`
 	NextItems    []QueueItem    `json:"next_items"`
 }
 
-// QueueItem reprezinta un URL din coada, cu metadata de baza
+// QueueItem represents a URL in the queue, with basic metadata
 type QueueItem struct {
 	URL          string `json:"url"`
 	Depth        int    `json:"depth"`
@@ -561,7 +561,7 @@ type QueueItem struct {
 	DiscoveredAt string `json:"discovered_at"`
 }
 
-// GetQueueSummary returneaza numaratori pe status si urmatoarele 10 URL-uri din coada
+// GetQueueSummary returns counts by status and the next 10 URLs in the queue
 func (db *DB) GetQueueSummary(userID int, isAdmin bool) (*QueueSummary, error) {
 	rows, err := db.Conn.Query(`
 		SELECT processing_status, COUNT(*) FROM nodes
@@ -613,8 +613,8 @@ func (db *DB) GetQueueSummary(userID int, isAdmin bool) (*QueueSummary, error) {
 	return &QueueSummary{StatusCounts: counts, NextItems: items}, next.Err()
 }
 
-// AddBlacklist adauga un domeniu in blacklist (seteaza processing_status='blocked' pe toate nodurile cu acel domeniu)
-// si previne adaugarea viitoare de URL-uri din acel domeniu.
+// AddBlacklist adds a domain to the blacklist (sets processing_status='blocked' on all nodes with that domain)
+// and prevents future addition of URLs from that domain.
 func (db *DB) AddBlacklist(domain string) error {
 	domain = strings.ToLower(strings.TrimSpace(domain))
 	_, err := db.Conn.Exec(`
@@ -623,7 +623,7 @@ func (db *DB) AddBlacklist(domain string) error {
 	if err != nil {
 		return err
 	}
-	// Blocheaza toate nodurile existente cu acest domeniu (match exact pe coloana host)
+	// Block all existing nodes with this domain (exact match on the host column)
 	_, err = db.Conn.Exec(`
 		UPDATE nodes SET processing_status = 'blocked'
 		WHERE host = $1 AND processing_status != 'blocked'
@@ -631,7 +631,7 @@ func (db *DB) AddBlacklist(domain string) error {
 	return err
 }
 
-// GetBlacklist returneaza toate domeniile blocate
+// GetBlacklist returns all blocked domains
 func (db *DB) GetBlacklist() ([]string, error) {
 	rows, err := db.Conn.Query(`SELECT domain FROM blacklist ORDER BY added_at DESC`)
 	if err != nil {
@@ -649,16 +649,16 @@ func (db *DB) GetBlacklist() ([]string, error) {
 	return domains, rows.Err()
 }
 
-// IsDomainBlacklisted verifica daca un domeniu e blocat
+// IsDomainBlacklisted checks whether a domain is blocked
 func (db *DB) IsDomainBlacklisted(domain string) (bool, error) {
 	var count int
 	err := db.Conn.QueryRow(`SELECT COUNT(*) FROM blacklist WHERE domain = $1`, strings.ToLower(domain)).Scan(&count)
 	return count > 0, err
 }
 
-// ExportNodes returneaza toate nodurile crawlate complet, in ordine de descoperire.
-// ctx permite anularea exportului daca clientul se deconecteaza.
-// Foloseste un cursor pentru a nu incarca toata tabela in memorie.
+// ExportNodes returns all fully crawled nodes in discovery order.
+// ctx allows cancellation if the client disconnects.
+// Uses a cursor to avoid loading the entire table into memory.
 func (db *DB) ExportNodes(ctx context.Context, userID int, isAdmin bool, fn func(Node) error) error {
 	rows, err := db.Conn.QueryContext(ctx, `
 		SELECT id, url, COALESCE(title,''), COALESCE(status_code,0), COALESCE(server_header,''),
@@ -689,8 +689,8 @@ func (db *DB) ExportNodes(ctx context.Context, userID int, isAdmin bool, fn func
 	return rows.Err()
 }
 
-// DeleteBlacklist elimina un domeniu din blacklist si repune nodurile blocate inapoi in coada.
-// Returneaza (found bool, error).
+// DeleteBlacklist removes a domain from the blacklist and puts blocked nodes back in the queue.
+// Returns (found bool, error).
 func (db *DB) DeleteBlacklist(domain string) (bool, error) {
 	domain = strings.ToLower(strings.TrimSpace(domain))
 	res, err := db.Conn.Exec(`DELETE FROM blacklist WHERE domain = $1`, domain)
@@ -708,14 +708,14 @@ func (db *DB) DeleteBlacklist(domain string) (bool, error) {
 	return true, err
 }
 
-// GraphMLEdge reprezinta o muchie exportata pentru GraphML — ambele capete sunt noduri completed.
+// GraphMLEdge represents an edge exported for GraphML — both endpoints are completed nodes.
 type GraphMLEdge struct {
 	SourceID int
 	TargetID int
 }
 
-// ExportGraphMLEdges returneaza muchiile unde ambele noduri (source si target) sunt completed.
-// Foloseste JOIN pentru a garanta consistenta grafului exportat.
+// ExportGraphMLEdges returns edges where both nodes (source and target) are completed.
+// Uses JOIN to guarantee consistency of the exported graph.
 func (db *DB) ExportGraphMLEdges(ctx context.Context, userID int, isAdmin bool, fn func(GraphMLEdge) error) error {
 	rows, err := db.Conn.QueryContext(ctx, `
 		SELECT n1.id, n2.id
@@ -745,7 +745,7 @@ type TimelineStat struct {
 	Count int    `json:"count"`
 }
 
-// GetTimelineStats returneaza numarul de noduri descoperite pe zi in ultimele 30 de zile.
+// GetTimelineStats returns the number of nodes discovered per day over the last 30 days.
 func (db *DB) GetTimelineStats(userID int, isAdmin bool) ([]TimelineStat, error) {
 	rows, err := db.Conn.Query(`
 		SELECT to_char(discovered_at, 'YYYY-MM-DD') AS date, COUNT(*) AS count
@@ -769,7 +769,7 @@ func (db *DB) GetTimelineStats(userID int, isAdmin bool) ([]TimelineStat, error)
 	return stats, rows.Err()
 }
 
-// Model pentru Useri
+// User model
 type User struct {
 	ID                int    `json:"id"`
 	Email             string `json:"email"`
@@ -780,13 +780,13 @@ type User struct {
 	CreatedAt         string `json:"created_at"`
 }
 
-// NormalizeEmail returneaza emailul in lowercase si fara spatii.
-// Toate operatiile cu email-uri trebuie sa treaca prin asta.
+// NormalizeEmail returns the email in lowercase and without spaces.
+// All email operations must go through this.
 func NormalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }
 
-// CreateUser adauga un nou utilizator cu token de verificare valabil 24h.
+// CreateUser adds a new user with a verification token valid for 24h.
 func (db *DB) CreateUser(email, passwordHash, role, token string) error {
 	_, err := db.Conn.Exec(`
 		INSERT INTO users (email, password_hash, role, verification_token, verification_expires_at)
@@ -795,7 +795,7 @@ func (db *DB) CreateUser(email, passwordHash, role, token string) error {
 	return err
 }
 
-// GetUserByEmail extrage un utilizator folosind email-ul (case-insensitive).
+// GetUserByEmail fetches a user by email (case-insensitive).
 func (db *DB) GetUserByEmail(email string) (*User, error) {
 	var u User
 	err := db.Conn.QueryRow(`
@@ -808,10 +808,10 @@ func (db *DB) GetUserByEmail(email string) (*User, error) {
 	return &u, err
 }
 
-// VerifyUser seteaza utilizatorul ca verificat, doar daca token-ul nu a expirat.
+// VerifyUser sets the user as verified, only if the token has not expired.
 func (db *DB) VerifyUser(token string) error {
 	if len(token) < 16 {
-		return errors.New("token invalid")
+		return errors.New("invalid token")
 	}
 	res, err := db.Conn.Exec(`
 		UPDATE users
@@ -825,34 +825,34 @@ func (db *DB) VerifyUser(token string) error {
 	}
 	aff, _ := res.RowsAffected()
 	if aff == 0 {
-		return errors.New("token invalid, expirat sau deja folosit")
+		return errors.New("token invalid, expired or already used")
 	}
 	return nil
 }
 
-// HasAnyAdmin verifica daca exista cel putin un user cu rol admin.
-// Folosit la bootstrap — primul user cu ADMIN_EMAIL devine admin doar daca nu exista inca.
+// HasAnyAdmin checks whether at least one user with the admin role exists.
+// Used at bootstrap — the first user with ADMIN_EMAIL becomes admin only if none exists yet.
 func (db *DB) HasAnyAdmin() (bool, error) {
 	var count int
 	err := db.Conn.QueryRow(`SELECT COUNT(*) FROM users WHERE role = 'admin'`).Scan(&count)
 	return count > 0, err
 }
 
-// LogAuthEvent insereaza un record in auth_audit. Nu bloca fluxul daca esueaza.
+// LogAuthEvent inserts a record into auth_audit. Does not block the flow if it fails.
 func (db *DB) LogAuthEvent(event, email, ip string) {
 	_, err := db.Conn.Exec(
 		`INSERT INTO auth_audit (event, email, ip) VALUES ($1, $2, $3)`,
 		event, NormalizeEmail(email), ip,
 	)
 	if err != nil {
-		log.Printf("[audit] nu am putut loga %s pt %s: %v", event, email, err)
+		log.Printf("[audit] could not log %s for %s: %v", event, email, err)
 	}
 }
 
-// CountRecentAuthEvents numara evenimentele din auth_audit de tip `event` pentru `email`
-// in ultimele `window` minute. Folosit pentru:
-//   - lockout login dupa 5 fail consecutiv ('login_fail')
-//   - rate-limit register per email destinatar ('register_ok')
+// CountRecentAuthEvents counts events from auth_audit of type `event` for `email`
+// in the last `window` minutes. Used for:
+//   - login lockout after 5 consecutive failures ('login_fail')
+//   - register rate-limit per recipient email ('register_ok')
 func (db *DB) CountRecentAuthEvents(event, email string, windowMinutes int) (int, error) {
 	var count int
 	err := db.Conn.QueryRow(`
@@ -863,8 +863,8 @@ func (db *DB) CountRecentAuthEvents(event, email string, windowMinutes int) (int
 	return count, err
 }
 
-// PurgeOldAuditLogs sterge evenimentele din auth_audit mai vechi de `olderThan`.
-// Returneaza numarul de randuri sterse. Folosit de retention job (GDPR + unbounded growth).
+// PurgeOldAuditLogs deletes events from auth_audit older than `olderThan`.
+// Returns the number of deleted rows. Used by the retention job (GDPR + unbounded growth).
 func (db *DB) PurgeOldAuditLogs(olderThan time.Duration) (int64, error) {
 	res, err := db.Conn.Exec(
 		`DELETE FROM auth_audit WHERE created_at < CURRENT_TIMESTAMP - ($1 || ' seconds')::INTERVAL`,
@@ -877,9 +877,9 @@ func (db *DB) PurgeOldAuditLogs(olderThan time.Duration) (int64, error) {
 	return n, nil
 }
 
-// GetUserRole returneaza rolul curent al utilizatorului din DB (bypass JWT claims).
-// Folosit pe endpointurile admin-only pentru a invalida imediat demotion-urile,
-// in loc sa astepti expirarea JWT-ului.
+// GetUserRole returns the current role of the user from the DB (bypasses JWT claims).
+// Used on admin-only endpoints to immediately invalidate demotions,
+// rather than waiting for the JWT to expire.
 func (db *DB) GetUserRole(userID int) (string, error) {
 	var role string
 	err := db.Conn.QueryRow(`SELECT role FROM users WHERE id = $1`, userID).Scan(&role)

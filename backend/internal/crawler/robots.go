@@ -13,8 +13,8 @@ import (
 	"time"
 )
 
-// robotsCache este un LRU cache cu TTL pentru regulile robots.txt.
-// Capacitate maxima: 500 domenii. Intrare expirata dupa 1 ora.
+// robotsCache is an LRU cache with TTL for robots.txt rules.
+// Maximum capacity: 500 domains. Entries expire after 1 hour.
 type robotsCache struct {
 	mu      sync.Mutex
 	entries map[string]*robotsEntry
@@ -22,7 +22,7 @@ type robotsCache struct {
 }
 
 type robotsEntry struct {
-	disallowed []string // prefixe de cai interzise pentru crawleri
+	disallowed []string // path prefixes disallowed for crawlers
 	fetchedAt  time.Time
 	ttl        time.Duration
 }
@@ -35,8 +35,8 @@ var globalRobotsCache = &robotsCache{
 const robotsTTL = 1 * time.Hour
 const robotsUA = "OnionSpider"
 
-// IsAllowed verifica daca crawlerul are voie sa acceseze un URL conform robots.txt.
-// Returneaza true daca e permis sau daca robots.txt nu a putut fi descarcat (fail-open).
+// IsAllowed checks whether the crawler is allowed to access a URL according to robots.txt.
+// Returns true if allowed or if robots.txt could not be fetched (fail-open).
 func IsAllowed(ctx context.Context, client *http.Client, targetURL string) bool {
 	if ctx == nil {
 		ctx = context.Background()
@@ -58,7 +58,7 @@ func IsAllowed(ctx context.Context, client *http.Client, targetURL string) bool 
 	if !ok {
 		entry = fetchRobots(ctx, client, parsed)
 		globalRobotsCache.mu.Lock()
-		// Evict cel mai vechi entry daca am depasit capacitatea
+		// Evict the oldest entry if capacity has been exceeded
 		if len(globalRobotsCache.entries) >= globalRobotsCache.maxSize {
 			evictOldest(globalRobotsCache.entries)
 		}
@@ -78,8 +78,8 @@ func IsAllowed(ctx context.Context, client *http.Client, targetURL string) bool 
 	return true
 }
 
-// fetchRobots descarca si parseaza robots.txt pentru un host.
-// Returneaza un entry gol (permit tot) daca nu exista sau eroare.
+// fetchRobots downloads and parses robots.txt for a host.
+// Returns an empty entry (allow all) if it doesn't exist or on error.
 func fetchRobots(ctx context.Context, client *http.Client, base *url.URL) *robotsEntry {
 	entry := &robotsEntry{fetchedAt: time.Now(), ttl: robotsTTL}
 
@@ -95,7 +95,7 @@ func fetchRobots(ctx context.Context, client *http.Client, base *url.URL) *robot
 		if resp != nil {
 			resp.Body.Close()
 		}
-		return entry // fail-open: daca nu putem descarca, permitem
+		return entry // fail-open: if we can't download, we allow
 	}
 	defer resp.Body.Close()
 
@@ -103,8 +103,8 @@ func fetchRobots(ctx context.Context, client *http.Client, base *url.URL) *robot
 	return entry
 }
 
-// parseRobots citeste un robots.txt si extrage caile interzise pentru UA-ul dat.
-// Suporta sectiunile User-agent: * si User-agent: OnionSpider.
+// parseRobots reads a robots.txt and extracts disallowed paths for the given UA.
+// Supports User-agent: * and User-agent: OnionSpider sections.
 func parseRobots(body io.Reader, ua string) []string {
 	var disallowed []string
 	applies := false
@@ -133,12 +133,12 @@ func parseRobots(body io.Reader, ua string) []string {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		log.Printf("[robots.txt] Eroare la scanare: %v", err)
+		log.Printf("[robots.txt] Scan error: %v", err)
 	}
 	return disallowed
 }
 
-// evictOldest sterge intrarea cu fetchedAt cel mai vechi din map (O(n), acceptabil pentru maxSize=500)
+// evictOldest removes the entry with the oldest fetchedAt from the map (O(n), acceptable for maxSize=500)
 func evictOldest(m map[string]*robotsEntry) {
 	var oldestKey string
 	var oldestTime time.Time

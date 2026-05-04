@@ -10,73 +10,73 @@ func TestCategorize(t *testing.T) {
 		expected string
 	}{
 		{
-			name:    "marketplace — keywords puternice",
+			name:    "marketplace — strong keywords",
 			title:   "Dark Market",
 			content: "Buy drugs weapons vendor listing escrow bitcoin monero shop",
 			expected: CategoryMarketplace,
 		},
 		{
-			name:    "forum — keywords board/thread",
+			name:    "forum — board/thread keywords",
 			title:   "Anonymous Forum",
 			content: "Welcome to our community forum. Register and login to participate in discussion threads. Reply to topics, member area.",
 			expected: CategoryForum,
 		},
 		{
-			name:    "search engine — keywords specifice",
+			name:    "search engine — specific keywords",
 			title:   "Onion Search Engine",
 			content: "Search the dark web. Find onion sites with our search engine. Torch, Ahmia, not evil dark search.",
 			expected: CategorySearchEngine,
 		},
 		{
-			name:    "wiki — keywords enciclopedie",
+			name:    "wiki — encyclopedia keywords",
 			title:   "Hidden Wiki",
 			content: "This wiki contains documentation, how to guides, faq and tutorials for dark web navigation.",
 			expected: CategoryWiki,
 		},
 		{
-			name:    "directory — lista de linkuri",
+			name:    "directory — link list",
 			title:   "Fresh Onions Directory",
 			content: "Onion links directory. Hidden wiki link list. Index of .onion sites. Fresh onions.",
 			expected: CategoryDirectory,
 		},
 		{
-			name:    "news — stiri si presa",
+			name:    "news — news and press",
 			title:   "Dark News",
 			content: "Breaking news and headline articles. Journalist reports on whistleblowing and transparency leaks.",
 			expected: CategoryNews,
 		},
 		{
-			name:    "blog — jurnal personal",
+			name:    "blog — personal journal",
 			title:   "My Anonymous Blog",
 			content: "Blog post and entry. Written by anonymous author. Archive of opinion pieces. Subscribe to newsletter.",
 			expected: CategoryBlog,
 		},
 		{
-			name:    "social — chat si mesaje",
+			name:    "social — chat and messages",
 			title:   "Anonymous Chat",
 			content: "Anonymous chat messenger. Send message to contact. Social profile follow. Jabber XMPP.",
 			expected: CategorySocial,
 		},
 		{
-			name:     "unknown — prea putine keywords",
+			name:     "unknown — too few keywords",
 			title:    "My Site",
 			content:  "Welcome to my site. This is a page.",
 			expected: CategoryUnknown,
 		},
 		{
-			name:     "unknown — titlu si continut goale",
+			name:     "unknown — empty title and content",
 			title:    "",
 			content:  "",
 			expected: CategoryUnknown,
 		},
 		{
-			name:    "case insensitive — majuscule ignorate",
+			name:    "case insensitive — uppercase ignored",
 			title:   "DARK MARKET",
 			content: "BUY DRUGS VENDOR LISTING ESCROW BITCOIN MONERO WEAPONS SHOP",
 			expected: CategoryMarketplace,
 		},
 		{
-			name:    "marketplace bate forum la scor mai mare",
+			name:    "marketplace beats forum with higher score",
 			title:   "Market Forum",
 			content: "Buy sell vendor listing product cart checkout escrow bitcoin monero drugs weapons accounts carding cvv marketplace shop. Forum board thread.",
 			expected: CategoryMarketplace,
@@ -87,7 +87,7 @@ func TestCategorize(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := Categorize(tt.title, tt.content)
 			if got != tt.expected {
-				t.Errorf("Categorize(%q, %q) = %q, asteptat %q", tt.title, tt.content, got, tt.expected)
+				t.Errorf("Categorize(%q, %q) = %q, expected %q", tt.title, tt.content, got, tt.expected)
 			}
 		})
 	}

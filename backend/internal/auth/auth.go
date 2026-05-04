@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	// MinSecretLen este lungimea minima acceptata pentru JWT_SECRET (32 caractere hex = 128 biti entropie).
+	// MinSecretLen is the minimum accepted length for JWT_SECRET (32 hex characters = 128 bits of entropy).
 	MinSecretLen = 32
-	// TokenTTL este durata de viata a unui JWT emis la login.
+	// TokenTTL is the lifetime of a JWT issued at login.
 	TokenTTL = 4 * time.Hour
 )
 
@@ -26,42 +26,42 @@ var (
 	jwtSecret     []byte
 )
 
-// getJWTSecret incarca JWT_SECRET LAZY — dupa ce main.go a apelat godotenv.Load().
-// Daca secretul lipseste sau e prea scurt, aplicatia refuza sa porneasca.
-// NU exista fallback — un secret slab e echivalent cu lipsa de autentificare.
+// getJWTSecret loads JWT_SECRET LAZILY — after main.go has called godotenv.Load().
+// If the secret is missing or too short, the application refuses to start.
+// NO fallback — a weak secret is equivalent to having no authentication.
 func getJWTSecret() []byte {
 	jwtSecretOnce.Do(func() {
 		s := os.Getenv("JWT_SECRET")
 		if len(s) < MinSecretLen {
-			log.Fatalf("FATAL: JWT_SECRET lipseste sau e mai scurt de %d caractere. Genereaza cu: openssl rand -hex 32", MinSecretLen)
+			log.Fatalf("FATAL: JWT_SECRET is missing or shorter than %d characters. Generate with: openssl rand -hex 32", MinSecretLen)
 		}
 		jwtSecret = []byte(s)
 	})
 	return jwtSecret
 }
 
-// MustInitSecrets forteaza incarcarea JWT_SECRET la pornirea aplicatiei,
-// dupa ce variabilele de mediu sunt disponibile. Daca secretul lipseste
-// sau e prea scurt, log.Fatal se declanseaza aici, nu la primul login.
-// Precalculeaza si dummyHash pentru a egaliza timpul la login cu email inexistent.
+// MustInitSecrets forces loading of JWT_SECRET at application startup,
+// after environment variables are available. If the secret is missing
+// or too short, log.Fatal is triggered here, not on the first login.
+// Also pre-computes dummyHash to equalize timing on login with a non-existent email.
 func MustInitSecrets() {
 	_ = getJWTSecret()
 	h, err := bcrypt.GenerateFromPassword([]byte("dummy-timing-equalization-placeholder"), 12)
 	if err != nil {
-		log.Fatalf("FATAL: nu pot genera dummyHash: %v", err)
+		log.Fatalf("FATAL: cannot generate dummyHash: %v", err)
 	}
 	dummyHash = string(h)
 }
 
-// dummyHash este un hash bcrypt valid folosit ca tinta in CompareHashAndPassword
-// atunci cand un utilizator nu exista — previne timing attack pentru enumerare email.
+// dummyHash is a valid bcrypt hash used as the target in CompareHashAndPassword
+// when a user does not exist — prevents timing attack for email enumeration.
 var dummyHash string
 
-// CheckAgainstDummy ruleaza bcrypt.Compare pe o parola fata de un hash dummy.
-// Raspunsul e intotdeauna false — scopul e doar sa consume timpul echivalent unei verificari reale.
+// CheckAgainstDummy runs bcrypt.Compare on a password against a dummy hash.
+// The response is always false — the sole purpose is to consume time equivalent to a real check.
 func CheckAgainstDummy(password string) {
 	if dummyHash == "" {
-		return // nu ar trebui sa se intample dupa MustInitSecrets, dar e safe-guard
+		return // should not happen after MustInitSecrets, but acts as a safe-guard
 	}
 	_ = bcrypt.CompareHashAndPassword([]byte(dummyHash), []byte(password))
 }
@@ -73,11 +73,11 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-// HashPassword hasheaza parola cu bcrypt cost 12 (balans siguranta/DoS).
+// HashPassword hashes the password with bcrypt cost 12 (security/DoS balance).
 func HashPassword(password string) (string, error) {
-	// bcrypt trunchiaza la 72 bytes — refuzam parolele lungi pentru a fi predictibili.
+	// bcrypt truncates at 72 bytes — we reject long passwords to be predictable.
 	if len(password) > 72 {
-		return "", errors.New("parola depaseste 72 caractere")
+		return "", errors.New("password exceeds 72 characters")
 	}
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 12)
 	return string(bytes), err
@@ -110,19 +110,19 @@ func GenerateToken(userID int, email, role string) (string, error) {
 func GenerateVerificationToken() string {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
-		// crypto/rand nu ar trebui sa esueze niciodata pe Linux; daca esueaza, panic.
-		panic("crypto/rand indisponibil: " + err.Error())
+		// crypto/rand should never fail on Linux; if it does, panic.
+		panic("crypto/rand unavailable: " + err.Error())
 	}
 	return hex.EncodeToString(bytes)
 }
 
-// ValidateToken parseaza si valideaza un JWT, refuzand orice alt algorithm decat HS256.
-// Previne atacul "alg=none" si substitutia de algoritm.
+// ValidateToken parses and validates a JWT, rejecting any algorithm other than HS256.
+// Prevents the "alg=none" attack and algorithm substitution.
 func ValidateToken(tokenString string) (*Claims, error) {
 	claims := &Claims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("signing method neasteptat: %v", t.Header["alg"])
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
 		return getJWTSecret(), nil
 	})
@@ -130,7 +130,7 @@ func ValidateToken(tokenString string) (*Claims, error) {
 		return nil, err
 	}
 	if !token.Valid {
-		return nil, errors.New("token invalid")
+		return nil, errors.New("invalid token")
 	}
 	return claims, nil
 }

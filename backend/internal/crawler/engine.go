@@ -18,13 +18,13 @@ type Engine struct {
 	Proxy            string
 	Workers          int
 	MaxDepth         int
-	TorCtrl          *proxy.TorController // nil daca controlul Tor nu e configurat
+	TorCtrl          *proxy.TorController // nil if Tor control is not configured
 	domainLastAccess map[string]time.Time
 	domainMu         sync.Mutex
 	wg               sync.WaitGroup
 	cancel           context.CancelFunc
-	// globalErrorCount numara erorile de retea consecutive pe toti workerii.
-	// Cand depaseste pragul, se cere reinnoire circuit Tor.
+	// globalErrorCount counts consecutive network errors across all workers.
+	// When it exceeds the threshold, a Tor circuit renewal is requested.
 	globalErrorCount atomic.Int32
 	transports       []*http.Transport
 	transportsMu     sync.Mutex
@@ -41,12 +41,12 @@ func NewEngine(db *database.DB, proxyAddr string, workerCount int, maxDepth int)
 	}
 }
 
-// Start porneste motorul de crawling cu numarul de workeri specificat.
-// Fiecare worker se reporneste automat daca iese din cauza unei erori Tor.
+// Start starts the crawling engine with the specified number of workers.
+// Each worker automatically restarts if it exits due to a Tor error.
 func (e *Engine) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	e.cancel = cancel
-	log.Printf("🚀 Pornire motor crawling cu %d workeri (MaxDepth: %d, Politeness Activ)...", e.Workers, e.MaxDepth)
+	log.Printf("🚀 Starting crawling engine with %d workers (MaxDepth: %d, Politeness Active)...", e.Workers, e.MaxDepth)
 	for i := 0; i < e.Workers; i++ {
 		e.wg.Add(1)
 		go func(id int) {
@@ -55,16 +55,16 @@ func (e *Engine) Start() {
 				e.worker(ctx, id)
 				select {
 				case <-ctx.Done():
-					log.Printf("[Worker %d] Oprit definitiv.", id)
+					log.Printf("[Worker %d] Stopped permanently.", id)
 					return
 				case <-time.After(10 * time.Second):
-					log.Printf("[Worker %d] Repornire dupa eroare Tor...", id)
+					log.Printf("[Worker %d] Restarting after Tor error...", id)
 				}
 			}
 		}(i)
 	}
 
-	// Goroutine de cleanup pentru domainLastAccess — previne memory leak cu mii de domenii
+	// Cleanup goroutine for domainLastAccess — prevents memory leak with thousands of domains
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
@@ -88,17 +88,17 @@ func (e *Engine) Start() {
 	}()
 }
 
-// Stop opreste toti workerii si asteapta finalizarea lor
+// Stop shuts down all workers and waits for them to finish
 func (e *Engine) Stop() {
 	if e.cancel != nil {
 		e.cancel()
 	}
 	e.wg.Wait()
-	log.Println("🛑 Motor crawling oprit.")
+	log.Println("🛑 Crawling engine stopped.")
 }
 
-// waitForDomain asigura ca nu stresam acelasi domeniu — impune 5 secunde intarziere.
-// Returneaza false daca contextul a fost anulat in timpul asteptarii.
+// waitForDomain ensures we don't hammer the same domain — enforces a 5-second delay.
+// Returns false if the context was cancelled while waiting.
 func (e *Engine) waitForDomain(ctx context.Context, targetUrl string) bool {
 	parsed, err := url.Parse(targetUrl)
 	if err != nil {
@@ -133,15 +133,15 @@ func (e *Engine) waitForDomain(ctx context.Context, targetUrl string) bool {
 }
 
 func (e *Engine) worker(ctx context.Context, id int) {
-	log.Printf("[Worker %d] Activ", id)
+	log.Printf("[Worker %d] Active", id)
 
 	transport, client, err := proxy.NewTorClientWithTransport(e.Proxy)
 	if err != nil {
-		log.Printf("[Worker %d] Eroare fatala Tor: %v", id, err)
+		log.Printf("[Worker %d] Fatal Tor error: %v", id, err)
 		return
 	}
 
-	// Înlocuiește transportul la indexul workerului (nu append) — previne memory leak la restart.
+	// Replace the transport at the worker's index (not append) — prevents memory leak on restart.
 	e.transportsMu.Lock()
 	e.transports[id] = transport
 	e.transportsMu.Unlock()
@@ -149,14 +149,14 @@ func (e *Engine) worker(ctx context.Context, id int) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("[Worker %d] Oprit.", id)
+			log.Printf("[Worker %d] Stopped.", id)
 			return
 		default:
 		}
 
 		targetUrl, depth, userID, err := e.DB.GetNextPendingNode()
 		if err != nil {
-			log.Printf("[Worker %d] Eroare la preluarea cozii: %v", id, err)
+			log.Printf("[Worker %d] Error fetching from queue: %v", id, err)
 			select {
 			case <-ctx.Done():
 				return
@@ -174,70 +174,70 @@ func (e *Engine) worker(ctx context.Context, id int) {
 			continue
 		}
 
-		// Validare la crawl-time: procesam exclusiv adrese .onion
+		// Crawl-time validation: we process exclusively .onion addresses
 		if parsedTarget, err := url.Parse(targetUrl); err != nil || !strings.HasSuffix(strings.ToLower(parsedTarget.Hostname()), ".onion") {
-			log.Printf("[Worker %d] URL non-.onion in DB, marcat ca invalid: %s", id, sanitizeForLog(targetUrl))
+			log.Printf("[Worker %d] Non-.onion URL in DB, marked as invalid: %s", id, sanitizeForLog(targetUrl))
 			_ = e.DB.MarkRobotsBlocked(targetUrl, userID)
 			continue
 		}
 
-		log.Printf("[Worker %d] Asteapta permisiunea rate-limit pt: %s", id, sanitizeForLog(targetUrl))
+		log.Printf("[Worker %d] Waiting for rate-limit permission for: %s", id, sanitizeForLog(targetUrl))
 		if !e.waitForDomain(ctx, targetUrl) {
-			return // context anulat in timpul asteptarii
+			return // context cancelled while waiting
 		}
-		log.Printf("[Worker %d] Scanare aprobata: %s (Adancime: %d, User: %d)", id, sanitizeForLog(targetUrl), depth, userID)
+		log.Printf("[Worker %d] Crawl approved: %s (Depth: %d, User: %d)", id, sanitizeForLog(targetUrl), depth, userID)
 
-		// Verificam robots.txt inainte de scraping
+		// Check robots.txt before scraping
 		if !IsAllowed(ctx, client, targetUrl) {
-			log.Printf("[Worker %d] Blocat de robots.txt: %s", id, sanitizeForLog(targetUrl))
+			log.Printf("[Worker %d] Blocked by robots.txt: %s", id, sanitizeForLog(targetUrl))
 			if err := e.DB.MarkRobotsBlocked(targetUrl, userID); err != nil {
-				log.Printf("[Worker %d] DB Eroare la marcare robots blocked: %v", id, err)
+				log.Printf("[Worker %d] DB Error marking robots blocked: %v", id, err)
 			}
 			continue
 		}
 
 		result, err := ScrapePage(ctx, client, targetUrl)
 		if err != nil {
-			log.Printf("[Worker %d] Eroare retea/SOCKS la %s: %v", id, sanitizeForLog(targetUrl), err)
+			log.Printf("[Worker %d] Network/SOCKS error at %s: %v", id, sanitizeForLog(targetUrl), err)
 			if errRetry := e.DB.FailNodeWithRetry(targetUrl, userID); errRetry != nil {
-				log.Printf("[Worker %d] DB Eroare la retry pentru %s: %v", id, sanitizeForLog(targetUrl), errRetry)
+				log.Printf("[Worker %d] DB Error on retry for %s: %v", id, sanitizeForLog(targetUrl), errRetry)
 			}
 			e.onNetworkError()
 			continue
 		}
-		// Succes — resetam contorul de erori
+		// Success — reset the error counter
 		e.globalErrorCount.Store(0)
 		changed, err := e.DB.SaveNode(targetUrl, result.Title, result.ServerHeader, result.StatusCode, "completed", result.Metadata, result.Content, result.Category, userID)
 		if err != nil {
-			log.Printf("[Worker %d] Eroare la salvare nod: %v", id, err)
+			log.Printf("[Worker %d] Error saving node: %v", id, err)
 			if retryErr := e.DB.FailNodeWithRetry(targetUrl, userID); retryErr != nil {
-				log.Printf("[Worker %d] Eroare la retry dupa esec SaveNode: %v", id, retryErr)
+				log.Printf("[Worker %d] Error on retry after SaveNode failure: %v", id, retryErr)
 			}
 		} else if !changed {
-			log.Printf("[Worker %d] Continut nemodificat (hash identic): %s", id, sanitizeForLog(targetUrl))
+			log.Printf("[Worker %d] Content unchanged (identical hash): %s", id, sanitizeForLog(targetUrl))
 		}
 
 		if depth < e.MaxDepth {
 			for _, foundUrl := range result.FoundOnions {
 				if err = e.DB.SaveEdge(targetUrl, foundUrl, depth+1, userID); err != nil {
-					log.Printf("[Worker %d] Eroare la salvare edge: %v", id, err)
+					log.Printf("[Worker %d] Error saving edge: %v", id, err)
 				}
 			}
-			// La depth=0 descarcam si sitemap.xml pentru descoperire suplimentara
+			// At depth=0 we also fetch sitemap.xml for additional discovery
 			if depth == 0 {
 				sitemapURLs := FetchSitemapURLs(ctx, client, targetUrl)
 				for _, su := range sitemapURLs {
 					if err = e.DB.SaveEdge(targetUrl, su, 1, userID); err != nil {
-						log.Printf("[Worker %d] Eroare sitemap edge: %v", id, err)
+						log.Printf("[Worker %d] Sitemap edge error: %v", id, err)
 					}
 				}
 				if len(sitemapURLs) > 0 {
-					log.Printf("[Worker %d] Sitemap: %d URL-uri suplimentare de la %s", id, len(sitemapURLs), sanitizeForLog(targetUrl))
+					log.Printf("[Worker %d] Sitemap: %d additional URLs from %s", id, len(sitemapURLs), sanitizeForLog(targetUrl))
 				}
 			}
-			log.Printf("[Worker %d] Finalizat: %s (gasit %d link-uri noi)", id, sanitizeForLog(targetUrl), len(result.FoundOnions))
+			log.Printf("[Worker %d] Completed: %s (found %d new links)", id, sanitizeForLog(targetUrl), len(result.FoundOnions))
 		} else {
-			log.Printf("[Worker %d] Finalizat: %s (adancime maxima %d atinsa, ignoram %d link-uri noi)", id, sanitizeForLog(targetUrl), e.MaxDepth, len(result.FoundOnions))
+			log.Printf("[Worker %d] Completed: %s (max depth %d reached, ignoring %d new links)", id, sanitizeForLog(targetUrl), e.MaxDepth, len(result.FoundOnions))
 		}
 
 		select {
@@ -248,8 +248,8 @@ func (e *Engine) worker(ctx context.Context, id int) {
 	}
 }
 
-// onNetworkError incrementeaza contorul global de erori si cere reinnoire circuit
-// daca pragul de 5 erori consecutive a fost depasit.
+// onNetworkError increments the global error counter and requests circuit renewal
+// if the threshold of 5 consecutive errors has been exceeded.
 func (e *Engine) onNetworkError() {
 	count := e.globalErrorCount.Add(1)
 	const threshold = 5
@@ -258,12 +258,12 @@ func (e *Engine) onNetworkError() {
 	}
 	renewed, err := e.TorCtrl.RenewCircuit()
 	if err != nil {
-		log.Printf("[TorCtrl] Eroare la reinnoire circuit: %v", err)
+		log.Printf("[TorCtrl] Error renewing circuit: %v", err)
 		return
 	}
 	if renewed {
 		e.globalErrorCount.Store(0)
-		// Inchidem conexiunile idle — circuitul vechi nu mai e valid
+		// Close idle connections — the old circuit is no longer valid
 		e.transportsMu.Lock()
 		for _, t := range e.transports {
 			if t != nil {
@@ -273,13 +273,13 @@ func (e *Engine) onNetworkError() {
 		e.transportsMu.Unlock()
 	}
 }
-// AddToQueue adauga un URL manual in coada fara sa suprascrie date existente
+// AddToQueue manually adds a URL to the queue without overwriting existing data
 func (e *Engine) AddToQueue(rawURL string, userID int) error {
 	return e.DB.EnqueueURL(rawURL, 0, userID)
 }
 
-// sanitizeForLog inlocuieste newline-uri din valorile controlate de utilizator
-// pentru a preveni log injection (URLs pot contine %0a/%0d).
+// sanitizeForLog replaces newlines in user-controlled values
+// to prevent log injection (URLs may contain %0a/%0d).
 func sanitizeForLog(s string) string {
 	s = strings.ReplaceAll(s, "\n", "\\n")
 	s = strings.ReplaceAll(s, "\r", "\\r")

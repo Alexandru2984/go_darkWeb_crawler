@@ -10,7 +10,7 @@ import (
 )
 
 func TestScrapePage(t *testing.T) {
-	// Cream un server HTTP de test care emuleaza un site onion
+	// Create a test HTTP server that emulates an onion site
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		w.Header().Set("Server", "TestServer/1.0")
@@ -27,7 +27,7 @@ func TestScrapePage(t *testing.T) {
 				<p>This is a paragraph with <strong>important content</strong>.</p>
 				
 				<script>
-					// Crawlerul nu trebuie sa extraga acest text
+					// The crawler should not extract this text
 					console.log("Secret hacker code");
 				</script>
 				
@@ -49,34 +49,34 @@ func TestScrapePage(t *testing.T) {
 
 	result, err := ScrapePage(context.Background(), client, server.URL)
 	if err != nil {
-		t.Fatalf("Eroare neasteptata la rularea scraper-ului: %v", err)
+		t.Fatalf("Unexpected error running scraper: %v", err)
 	}
 
-	// 1. Verificam Titlul
+	// 1. Check the Title
 	if result.Title != "The Hidden Test Wiki" {
-		t.Errorf("Titlu incorect. Asteptat 'The Hidden Test Wiki', primit '%s'", result.Title)
+		t.Errorf("Incorrect title. Expected 'The Hidden Test Wiki', got '%s'", result.Title)
 	}
 
-	// 2. Verificam Server Header
+	// 2. Check Server Header
 	if result.ServerHeader != "TestServer/1.0" {
-		t.Errorf("Server Header incorect. Asteptat 'TestServer/1.0', primit '%s'", result.ServerHeader)
+		t.Errorf("Incorrect Server Header. Expected 'TestServer/1.0', got '%s'", result.ServerHeader)
 	}
 
-	// 3. Verificam Extragerea Continutului (Text curat)
+	// 3. Check Content Extraction (clean text)
 	expectedContent := "Welcome to the Hidden Wiki This is a paragraph with important content. DuckDuckGo Local Page (Should be ignored)"
 	if result.Content != expectedContent {
-		t.Errorf("Content extras incorect.\nAsteptat: '%s'\nPrimit: '%s'", expectedContent, result.Content)
+		t.Errorf("Incorrect extracted content.\nExpected: '%s'\nGot: '%s'", expectedContent, result.Content)
 	}
 
-	// 4. Verificam Extragerea Link-urilor Onion (cu path complet)
+	// 4. Check Onion Link Extraction (with full path)
 	if len(result.FoundOnions) != 1 {
-		t.Fatalf("Asteptam 1 link onion, am primit %d: %v", len(result.FoundOnions), result.FoundOnions)
+		t.Fatalf("Expected 1 onion link, got %d: %v", len(result.FoundOnions), result.FoundOnions)
 	}
 
-	// URL-ul complet cu path trebuie pastrat (fix #5)
+	// The full URL with path must be preserved (fix #5)
 	expectedOnion := "http://duckduckgogg42xjoc72x3sjiqbvzwsgxgjvpeqg5unfxgf2fsvawd.onion/search?q=test"
 	if result.FoundOnions[0] != expectedOnion {
-		t.Errorf("Link onion extras incorect. Asteptat '%s', primit '%s'", expectedOnion, result.FoundOnions[0])
+		t.Errorf("Incorrect extracted onion link. Expected '%s', got '%s'", expectedOnion, result.FoundOnions[0])
 	}
 }
 
@@ -99,7 +99,7 @@ func TestScrapePageExtraLinkSources(t *testing.T) {
 
 	result, err := ScrapePage(context.Background(), server.Client(), server.URL)
 	if err != nil {
-		t.Fatalf("Eroare neasteptata: %v", err)
+		t.Fatalf("Unexpected error: %v", err)
 	}
 
 	wantURLs := []string{
@@ -115,13 +115,13 @@ func TestScrapePageExtraLinkSources(t *testing.T) {
 	}
 	for _, want := range wantURLs {
 		if !found[want] {
-			t.Errorf("URL-ul asteptat nu a fost extras: %s\nGasit: %v", want, result.FoundOnions)
+			t.Errorf("Expected URL was not extracted: %s\nFound: %v", want, result.FoundOnions)
 		}
 	}
 }
 
 func TestScrapePageContentTruncation(t *testing.T) {
-	// Pagina cu continut mai mare decat limita de 100KB
+	// Page with content larger than the 100KB limit
 	bigContent := strings.Repeat("a", 200*1024)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -132,12 +132,12 @@ func TestScrapePageContentTruncation(t *testing.T) {
 
 	result, err := ScrapePage(context.Background(), server.Client(), server.URL)
 	if err != nil {
-		t.Fatalf("Eroare neasteptata: %v", err)
+		t.Fatalf("Unexpected error: %v", err)
 	}
 
 	const maxBytes = 100 * 1024
 	if len(result.Content) > maxBytes {
-		t.Errorf("Continut netruncat: %d bytes, max %d bytes", len(result.Content), maxBytes)
+		t.Errorf("Content not truncated: %d bytes, max %d bytes", len(result.Content), maxBytes)
 	}
 }
 
@@ -150,9 +150,9 @@ func TestScrapePageNonHTMLSkipped(t *testing.T) {
 
 	result, err := ScrapePage(context.Background(), server.Client(), server.URL)
 	if err != nil {
-		t.Fatalf("Eroare neasteptata: %v", err)
+		t.Fatalf("Unexpected error: %v", err)
 	}
 	if result.Content != "" {
-		t.Errorf("Continut extras dintr-un fisier binar — asteptat gol, primit: %q", result.Content)
+		t.Errorf("Content extracted from a binary file — expected empty, got: %q", result.Content)
 	}
 }

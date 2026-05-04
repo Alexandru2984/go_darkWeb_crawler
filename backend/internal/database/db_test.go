@@ -38,47 +38,47 @@ func TestEdgeStructure(t *testing.T) {
 }
 
 func TestContentHash(t *testing.T) {
-	t.Run("hash identic pentru aceleasi date", func(t *testing.T) {
+	t.Run("identical hash for the same data", func(t *testing.T) {
 		h1 := ContentHash("Test Title", "Test content")
 		h2 := ContentHash("Test Title", "Test content")
 		if h1 != h2 {
-			t.Errorf("Hash diferit pentru date identice: %s vs %s", h1, h2)
+			t.Errorf("Hash differs for identical data: %s vs %s", h1, h2)
 		}
 	})
 
-	t.Run("hash diferit cand se schimba continutul", func(t *testing.T) {
+	t.Run("different hash when content changes", func(t *testing.T) {
 		h1 := ContentHash("Title", "Content vechi")
 		h2 := ContentHash("Title", "Content nou")
 		if h1 == h2 {
-			t.Error("Hash identic desi continutul s-a schimbat")
+			t.Error("Hash identical even though content changed")
 		}
 	})
 
-	t.Run("hash diferit cand se schimba titlul", func(t *testing.T) {
+	t.Run("different hash when title changes", func(t *testing.T) {
 		h1 := ContentHash("Titlu vechi", "Acelasi continut")
 		h2 := ContentHash("Titlu nou", "Acelasi continut")
 		if h1 == h2 {
-			t.Error("Hash identic desi titlul s-a schimbat — bug in detectia schimbarilor")
+			t.Error("Hash identical even though title changed — bug in change detection")
 		}
 	})
 
-	t.Run("hash non-empty pentru date goale", func(t *testing.T) {
+	t.Run("non-empty hash for empty data", func(t *testing.T) {
 		h := ContentHash("", "")
 		if h == "" {
-			t.Error("Hash gol pentru date goale — trebuie sa returneze un hash valid")
+			t.Error("Empty hash for empty data — must return a valid hash")
 		}
-		// sha256 produce intotdeauna 64 hex chars
+		// sha256 always produces 64 hex chars
 		if len(h) != 64 {
-			t.Errorf("Hash incorect ca lungime: asteptat 64 chars, primit %d", len(h))
+			t.Errorf("Incorrect hash length: expected 64 chars, got %d", len(h))
 		}
 	})
 
-	t.Run("hash nu este vulnerabil la title+content ambiguity", func(t *testing.T) {
+	t.Run("hash is not vulnerable to title+content ambiguity", func(t *testing.T) {
 		// "AB" + "|" + "C" != "A" + "|" + "BC"
 		h1 := ContentHash("AB", "C")
 		h2 := ContentHash("A", "BC")
 		if h1 == h2 {
-			t.Error("Hash colideaza intre title='AB',content='C' si title='A',content='BC'")
+			t.Error("Hash collision between title='AB',content='C' and title='A',content='BC'")
 		}
 	})
 }
@@ -99,12 +99,12 @@ func TestNodeDetailContainsAllFields(t *testing.T) {
 	}
 
 	if nd.Content == "" {
-		t.Error("NodeDetail.Content nu trebuie sa fie gol")
+		t.Error("NodeDetail.Content must not be empty")
 	}
 	if nd.ContentHash == "" {
-		t.Error("NodeDetail.ContentHash nu trebuie sa fie gol")
+		t.Error("NodeDetail.ContentHash must not be empty")
 	}
 	if nd.Category != "forum" {
-		t.Errorf("NodeDetail.Category incorect: %s", nd.Category)
+		t.Errorf("NodeDetail.Category incorrect: %s", nd.Category)
 	}
 }

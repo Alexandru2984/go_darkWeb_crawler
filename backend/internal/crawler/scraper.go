@@ -14,7 +14,7 @@ import (
 	"github.com/PuerkitoBio/goquery"
 )
 
-// ScrapeResult retine datele curatate din pagina onion
+// ScrapeResult holds the cleaned data from an onion page
 type ScrapeResult struct {
 	Title        string
 	Content      string
@@ -27,19 +27,19 @@ type ScrapeResult struct {
 
 var spaceRegex = regexp.MustCompile(`\s+`)
 
-// ScrapePage descarca si parseaza o pagina HTML returnand titlul si linkurile onion gasite.
-// Accepta un context pentru a putea fi anulat la shutdown.
+// ScrapePage downloads and parses an HTML page, returning the title and found onion links.
+// Accepts a context so it can be cancelled on shutdown.
 func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*ScrapeResult, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("eroare la creare request: %w", err)
+		return nil, fmt.Errorf("error creating request: %w", err)
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/115.0")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("eroare la executia cererii: %w", err)
+		return nil, fmt.Errorf("error executing request: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -57,7 +57,7 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 		return result, nil
 	}
 
-	// Protectie OOM: citim maxim 1MB (suficient pentru orice pagina utila)
+	// OOM protection: read at most 1MB (sufficient for any useful page)
 	doc, err := goquery.NewDocumentFromReader(io.LimitReader(resp.Body, 1*1024*1024))
 	if err != nil {
 		return result, nil
@@ -67,7 +67,7 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 
 	doc.Find("script, style, noscript, iframe").Remove()
 	content := strings.TrimSpace(spaceRegex.ReplaceAllString(doc.Find("body").Text(), " "))
-	const maxContentBytes = 100 * 1024 // 100KB — previne stocarea paginilor gigantice in DB
+	const maxContentBytes = 100 * 1024 // 100KB — prevents storing gigantic pages in the DB
 	result.Content = truncateUTF8(content, maxContentBytes)
 
 	metaDataMap := make(map[string]string)
@@ -84,10 +84,10 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 		}
 	}
 
-	// Rezolvam URL-urile relative fata de pagina curenta si pastram path-ul complet
+	// Resolve relative URLs against the current page and preserve the full path
 	baseURL, _ := url.Parse(targetURL)
 
-	// collectOnion rezolva un href/src fata de baseURL, normalizeaza si il adauga daca e .onion
+	// collectOnion resolves an href/src against baseURL, normalizes it and adds it if .onion
 	collectOnion := func(href string) {
 		if href == "" || href == "#" || strings.HasPrefix(href, "javascript:") ||
 			strings.HasPrefix(href, "mailto:") {
@@ -98,7 +98,7 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 			return
 		}
 		resolved := baseURL.ResolveReference(parsed)
-		resolved.Fragment = "" // fragmentele (#section) nu schimba continutul paginii
+		resolved.Fragment = "" // fragments (#section) don't change the page content
 		resolved.Scheme = strings.ToLower(resolved.Scheme)
 		resolved.Host = strings.ToLower(resolved.Host)
 		if resolved.Path == "" {
@@ -122,7 +122,7 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 		collectOnion(href)
 	})
 
-	// <link rel="canonical"> si alte <link href>
+	// <link rel="canonical"> and other <link href>
 	doc.Find("link[href]").Each(func(i int, s *goquery.Selection) {
 		href, _ := s.Attr("href")
 		collectOnion(href)
@@ -137,14 +137,14 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 	// <meta http-equiv="refresh" content="5; url=...">
 	doc.Find(`meta[http-equiv="refresh"], meta[http-equiv="Refresh"]`).Each(func(i int, s *goquery.Selection) {
 		content, _ := s.Attr("content")
-		// Format: "delay; url=..." sau "delay; URL=..."
+		// Format: "delay; url=..." or "delay; URL=..."
 		lower := strings.ToLower(content)
 		if idx := strings.Index(lower, "url="); idx != -1 {
 			collectOnion(strings.TrimSpace(content[idx+4:]))
 		}
 	})
 	result.FoundOnions = removeDuplicates(result.FoundOnions)
-	// Limitam numarul de linkuri per pagina pentru a preveni flood-ul in coada
+	// Limit the number of links per page to prevent flooding the queue
 	const maxFoundOnions = 300
 	if len(result.FoundOnions) > maxFoundOnions {
 		result.FoundOnions = result.FoundOnions[:maxFoundOnions]
@@ -166,7 +166,7 @@ func removeDuplicates(elements []string) []string {
 	return result
 }
 
-// truncateUTF8 taie un string la maxBytes octeti fara sa rupa secvente UTF-8 multi-byte.
+// truncateUTF8 cuts a string to maxBytes bytes without breaking multi-byte UTF-8 sequences.
 func truncateUTF8(s string, maxBytes int) string {
 	if len(s) <= maxBytes {
 		return s

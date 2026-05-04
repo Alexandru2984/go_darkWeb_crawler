@@ -17,16 +17,16 @@ func TestRobotsIsAllowed_Disallowed(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Reseta cache-ul pentru testare izolata
+	// Reset the cache for isolated testing
 	globalRobotsCache.mu.Lock()
 	delete(globalRobotsCache.entries, server.Listener.Addr().String())
 	globalRobotsCache.mu.Unlock()
 
 	if IsAllowed(nil, server.Client(), server.URL+"/admin/panel") {
-		t.Error("asteptat blocat pentru /admin/panel, dar a fost permis")
+		t.Error("expected blocked for /admin/panel, but was allowed")
 	}
 	if IsAllowed(nil, server.Client(), server.URL+"/private/data") {
-		t.Error("asteptat blocat pentru /private/data, dar a fost permis")
+		t.Error("expected blocked for /private/data, but was allowed")
 	}
 }
 
@@ -45,7 +45,7 @@ func TestRobotsIsAllowed_Allowed(t *testing.T) {
 	globalRobotsCache.mu.Unlock()
 
 	if !IsAllowed(nil, server.Client(), server.URL+"/public/page") {
-		t.Error("asteptat permis pentru /public/page, dar a fost blocat")
+		t.Error("expected allowed for /public/page, but was blocked")
 	}
 }
 
@@ -60,7 +60,7 @@ func TestRobotsIsAllowed_NoRobots(t *testing.T) {
 	globalRobotsCache.mu.Unlock()
 
 	if !IsAllowed(nil, server.Client(), server.URL+"/anything") {
-		t.Error("fara robots.txt — trebuie sa fie fail-open (permis)")
+		t.Error("no robots.txt — should be fail-open (allowed)")
 	}
 }
 
@@ -78,13 +78,13 @@ func TestRobotsParseRobots_UASpecific(t *testing.T) {
 	delete(globalRobotsCache.entries, server.Listener.Addr().String())
 	globalRobotsCache.mu.Unlock()
 
-	// /spider-only e interzis de sectiunea OnionSpider
+	// /spider-only is disallowed by the OnionSpider section
 	if IsAllowed(nil, server.Client(), server.URL+"/spider-only/page") {
-		t.Error("asteptat blocat pentru /spider-only/page (sectiune OnionSpider)")
+		t.Error("expected blocked for /spider-only/page (OnionSpider section)")
 	}
-	// /all e interzis de sectiunea *
+	// /all is disallowed by the * section
 	if IsAllowed(nil, server.Client(), server.URL+"/all/page") {
-		t.Error("asteptat blocat pentru /all/page (sectiune *)")
+		t.Error("expected blocked for /all/page (* section)")
 	}
 }
 
@@ -104,10 +104,10 @@ func TestSitemapFetch_URLSet(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Injectam URL-ul serverului de test in loc de un .onion real
+	// Inject the test server URL instead of a real .onion
 	urls := fetchAndParseSitemap(nil, server.Client(), server.URL+"/sitemap.xml", false)
 	if len(urls) != 2 {
-		t.Errorf("asteptat 2 URL-uri .onion, primit %d: %v", len(urls), urls)
+		t.Errorf("expected 2 .onion URLs, got %d: %v", len(urls), urls)
 	}
 }
 
@@ -134,8 +134,8 @@ func TestSitemapFetch_SitemapIndex(t *testing.T) {
 	defer server.Close()
 	serverURL = server.URL
 
-	// Sub-sitemap-ul nu e .onion, deci nu va fi procesat de recursie.
-	// Testul verifica ca parserul nu paniceaza.
+	// The sub-sitemap is not .onion, so it won't be processed by recursion.
+	// The test verifies the parser doesn't panic.
 	urls := fetchAndParseSitemap(nil, server.Client(), server.URL+"/sitemap.xml", true)
 	_ = urls
 }
@@ -148,6 +148,6 @@ func TestSitemapFetch_NoSitemap(t *testing.T) {
 
 	urls := FetchSitemapURLs(nil, server.Client(), server.URL+"/page")
 	if urls != nil && len(urls) > 0 {
-		t.Errorf("asteptat lista goala, primit: %v", urls)
+		t.Errorf("expected empty list, got: %v", urls)
 	}
 }

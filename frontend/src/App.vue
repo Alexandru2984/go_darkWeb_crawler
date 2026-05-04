@@ -28,7 +28,7 @@ const userRole = ref(localStorage.getItem('role') || '')
 const userEmail = ref(localStorage.getItem('email') || '')
 const authEmail = ref('')
 const authPassword = ref('')
-const authMode = ref('login') // 'login' sau 'register'
+const authMode = ref('login') // 'login' or 'register'
 const isLoggedIn = computed(() => !!userToken.value)
 
 const authMessage = ref('')
@@ -41,9 +41,9 @@ const getAuthHeaders = () => {
   return headers
 }
 
-// apiFetch e un wrapper peste fetch care auto-logout daca backend-ul returneaza 401
-// (token expirat sau invalidat prin rotatie JWT_SECRET). Previne stari inconsistente
-// unde UI-ul crede ca esti logat dar orice apel esueaza tacit.
+// apiFetch is a wrapper around fetch that auto-logouts if the backend returns 401
+// (token expired or invalidated via JWT_SECRET rotation). Prevents inconsistent states
+// where the UI thinks you're logged in but every call silently fails.
 const apiFetch = async (url, opts = {}) => {
   const res = await fetch(url, {
     ...opts,
@@ -51,13 +51,13 @@ const apiFetch = async (url, opts = {}) => {
   })
   if (res.status === 401 && userToken.value) {
     logout()
-    authMessage.value = 'Sesiunea a expirat. Intra din nou in cont.'
+    authMessage.value = 'Session expired. Please log in again.'
   }
   return res
 }
 
 const handleAuth = async () => {
-  authMessage.value = 'Se proceseaza...'
+  authMessage.value = 'Processing...'
   const endpoint = authMode.value === 'login' ? '/api/auth/login' : '/api/auth/register'
   
   try {
@@ -76,7 +76,7 @@ const handleAuth = async () => {
         localStorage.setItem('token', data.token)
         localStorage.setItem('role', data.role)
         localStorage.setItem('email', data.email)
-        authMessage.value = 'Login reusit!'
+        authMessage.value = 'Login successful!'
         setTimeout(() => { authMessage.value = '' }, 2000)
         fetchStatus()
         fetchNodes()
@@ -84,10 +84,10 @@ const handleAuth = async () => {
         authMessage.value = data.message || 'Cont creat. Verifica email-ul!'
       }
     } else {
-      authMessage.value = data.error || 'Eroare la autentificare.'
+      authMessage.value = data.error || 'Authentication error.'
     }
   } catch (err) {
-    authMessage.value = 'Eroare de conexiune.'
+    authMessage.value = 'Connection error.'
   }
 }
 
@@ -108,7 +108,7 @@ const downloadExport = (format) => {
 
   apiFetch(`${API_BASE}/export?format=${format}`)
   .then(res => {
-    if (!res.ok) throw new Error('Eroare export')
+    if (!res.ok) throw new Error('Export error')
     return res.blob()
   })
   .then(blob => {
@@ -129,12 +129,12 @@ const downloadExport = (format) => {
   })
   .catch(err => {
     console.error(err)
-    showToast('Eroare la generarea exportului.')
+    showToast('Failed to generate export.')
   })
 }
 
 
-// Culori per categorie — folosite atat in tabel cat si in graf
+// Colors per category — used in both the table and the graph
 const CATEGORY_COLORS = {
   marketplace:    '#e74c3c',
   forum:          '#e67e22',
@@ -150,13 +150,13 @@ const CATEGORY_COLORS = {
 const CATEGORY_LABELS = {
   marketplace:    '🛒 Marketplace',
   forum:          '💬 Forum',
-  'search-engine':'🔍 Motor Căutare',
+  'search-engine':'🔍 Search Engine',
   blog:           '📝 Blog',
   wiki:           '📚 Wiki',
-  directory:      '📁 Director',
-  news:           '📰 Știri',
+  directory:      '📁 Directory',
+  news:           '📰 News',
   social:         '👥 Social',
-  unknown:        '❓ Necunoscut',
+  unknown:        '❓ Unknown',
 }
 
 const allCategories = Object.keys(CATEGORY_LABELS)
@@ -178,7 +178,7 @@ const fetchStatus = async () => {
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     status.value = await res.json()
   } catch (err) {
-    console.error('Eroare la preluarea statusului:', err)
+    console.error('Error fetching status:', err)
     status.value = { ...status.value, status: 'offline', db_connected: false }
   }
 }
@@ -191,8 +191,8 @@ const fetchNodes = async () => {
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     nodes.value = await res.json() || []
   } catch (err) {
-    console.error('Eroare la preluarea nodurilor:', err)
-    message.value = 'Eroare la preluarea listei de noduri.'
+    console.error('Error fetching nodes:', err)
+    message.value = 'Error loading node list.'
     messageType.value = 'error'
   }
 }
@@ -204,7 +204,7 @@ const fetchEdges = async () => {
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     edges.value = await res.json() || []
   } catch (err) {
-    console.error('Eroare la preluarea legaturilor:', err)
+    console.error('Error fetching edges:', err)
   }
 }
 
@@ -221,12 +221,12 @@ const performSearch = async () => {
     if (res.ok) {
       nodes.value = await res.json() || []
     } else {
-      message.value = 'Eroare la cautare.'
+      message.value = 'Search error.'
       messageType.value = 'error'
     }
   } catch (err) {
-    console.error('Eroare la cautare:', err)
-    message.value = 'Eroare de conexiune la cautare.'
+    console.error('Search error:', err)
+    message.value = 'Search connection error.'
     messageType.value = 'error'
   }
 }
@@ -234,7 +234,7 @@ const performSearch = async () => {
 const startCrawl = async () => {
   if (!targetUrl.value) return
   loading.value = true
-  message.value = 'Se adauga in coada...'
+  message.value = 'Adding to queue...'
   messageType.value = 'info'
   
   try {
@@ -245,17 +245,17 @@ const startCrawl = async () => {
     })
     
     if (res.ok) {
-      message.value = 'URL adaugat cu succes in coada de scanare!'
+      message.value = 'URL successfully added to the crawl queue!'
       messageType.value = 'info'
       targetUrl.value = ''
       setTimeout(() => { message.value = '' }, 3000)
     } else {
       const text = await res.text()
-      message.value = `Eroare: ${text || res.statusText}`
+      message.value = `Error: ${text || res.statusText}`
       messageType.value = 'error'
     }
   } catch (err) {
-    message.value = 'Eroare de conexiune la API.'
+    message.value = 'API connection error.'
     messageType.value = 'error'
   } finally {
     loading.value = false
@@ -279,7 +279,7 @@ const drawGraph = () => {
   })
 
   const visNodes = nodes.value.map(n => {
-    // Culoarea principala = categorie, cu fallback pe status HTTP
+    // Primary color = category, with fallback on HTTP status
     const catColor = CATEGORY_COLORS[n.category] || CATEGORY_COLORS.unknown
     let borderColor = catColor
     if (n.status_code === 0 && n.processing_status === 'completed') borderColor = '#ff3333'
@@ -288,10 +288,10 @@ const drawGraph = () => {
     const degree = nodeDegrees[n.url] || 0
     const size = Math.min(15 + (degree * 2.5), 60)
 
-    const cleanTitle = n.title ? n.title : 'Sursa Inaccesibila / Secundara'
+    const cleanTitle = n.title ? n.title : 'Inaccessible / Secondary Source'
     const shortLabel = cleanTitle.length > 25 ? cleanTitle.substring(0, 25) + '...' : cleanTitle
     const catLabel = CATEGORY_LABELS[n.category] || n.category
-    const tooltipText = `${cleanTitle}\nURL: ${n.url}\nCategorie: ${catLabel}\nStatus HTTP: ${n.status_code} | Legaturi: ${degree}\n(Dublu click pentru a copia link-ul)`
+    const tooltipText = `${cleanTitle}\nURL: ${n.url}\nCategory: ${catLabel}\nHTTP Status: ${n.status_code} | Links: ${degree}\n(Double-click to copy URL)`
 
     return {
       id: n.url,
@@ -361,9 +361,9 @@ const drawGraph = () => {
     if (params.nodes.length > 0) {
       const clickedUrl = params.nodes[0]
       navigator.clipboard.writeText(clickedUrl).then(() => {
-        showToast('✅ URL copiat în clipboard!')
+        showToast('✅ URL copied to clipboard!')
       }).catch(() => {
-        showToast('❌ Nu am putut copia URL-ul.')
+        showToast('❌ Failed to copy URL.')
       })
     }
   })
@@ -407,11 +407,11 @@ onUnmounted(() => {
           <span class="dot"></span>
           <span class="status-text">DB: {{ status.db_connected ? 'OK' : 'OFF' }}</span>
           <span class="divider">|</span>
-          <span class="nodes-count">Scanate: {{ status.nodes_crawled }}</span>
+          <span class="nodes-count">Crawled: {{ status.nodes_crawled }}</span>
           <span class="divider">|</span>
-          <span class="pending-count">In Coada: {{ status.pending_nodes }}</span>
+          <span class="pending-count">In Queue: {{ status.pending_nodes }}</span>
           <span class="divider">|</span>
-          <span class="workers-count">Workeri: {{ status.active_workers }}</span>
+          <span class="workers-count">Workers: {{ status.active_workers }}</span>
           
           <span v-if="isLoggedIn" class="divider">|</span>
           <span v-if="isLoggedIn" style="color: #4da6ff; font-weight: bold;">👤 {{ userEmail }}</span>
@@ -425,16 +425,16 @@ onUnmounted(() => {
       
       <div v-if="!isLoggedIn" class="auth-container">
         <div class="auth-box">
-          <h2>{{ authMode === 'login' ? 'Login' : 'Inregistrare' }}</h2>
+          <h2>{{ authMode === 'login' ? 'Login' : 'Register' }}</h2>
           <div class="input-group">
             <input v-model="authEmail" type="email" placeholder="Email" @keyup.enter="handleAuth" />
           </div>
           <div class="input-group" style="margin-top: 15px;">
-            <input v-model="authPassword" type="password" placeholder="Parola" @keyup.enter="handleAuth" />
+            <input v-model="authPassword" type="password" placeholder="Password" @keyup.enter="handleAuth" />
           </div>
-          <button @click="handleAuth" style="margin-top: 20px; width: 100%;">{{ authMode === 'login' ? 'Intra in cont' : 'Creeaza cont' }}</button>
+          <button @click="handleAuth" style="margin-top: 20px; width: 100%;">{{ authMode === 'login' ? 'Sign In' : 'Create Account' }}</button>
           <p class="auth-toggle" @click="authMode = authMode === 'login' ? 'register' : 'login'">
-            {{ authMode === 'login' ? 'Nu ai cont? Inregistreaza-te' : 'Ai deja cont? Intra' }}
+            {{ authMode === 'login' ? "Don't have an account? Register" : 'Already have an account? Sign In' }}
           </p>
           <p v-if="authMessage" class="info-message">{{ authMessage }}</p>
         </div>
@@ -444,7 +444,7 @@ onUnmounted(() => {
 
         <section class="crawl-form">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-            <h2 style="margin: 0;">Adauga URL la coada de scanare</h2>
+            <h2 style="margin: 0;">Add URL to crawl queue</h2>
             <div v-if="userRole === 'admin'" style="display: flex; gap: 8px;">
               <span style="color: #888; font-size: 0.8rem; align-self: center; margin-right: 5px;">EXPORT ADMIN:</span>
               <button @click="downloadExport('csv')" style="padding: 5px 15px; font-size: 0.8rem; background: #27ae60;">CSV</button>
@@ -461,24 +461,24 @@ onUnmounted(() => {
               @keyup.enter="startCrawl"
             />
             <button @click="startCrawl" :disabled="loading">
-              <span v-if="loading">Trimitere...</span>
-              <span v-else>Adauga 🚀</span>
+              <span v-if="loading">Submitting...</span>
+              <span v-else>Add 🚀</span>
             </button>
           </div>
           <p v-if="message" class="info-message" :class="{ 'error-message': messageType === 'error' }">{{ message }}</p>
         </section>
 
         <div class="view-controls">
-          <button class="toggle-btn" :class="{ active: !isGraphView }" @click="isGraphView = false">📄 Listă / Căutare</button>
-          <button class="toggle-btn" :class="{ active: isGraphView }" @click="isGraphView = true">🕸️ Grafic Rețea</button>
+          <button class="toggle-btn" :class="{ active: !isGraphView }" @click="isGraphView = false">📄 List / Search</button>
+          <button class="toggle-btn" :class="{ active: isGraphView }" @click="isGraphView = true">🕸️ Network Graph</button>
         </div>
 
-        <!-- Toast notification pentru clipboard -->
+        <!-- Toast notification for clipboard -->
         <transition name="toast-fade">
           <div v-if="toast" class="toast">{{ toast }}</div>
         </transition>
 
-        <!-- Vizualizarea Lista + Cautare -->
+        <!-- List + Search view -->
         <div v-if="!isGraphView">
           <section class="search-form">
             <div class="input-group search-group">
@@ -486,7 +486,7 @@ onUnmounted(() => {
               <input 
                 v-model="searchQuery" 
                 type="text" 
-                placeholder="Cauta in textul paginilor scanate..." 
+                placeholder="Search crawled page content..." 
                 @keyup.enter="performSearch"
                 @input="performSearch"
               />
@@ -496,7 +496,7 @@ onUnmounted(() => {
                 class="cat-btn"
                 :class="{ active: selectedCategory === 'all' }"
                 @click="selectedCategory = 'all'"
-              >Toate</button>
+              >All</button>
               <button
                 v-for="cat in allCategories"
                 :key="cat"
@@ -510,7 +510,7 @@ onUnmounted(() => {
 
           <section class="nodes-list">
             <div class="section-header">
-              <h2>{{ isSearching ? 'Rezultatele Cautarii' : 'Ultimele Site-uri Descoperite' }}
+              <h2>{{ isSearching ? 'Search Results' : 'Recently Discovered Sites' }}
                 <span v-if="selectedCategory !== 'all'" class="filter-tag">• {{ CATEGORY_LABELS[selectedCategory] }}</span>
               </h2>
               <button class="btn-refresh" @click="fetchNodes" v-if="!isSearching">🔄</button>
@@ -523,10 +523,10 @@ onUnmounted(() => {
                   <tr>
                     <th class="col-id">ID</th>
                     <th>URL</th>
-                    <th>Titlu / Status Procesare</th>
-                    <th class="col-cat">Categorie</th>
+                    <th>Title / Processing Status</th>
+                    <th class="col-cat">Category</th>
                     <th class="col-server">Server</th>
-                    <th class="col-status">Cod</th>
+                    <th class="col-status">Code</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -535,7 +535,7 @@ onUnmounted(() => {
                     <td class="url">{{ node.url }}</td>
                     <td>
                       <div class="title-row">
-                        <span class="title">{{ node.title || 'In asteptare...' }}</span>
+                        <span class="title">{{ node.title || 'Pending...' }}</span>
                         <span class="status-pill" :class="node.processing_status.replace('_', '-')">
                           {{ node.processing_status }}
                         </span>
@@ -555,7 +555,7 @@ onUnmounted(() => {
                     </td>
                   </tr>
                   <tr v-if="filteredNodes.length === 0">
-                    <td colspan="6" class="empty-state">Nu există date încă. Introdu un URL pentru a începe.</td>
+                    <td colspan="6" class="empty-state">No data yet. Enter a URL to get started.</td>
                   </tr>
                 </tbody>
               </table>
@@ -563,15 +563,15 @@ onUnmounted(() => {
           </section>
         </div>
 
-        <!-- Vizualizarea Grafica -->
+        <!-- Graph view -->
         <div v-if="isGraphView" class="graph-section">
           <div class="section-header">
-            <h2>Harta Interactivă a Rețelei</h2>
+            <h2>Interactive Network Map</h2>
             <div class="graph-actions">
               <button class="btn-action" @click="togglePhysics" :class="{ off: !physicsEnabled }">
-                {{ physicsEnabled ? '❄️ Îngheață Mișcarea' : '🔥 Pornește Fizica' }}
+                {{ physicsEnabled ? '❄️ Freeze Physics' : '🔥 Enable Physics' }}
               </button>
-              <button class="btn-action primary" @click="drawGraph">🔄 Reîncarcă DB</button>
+              <button class="btn-action primary" @click="drawGraph">🔄 Reload Data</button>
             </div>
           </div>
           <div class="legend">

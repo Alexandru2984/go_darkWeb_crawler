@@ -1,82 +1,97 @@
-# 🕸️ Onion Spider Sandbox
+# 🕸️ Onion Spider
 
-Un Dark Web Crawler (Onion Spider) construit cu accent pe performanță, concurență și siguranță (sandbox). Proiectul explorează rețeaua Tor extrăgând informații și legături între site-urile `.onion`, fără a executa cod periculos.
+A dark web crawler built for performance, concurrency, and safety. Explores the Tor network by extracting information and links between `.onion` sites — without executing any dangerous code.
 
-## 🏗️ Arhitectura Proiectului
+## 🏗️ Architecture
 
-Acest proiect este împărțit în două componente principale:
+Two main components:
 
 1. **Backend (Go + PostgreSQL)**
-   - **API Server:** Expune datele colectate printr-un REST API pentru a fi consumate de interfața web.
-   - **Crawler Engine:** Un sistem concurent bazat pe *worker pools* care rutează traficul HTTP printr-un proxy SOCKS5 (Tor) pentru a descărca și analiza (scrape) codul sursă HTML brut al site-urilor `.onion`.
-   - **Bază de date:** PostgreSQL este folosit pentru a stoca nodurile descoperite, metadatele și graful legăturilor dintre site-uri.
+   - **API Server:** Exposes collected data via a REST API consumed by the web interface.
+   - **Crawler Engine:** A concurrent worker-pool system that routes all HTTP traffic through a SOCKS5 proxy (Tor) to download and scrape raw HTML from `.onion` sites.
+   - **Database:** PostgreSQL stores discovered nodes, metadata, content hashes, categories, and the link graph between sites.
 
 2. **Frontend (Vue 3 + Vite)**
-   - Un dashboard interactiv, compilat static și servit via Nginx.
-   - Oferă vizibilitate în timp real asupra statusului crawler-ului și statisticilor rețelei descoperite.
+   - A statically compiled interactive dashboard served via Nginx.
+   - Provides real-time visibility into crawler status, discovered sites, and an interactive network graph.
 
-## 🛡️ Principii de Siguranță (Sandbox)
+## 🛡️ Safety Principles (Sandbox)
 
-Pentru a proteja serverul și a asigura o navigare pasivă:
-- **Izolare trafic:** Toate request-urile externe se fac exclusiv prin proxy-ul Tor (SOCKS5).
-- **Fără execuție JavaScript:** Crawler-ul citește doar răspunsul HTTP de tip `text/html`. Nu folosește browsere headless.
-- **Fără descărcări media:** Se ignoră imaginile, arhivele sau executabilele.
+To protect the server and ensure passive browsing:
+- **Traffic isolation:** All external requests go exclusively through the Tor SOCKS5 proxy.
+- **No JavaScript execution:** The crawler only reads `text/html` HTTP responses. No headless browsers.
+- **No media downloads:** Images, archives, and executables are ignored.
 
-## 🚀 Tehnologii Folosite
+## 🔒 Security Features
 
-- **Limbaj Backend:** Go (Golang)
-- **Limbaj Frontend:** JavaScript / Vue 3 (Composition API)
-- **Bază de Date:** PostgreSQL
-- **Web Server / Proxy:** Nginx
-- **Router Go:** `go-chi/chi`
-- **Scraping Go:** `goquery` (urmează a fi implementat)
+- JWT-based authentication with role system (user / admin)
+- Per-IP rate limiting on all endpoints
+- API key middleware (configurable via `API_KEY` env var)
+- Constant-time API key comparison (timing attack prevention)
+- All user-controlled values sanitized before logging (log injection prevention)
+- Formula injection prevention in CSV/XLSX exports
+- Content size limits on all request bodies
+- HTTP server bound to `127.0.0.1` only (nginx reverse proxy)
+- HSTS and security headers via nginx
 
-## 🛠️ Structura Directoarelor
+## 🚀 Tech Stack
+
+- **Backend:** Go (Golang)
+- **Frontend:** JavaScript / Vue 3 (Composition API)
+- **Database:** PostgreSQL
+- **Web Server:** Nginx
+- **Router:** `go-chi/chi`
+- **HTML Scraping:** `goquery`
+- **Graph Visualization:** `vis-network`
+- **Exports:** CSV, JSON, NDJSON, XLSX, PDF, GraphML
+
+## 🛠️ Directory Structure
 
 ```text
 onion-spider/
 ├── backend/
 │   ├── cmd/
-│   │   ├── api/        # Punctul de intrare pentru REST API
-│   │   └── crawler/    # Punctul de intrare pentru motorul de crawling
+│   │   ├── api/              # REST API entry point
+│   │   └── crawler/          # Standalone crawler entry point
 │   └── internal/
-│       ├── crawler/    # Logica de rețea, SOCKS5 și parsare HTML
-│       ├── database/   # Conexiunea la PostgreSQL și query-uri
-│       ├── models/     # Structurile de date (Nodes, Edges)
-│       └── proxy/      # Configurările pentru rețeaua Tor
+│       ├── auth/             # JWT authentication
+│       ├── crawler/          # Engine, scraper, robots.txt, sitemap, categorizer
+│       ├── database/         # PostgreSQL connection and queries
+│       ├── email/            # Email verification
+│       └── proxy/            # Tor SOCKS5 client + circuit controller
 ├── frontend/
 │   ├── public/
 │   ├── src/
-│   │   ├── components/
-│   │   ├── App.vue     # Interfața principală
+│   │   ├── App.vue           # Main application component
 │   │   └── main.js
 │   ├── package.json
 │   └── vite.config.js
 └── README.md
 ```
 
-## ⚙️ Cum să rulezi local (Dezvoltare)
+## ⚙️ Running Locally (Development)
 
-**1. Baza de Date**
-Asigură-te că ai PostgreSQL instalat și configurează un utilizator și o bază de date (ex. `onion_spider`). Actualizează DSN-ul în `backend/cmd/api/main.go`.
+**1. Database**
+Install PostgreSQL and create a database (e.g. `onion_spider`). Set `DATABASE_URL` in `backend/.env`.
 
-**2. Pornire API (Go)**
+**2. Start the API (Go)**
 ```bash
 cd backend
+cp .env.example .env   # fill in your values
 go run ./cmd/api/main.go
-# Serverul va porni pe portul 8888
+# Server starts on port 8900 by default
 ```
 
-**3. Pornire Frontend (Vue)**
+**3. Start the Frontend (Vue)**
 ```bash
 cd frontend
 npm install
 npm run dev
-# Dashboard-ul va fi disponibil pe portul 5173
+# Dashboard available at http://localhost:5173
 ```
 
-## 🌐 Deployment (Nginx)
+## 🌐 Production Deployment (Nginx)
 
-Proiectul este configurat să ruleze în producție cu Nginx acționând ca reverse proxy:
-- Servește fișierele statice din `frontend/dist/` pe portul 80/443.
-- Redirecționează request-urile `/api/*` către binarul Go care rulează pe portul `8888`.
+The project is configured to run in production with Nginx as a reverse proxy:
+- Serves static files from `frontend/dist/` on ports 80/443.
+- Proxies `/api/*` requests to the Go binary running on port `8900`.

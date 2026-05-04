@@ -10,9 +10,9 @@ import (
 )
 
 // ErrInvalidRecipient se returneaza cand adresa destinatar e suspecta (CRLF injection).
-var ErrInvalidRecipient = errors.New("adresa email invalida")
+var ErrInvalidRecipient = errors.New("invalid email address")
 
-// SendVerificationEmail trimite un link de confirmare. Protejeaza impotriva:
+// SendVerificationEmail sends a confirmation link. Protects against:
 //   - header injection: refuza orice CR/LF in adresa
 //   - URL hardcodat: foloseste VERIFY_URL_BASE, fallback pe CORS_ORIGIN
 //
@@ -41,8 +41,8 @@ func SendVerificationEmail(to, token string) error {
 	verifyLink := fmt.Sprintf("%s/api/auth/verify?token=%s", strings.TrimRight(base, "/"), token)
 
 	if smtpHost == "" || smtpUser == "" {
-		// Dev mode: NU logam tokenul in clar in prod — doar spunem ca am fi trimis.
-		log.Printf("[email] SMTP neconfigurat — email de verificare NEtrimis catre %s", to)
+		// Dev mode: do NOT log the token in plain text in prod — just say we would have sent it.
+		log.Printf("[email] SMTP not configured — verification email NOT sent to %s", to)
 		return nil
 	}
 
@@ -52,7 +52,7 @@ func SendVerificationEmail(to, token string) error {
 	msg := []byte(fmt.Sprintf(
 		"From: %s\r\n"+
 			"To: %s\r\n"+
-			"Subject: Confirmare cont Onion Spider\r\n"+
+			"Subject: Onion Spider account confirmation\r\n"+
 			"MIME-Version: 1.0\r\n"+
 			"Content-Type: text/plain; charset=UTF-8\r\n"+
 			"\r\n"+

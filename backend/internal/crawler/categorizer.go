@@ -2,7 +2,7 @@ package crawler
 
 import "strings"
 
-// Categoriile recunoscute de auto-categorizator
+// Recognized categories by the auto-categorizer
 const (
 	CategoryMarketplace  = "marketplace"
 	CategoryForum        = "forum"
@@ -15,14 +15,14 @@ const (
 	CategoryUnknown      = "unknown"
 )
 
-// categoryRule contine keyword-urile care identifica o categorie.
-// Scorul este numarul de keyword-uri gasite in titlu+continut (case-insensitive).
+// categoryRule holds the keywords that identify a category.
+// The score is the number of keywords found in title+content (case-insensitive).
 type categoryRule struct {
 	category string
 	keywords []string
 }
 
-// Ordinea conteaza: mai specifice first (marketplace > forum > wiki etc.)
+// Order matters: more specific first (marketplace > forum > wiki etc.)
 var categoryRules = []categoryRule{
 	{
 		category: CategoryMarketplace,
@@ -83,14 +83,14 @@ var categoryRules = []categoryRule{
 	},
 }
 
-// Categorize analizeaza titlul si continutul unei pagini si returneaza categoria cea mai probabila.
-// Algoritmul numara keyword matches per categorie si o alege pe cea cu scorul maxim.
-// Daca nicio categorie nu atinge pragul minim (2 matches), returneaza "unknown".
+// Categorize analyzes the title and content of a page and returns the most likely category.
+// The algorithm counts keyword matches per category and picks the one with the highest score.
+// If no category reaches the minimum threshold (2 matches), it returns "unknown".
 func Categorize(title, content string) string {
 	combined := strings.ToLower(title + " " + content)
 
 	bestCategory := CategoryUnknown
-	bestScore := 1 // prag minim: cel putin 2 matches pentru a accepta o categorie
+	bestScore := 1 // minimum threshold: at least 2 matches to accept a category
 
 	for _, rule := range categoryRules {
 		score := 0

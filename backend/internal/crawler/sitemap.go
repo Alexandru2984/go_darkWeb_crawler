@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// sitemapIndex reprezinta un fisier sitemap care listeaza alte fisiere sitemap
+// sitemapIndex represents a sitemap file that lists other sitemap files
 type sitemapIndex struct {
 	XMLName  xml.Name      `xml:"sitemapindex"`
 	Sitemaps []sitemapLoc  `xml:"sitemap"`
@@ -20,7 +20,7 @@ type sitemapLoc struct {
 	Loc string `xml:"loc"`
 }
 
-// urlSet reprezinta un fisier sitemap standard cu URL-uri de pagini
+// urlSet represents a standard sitemap file with page URLs
 type urlSet struct {
 	XMLName xml.Name   `xml:"urlset"`
 	URLs    []urlEntry `xml:"url"`
@@ -30,9 +30,9 @@ type urlEntry struct {
 	Loc string `xml:"loc"`
 }
 
-// FetchSitemapURLs descarca /sitemap.xml de la un host onion si returneaza URL-urile .onion gasite.
-// Suporta sitemapindex (un nivel de recursie) + urlset standard.
-// Fail-open: returneaza lista goala daca nu exista sitemap sau eroare.
+// FetchSitemapURLs downloads /sitemap.xml from an onion host and returns the .onion URLs found.
+// Supports sitemapindex (one level of recursion) + standard urlset.
+// Fail-open: returns an empty list if the sitemap doesn't exist or on error.
 func FetchSitemapURLs(ctx context.Context, client *http.Client, siteURL string) []string {
 	parsed, err := url.Parse(siteURL)
 	if err != nil {
@@ -43,8 +43,8 @@ func FetchSitemapURLs(ctx context.Context, client *http.Client, siteURL string) 
 	return fetchAndParseSitemap(ctx, client, sitemapURL, true)
 }
 
-// fetchAndParseSitemap descarca un URL de sitemap si extrage URL-urile onion.
-// recurse=true permite un singur nivel de recursie pentru sitemapindex.
+// fetchAndParseSitemap downloads a sitemap URL and extracts onion URLs.
+// recurse=true allows a single level of recursion for sitemapindex.
 func fetchAndParseSitemap(ctx context.Context, client *http.Client, sitemapURL string, recurse bool) []string {
 	if ctx == nil {
 		ctx = context.Background()
@@ -76,7 +76,7 @@ func fetchAndParseSitemap(ctx context.Context, client *http.Client, sitemapURL s
 
 	var result []string
 
-	// Incearcam mai intai sitemapindex
+	// Try sitemapindex first
 	var idx sitemapIndex
 	if err := xml.Unmarshal(body, &idx); err == nil && len(idx.Sitemaps) > 0 {
 		if recurse {
@@ -85,7 +85,7 @@ func fetchAndParseSitemap(ctx context.Context, client *http.Client, sitemapURL s
 					break
 				}
 				if isOnionURL(sm.Loc) {
-					sub := fetchAndParseSitemap(ctx, client, sm.Loc, false) // fara recursie suplimentara
+					sub := fetchAndParseSitemap(ctx, client, sm.Loc, false) // no further recursion
 					result = append(result, sub...)
 					if len(result) >= maxSitemapURLs {
 						result = result[:maxSitemapURLs]
@@ -97,10 +97,10 @@ func fetchAndParseSitemap(ctx context.Context, client *http.Client, sitemapURL s
 		return result
 	}
 
-	// Incercam urlset standard
+	// Try standard urlset
 	var us urlSet
 	if err := xml.Unmarshal(body, &us); err != nil {
-		log.Printf("[Sitemap] Nu am putut parsa %s: %v", sitemapURL, err)
+		log.Printf("[Sitemap] Could not parse %s: %v", sitemapURL, err)
 		return nil
 	}
 
@@ -115,7 +115,7 @@ func fetchAndParseSitemap(ctx context.Context, client *http.Client, sitemapURL s
 	return result
 }
 
-// isOnionURL verifica daca un URL apartine unui domeniu .onion
+// isOnionURL checks whether a URL belongs to a .onion domain
 func isOnionURL(rawURL string) bool {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {

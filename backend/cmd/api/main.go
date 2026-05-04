@@ -143,9 +143,9 @@ const (
 	dbRoleContextKey contextKey = "db_role"
 )
 
-// jwtMiddleware extrage claims-urile din Authorization header daca exista si sunt valide.
-// Fara header: pass-through (endpointurile publice functioneaza).
-// Header prezent dar invalid: 401 (nu lasam tokene forge sa treaca ca unauth).
+// jwtMiddleware extracts claims from the Authorization header if present and valid.
+// No header: pass-through (public endpoints work).
+// Header present but invalid: 401 (do not allow forged tokens to pass as unauthenticated).
 func jwtMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
@@ -156,7 +156,7 @@ func jwtMiddleware(next http.Handler) http.Handler {
 		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
 		claims, err := auth.ValidateToken(tokenStr)
 		if err != nil {
-			writeJSONError(w, http.StatusUnauthorized, "Token invalid sau expirat")
+			writeJSONError(w, http.StatusUnauthorized, "Invalid or expired token")
 			return
 		}
 		ctx := context.WithValue(r.Context(), userContextKey, claims)
@@ -167,7 +167,7 @@ func jwtMiddleware(next http.Handler) http.Handler {
 func requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := r.Context().Value(userContextKey).(*auth.Claims); !ok {
-			writeJSONError(w, http.StatusUnauthorized, "Necesita autentificare")
+			writeJSONError(w, http.StatusUnauthorized, "Authentication required")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -188,7 +188,7 @@ func loadDBRole(db *database.DB) func(http.Handler) http.Handler {
 			role, err := db.GetUserRole(uid)
 			if err != nil {
 				log.Printf("[ERROR] loadDBRole uid=%d: %v", uid, err)
-				writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
+				writeJSONError(w, http.StatusInternalServerError, "Internal error")
 				return
 			}
 			ctx := context.WithValue(r.Context(), dbRoleContextKey, role)
@@ -202,11 +202,11 @@ func loadDBRole(db *database.DB) func(http.Handler) http.Handler {
 func requireAdminDB(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if getUserID(r) == 0 {
-			writeJSONError(w, http.StatusUnauthorized, "Necesita autentificare")
+			writeJSONError(w, http.StatusUnauthorized, "Authentication required")
 			return
 		}
 		if !isAdmin(r) {
-			writeJSONError(w, http.StatusForbidden, "Necesita rol admin")
+			writeJSONError(w, http.StatusForbidden, "Admin role required")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -231,12 +231,12 @@ func isAdmin(r *http.Request) bool {
 
 func main() {
 	if err := godotenv.Load(); err != nil {
-		log.Println("⚠️  Nu am gasit .env, folosesc variabilele din sistem")
+		log.Println("⚠️  No .env file found, using system environment variables")
 	}
 
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		log.Fatal("FATAL: lipseste DATABASE_URL")
+		log.Fatal("FATAL: DATABASE_URL is missing")
 	}
 
 	// Forteaza incarcarea JWT_SECRET la pornire — log.Fatal daca lipseste sau e slab.
@@ -281,7 +281,7 @@ func main() {
 		MaxAge:         300,
 	}))
 
-	// Rate limiters: separat per tip de operatie.
+	// Rate limiters: separate per operation type.
 	crawlLim := newCrawlLimiter(20, time.Minute)      // /api/crawl*, /api/recrawl
 	searchLim := newCrawlLimiter(60, time.Minute)     // /api/search
 	loginLim := newCrawlLimiter(5, time.Minute)       // /api/auth/login
@@ -290,17 +290,17 @@ func main() {
 
 	dbConn, err := database.InitDB(dsn)
 	if err != nil {
-		log.Fatalf("FATAL: conectare DB: %v", err)
+		log.Fatalf("FATAL: DB connection: %v", err)
 	}
 
 	// =========================================================================
-	// AUTH ENDPOINTS (publice, rate-limited, audit-logged)
+	// AUTH ENDPOINTS (public, rate-limited, audit-logged)
 	// =========================================================================
 
 	r.Post("/api/auth/register", func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
 		if !registerLim.allow(ip) {
-			writeJSONError(w, http.StatusTooManyRequests, "Prea multe inregistrari de la acest IP. Incearca din nou mai tarziu.")
+			writeJSONError(w, http.StatusTooManyRequests, "Too many registrations from this IP. Please try again later.")
 			return
 		}
 		var req struct {
@@ -311,12 +311,12 @@ func main() {
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&req); err != nil {
-			writeJSONError(w, http.StatusBadRequest, "Date invalide")
+			writeJSONError(w, http.StatusBadRequest, "Invalid data")
 			return
 		}
 		req.Email = database.NormalizeEmail(req.Email)
 		if !emailRegex.MatchString(req.Email) || len(req.Email) > 254 {
-			writeJSONError(w, http.StatusBadRequest, "Email invalid")
+			writeJSONError(w, http.StatusBadRequest, "Invalid email")
 			return
 		}
 		if err := validatePassword(req.Password); err != nil {
@@ -324,16 +324,16 @@ func main() {
 			return
 		}
 
-		// Rate-limit per adresa destinatar — protejeaza cota Gmail impotriva abuzului.
-		// Max 3 tentative de register la acelasi email per ora.
+		// Rate-limit per recipient address — protects Gmail quota from abuse.
+		// Max 3 register attempts per email per hour.
 		if n, err := dbConn.CountRecentAuthEvents("register_ok", req.Email, 60); err == nil && n >= 3 {
 			log.Printf("[AUDIT] register_blocked ip=%s email=%s count=%d", sanitizeForLog(ip), sanitizeForLog(req.Email), n)
-			writeJSONError(w, http.StatusTooManyRequests, "Acest email a primit deja prea multe emailuri de verificare. Incearca peste o ora.")
+			writeJSONError(w, http.StatusTooManyRequests, "This email has already received too many verification emails. Try again in an hour.")
 			return
 		}
 
-		// Rol default: user. Bootstrap-ul de admin e controlat prin ADMIN_EMAIL
-		// si este permis DOAR daca nu exista inca niciun admin in sistem.
+		// Default role: user. Admin bootstrap is controlled via ADMIN_EMAIL
+		// and is only allowed if no admin exists yet in the system.
 		role := "user"
 		adminEmail := database.NormalizeEmail(os.Getenv("ADMIN_EMAIL"))
 		if adminEmail != "" && req.Email == adminEmail {
@@ -345,7 +345,7 @@ func main() {
 
 		hash, err := auth.HashPassword(req.Password)
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "Parola nu poate fi procesata")
+			writeJSONError(w, http.StatusBadRequest, "Password cannot be processed")
 			return
 		}
 		token := auth.GenerateVerificationToken()
@@ -353,7 +353,7 @@ func main() {
 		if err := dbConn.CreateUser(req.Email, hash, role, token); err != nil {
 			log.Printf("[AUDIT] register_fail ip=%s email=%s: %v", sanitizeForLog(ip), sanitizeForLog(req.Email), err)
 			dbConn.LogAuthEvent("register_fail", req.Email, ip)
-			writeJSONError(w, http.StatusBadRequest, "Eroare: email deja folosit sau date invalide")
+			writeJSONError(w, http.StatusBadRequest, "Error: email already in use or invalid data")
 			return
 		}
 
@@ -362,19 +362,19 @@ func main() {
 
 		go func() {
 			if err := email.SendVerificationEmail(req.Email, token); err != nil {
-				log.Printf("[email] eroare trimitere catre %s: %v", sanitizeForLog(req.Email), err)
+				log.Printf("[email] send error to %s: %v", sanitizeForLog(req.Email), err)
 			}
 		}()
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]string{"message": "Cont creat! Verifica emailul."})
+		json.NewEncoder(w).Encode(map[string]string{"message": "Account created! Please check your email."})
 	})
 
 	r.Post("/api/auth/login", func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
 		if !loginLim.allow(ip) {
-			writeJSONError(w, http.StatusTooManyRequests, "Prea multe incercari de login. Incearca din nou in 1 minut.")
+			writeJSONError(w, http.StatusTooManyRequests, "Too many login attempts. Please try again in 1 minute.")
 			return
 		}
 		var req struct {
@@ -385,23 +385,23 @@ func main() {
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&req); err != nil {
-			writeJSONError(w, http.StatusBadRequest, "Date invalide")
+			writeJSONError(w, http.StatusBadRequest, "Invalid data")
 			return
 		}
 		req.Email = database.NormalizeEmail(req.Email)
 		if req.Email == "" || req.Password == "" {
-			writeJSONError(w, http.StatusBadRequest, "Email si parola obligatorii")
+			writeJSONError(w, http.StatusBadRequest, "Email and password are required")
 			return
 		}
 
-		// Account lockout: dupa 5 login_fail in 15min pe acelasi email → 15min timeout.
-		// Protejeaza impotriva brute-force distribuit pe mai multe IP-uri.
+		// Account lockout: after 5 login_fail in 15min for the same email → 15min timeout.
+		// Protects against distributed brute-force across multiple IPs.
 		if n, err := dbConn.CountRecentAuthEvents("login_fail", req.Email, 15); err == nil && n >= 5 {
 			// Ruleaza bcrypt oricum pentru a mentine timpul constant (evita detectia lockout-ului).
 			auth.CheckAgainstDummy(req.Password)
 			dbConn.LogAuthEvent("login_locked", req.Email, ip)
 			log.Printf("[AUDIT] login_locked ip=%s email=%s count=%d", sanitizeForLog(ip), sanitizeForLog(req.Email), n)
-			writeJSONError(w, http.StatusTooManyRequests, "Cont blocat temporar din cauza prea multor incercari esuate. Asteapta 15 minute.")
+			writeJSONError(w, http.StatusTooManyRequests, "Account temporarily locked due to too many failed attempts. Wait 15 minutes.")
 			return
 		}
 
@@ -410,7 +410,7 @@ func main() {
 			log.Printf("[ERROR] GetUserByEmail: %v", err)
 			// Rulam bcrypt ca sa pastram timpul constant chiar si pe eroare DB.
 			auth.CheckAgainstDummy(req.Password)
-			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
+			writeJSONError(w, http.StatusInternalServerError, "Internal error")
 			return
 		}
 		// TIMING ATTACK MITIGATION: chiar si pe user inexistent, rulam bcrypt
@@ -420,26 +420,26 @@ func main() {
 			auth.CheckAgainstDummy(req.Password)
 			dbConn.LogAuthEvent("login_fail", req.Email, ip)
 			log.Printf("[AUDIT] login_fail ip=%s email=%s reason=unknown_user", sanitizeForLog(ip), sanitizeForLog(req.Email))
-			writeJSONError(w, http.StatusUnauthorized, "Credentiale invalide")
+			writeJSONError(w, http.StatusUnauthorized, "Invalid credentials")
 			return
 		}
 		if !auth.CheckPasswordHash(req.Password, user.PasswordHash) {
 			dbConn.LogAuthEvent("login_fail", req.Email, ip)
 			log.Printf("[AUDIT] login_fail ip=%s email=%s reason=bad_password", sanitizeForLog(ip), sanitizeForLog(req.Email))
-			writeJSONError(w, http.StatusUnauthorized, "Credentiale invalide")
+			writeJSONError(w, http.StatusUnauthorized, "Invalid credentials")
 			return
 		}
 
 		if !user.IsVerified {
 			dbConn.LogAuthEvent("login_unverified", req.Email, ip)
-			writeJSONError(w, http.StatusForbidden, "Contul nu este verificat inca")
+			writeJSONError(w, http.StatusForbidden, "Account is not yet verified")
 			return
 		}
 
 		token, err := auth.GenerateToken(user.ID, user.Email, user.Role)
 		if err != nil {
-			log.Printf("[ERROR] generare JWT pentru %s: %v", sanitizeForLog(user.Email), err)
-			writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
+			log.Printf("[ERROR] JWT generation for %s: %v", sanitizeForLog(user.Email), err)
+			writeJSONError(w, http.StatusInternalServerError, "Internal error")
 			return
 		}
 
@@ -456,39 +456,39 @@ func main() {
 	r.Get("/api/auth/verify", func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
 		if !verifyLim.allow(ip) {
-			writeJSONError(w, http.StatusTooManyRequests, "Prea multe incercari. Incearca din nou in 1 minut.")
+			writeJSONError(w, http.StatusTooManyRequests, "Too many attempts. Please try again in 1 minute.")
 			return
 		}
 		token := r.URL.Query().Get("token")
 		if len(token) < 16 || len(token) > 128 {
-			writeJSONError(w, http.StatusBadRequest, "Token invalid")
+			writeJSONError(w, http.StatusBadRequest, "Invalid token")
 			return
 		}
 		// Nu trimitem tokenul direct in pagina ca plaintext — il punem intr-un input hidden
 		// dupa ce verificam ca are doar caractere safe pentru HTML (hex/base64 URL-safe).
 		if !tokenSafeRE.MatchString(token) {
-			writeJSONError(w, http.StatusBadRequest, "Token invalid")
+			writeJSONError(w, http.StatusBadRequest, "Invalid token")
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Robots-Tag", "noindex, nofollow")
-		fmt.Fprintf(w, `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Confirmare cont</title>
+		fmt.Fprintf(w, `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Account confirmation</title>
 <meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"></head>
 <body style="font-family:sans-serif;max-width:480px;margin:4rem auto;text-align:center">
-<h1>Confirma activarea contului</h1>
-<p>Apasa butonul de mai jos pentru a finaliza verificarea email-ului.</p>
+<h1>Confirm account activation</h1>
+<p>Click the button below to complete email verification.</p>
 <form method="POST" action="/api/auth/verify">
 <input type="hidden" name="token" value="%s">
-<button type="submit" style="padding:0.75rem 1.5rem;font-size:1rem;cursor:pointer">Confirma</button>
+<button type="submit" style="padding:0.75rem 1.5rem;font-size:1rem;cursor:pointer">Confirm</button>
 </form></body></html>`, token)
 	})
 
-	// POST /api/auth/verify — consuma efectiv tokenul (accepta body JSON sau form-encoded).
+	// POST /api/auth/verify — actually consumes the token (accepts JSON body or form-encoded).
 	r.Post("/api/auth/verify", func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
 		if !verifyLim.allow(ip) {
-			writeJSONError(w, http.StatusTooManyRequests, "Prea multe incercari. Incearca din nou in 1 minut.")
+			writeJSONError(w, http.StatusTooManyRequests, "Too many attempts. Please try again in 1 minute.")
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1024)
@@ -501,34 +501,34 @@ func main() {
 			dec := json.NewDecoder(r.Body)
 			dec.DisallowUnknownFields()
 			if err := dec.Decode(&req); err != nil {
-				writeJSONError(w, http.StatusBadRequest, "Body invalid")
+				writeJSONError(w, http.StatusBadRequest, "Invalid body")
 				return
 			}
 			token = req.Token
 		} else {
 			if err := r.ParseForm(); err != nil {
-				writeJSONError(w, http.StatusBadRequest, "Form invalid")
+				writeJSONError(w, http.StatusBadRequest, "Invalid form")
 				return
 			}
 			token = r.PostFormValue("token")
 		}
 		if len(token) < 16 || len(token) > 128 || !tokenSafeRE.MatchString(token) {
-			writeJSONError(w, http.StatusBadRequest, "Token invalid")
+			writeJSONError(w, http.StatusBadRequest, "Invalid token")
 			return
 		}
 		if err := dbConn.VerifyUser(token); err != nil {
 			log.Printf("[AUDIT] verify_fail ip=%s: %v", sanitizeForLog(ip), err)
-			writeJSONError(w, http.StatusBadRequest, "Token invalid, expirat sau deja folosit")
+			writeJSONError(w, http.StatusBadRequest, "Token invalid, expired or already used")
 			return
 		}
 		log.Printf("[AUDIT] verify_ok ip=%s", sanitizeForLog(ip))
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		w.Write([]byte(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Cont verificat</title></head><body style="font-family:sans-serif;max-width:480px;margin:4rem auto;text-align:center"><h1>Contul a fost verificat cu succes!</h1><p><a href="/">Inapoi la login</a></p></body></html>`))
+		w.Write([]byte(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Account verified</title></head><body style="font-family:sans-serif;max-width:480px;margin:4rem auto;text-align:center"><h1>Account successfully verified!</h1><p><a href="/">Back to login</a></p></body></html>`))
 	})
 
 	// =========================================================================
-	// STATUS (public — arata doar ca serverul e pornit; datele private cer auth)
+	// STATUS (public — only shows the server is running; private data requires auth)
 	// =========================================================================
 
 	engine := crawler.NewEngine(dbConn, torProxy, workers, maxDepth)
@@ -544,10 +544,10 @@ func main() {
 		30*time.Second,
 	)
 	if _, err := torCtrl.RenewCircuit(); err != nil {
-		log.Printf("⚠️  TorController: control port indisponibil, reinnoire circuit dezactivata: %v", err)
+		log.Printf("⚠️  TorController: control port unavailable, circuit renewal disabled: %v", err)
 	} else {
 		engine.TorCtrl = torCtrl
-		log.Println("✅ TorController activ")
+		log.Println("✅ TorController active")
 	}
 
 	engine.Start()
@@ -560,11 +560,11 @@ func main() {
 		for range ticker.C {
 			n, err := dbConn.ResetStuckCrawling(10 * time.Minute)
 			if err != nil {
-				log.Printf("[sweeper] ResetStuckCrawling: %v", err)
+				log.Printf("[sweeper] ResetStuckCrawling error: %v", err)
 				continue
 			}
 			if n > 0 {
-				log.Printf("[sweeper] recuperat %d noduri stuck in 'crawling'", n)
+				log.Printf("[sweeper] recovered %d nodes stuck in 'crawling'", n)
 			}
 		}
 	}()
@@ -581,11 +581,11 @@ func main() {
 		run := func() {
 			n, err := dbConn.PurgeOldAuditLogs(auditRetention)
 			if err != nil {
-				log.Printf("[retention] PurgeOldAuditLogs: %v", err)
+				log.Printf("[retention] PurgeOldAuditLogs error: %v", err)
 				return
 			}
 			if n > 0 {
-				log.Printf("[retention] sters %d entry-uri auth_audit mai vechi de %v", n, auditRetention)
+				log.Printf("[retention] deleted %d auth_audit entries older than %v", n, auditRetention)
 			}
 		}
 		run()
@@ -643,7 +643,7 @@ func main() {
 			nodes, err := dbConn.GetNodes(limit, offset, getUserID(r), isAdmin(r))
 			if err != nil {
 				log.Printf("[ERROR] GET /api/nodes: %v", err)
-				writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
+				writeJSONError(w, http.StatusInternalServerError, "Internal error")
 				return
 			}
 			json.NewEncoder(w).Encode(nodes)
@@ -653,17 +653,17 @@ func main() {
 			w.Header().Set("Content-Type", "application/json")
 			nodeURL := r.URL.Query().Get("url")
 			if nodeURL == "" {
-				writeJSONError(w, http.StatusBadRequest, "Parametrul 'url' este obligatoriu")
+				writeJSONError(w, http.StatusBadRequest, "Parameter 'url' is required")
 				return
 			}
 			node, err := dbConn.GetNodeByURL(nodeURL, getUserID(r), isAdmin(r))
 			if err != nil {
 				log.Printf("[ERROR] GET /api/node url=%s: %v", sanitizeForLog(nodeURL), err)
-				writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
+				writeJSONError(w, http.StatusInternalServerError, "Internal error")
 				return
 			}
 			if node == nil {
-				writeJSONError(w, http.StatusNotFound, "Nodul nu a fost gasit")
+				writeJSONError(w, http.StatusNotFound, "Node not found")
 				return
 			}
 			json.NewEncoder(w).Encode(node)
@@ -675,7 +675,7 @@ func main() {
 			edges, err := dbConn.GetEdges(limit, offset, getUserID(r), isAdmin(r))
 			if err != nil {
 				log.Printf("[ERROR] GET /api/edges: %v", err)
-				writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
+				writeJSONError(w, http.StatusInternalServerError, "Internal error")
 				return
 			}
 			json.NewEncoder(w).Encode(edges)
@@ -685,23 +685,23 @@ func main() {
 			w.Header().Set("Content-Type", "application/json")
 			ip := clientIP(r)
 			if !searchLim.allow(ip) {
-				writeJSONError(w, http.StatusTooManyRequests, "Rate limit depasit — max 60 cautari/minut")
+				writeJSONError(w, http.StatusTooManyRequests, "Rate limit exceeded — max 60 searches/minute")
 				return
 			}
 			q := r.URL.Query().Get("q")
 			if q == "" {
-				writeJSONError(w, http.StatusBadRequest, "Parametrul 'q' este obligatoriu")
+				writeJSONError(w, http.StatusBadRequest, "Parameter 'q' is required")
 				return
 			}
 			if len(q) > 200 {
-				writeJSONError(w, http.StatusBadRequest, "Query prea lung (max 200 caractere)")
+				writeJSONError(w, http.StatusBadRequest, "Query too long (max 200 characters)")
 				return
 			}
 			category := r.URL.Query().Get("category")
 			nodes, err := dbConn.SearchNodes(q, category, getUserID(r), isAdmin(r))
 			if err != nil {
 				log.Printf("[ERROR] GET /api/search q=%s: %v", sanitizeForLog(q), err)
-				writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
+				writeJSONError(w, http.StatusInternalServerError, "Internal error")
 				return
 			}
 			json.NewEncoder(w).Encode(nodes)
@@ -710,7 +710,7 @@ func main() {
 		r.Post("/api/crawl", func(w http.ResponseWriter, r *http.Request) {
 			ip := clientIP(r)
 			if !isAdmin(r) && !crawlLim.allow(ip) {
-				writeJSONError(w, http.StatusTooManyRequests, "Prea multe cereri. Incearca din nou in cateva minute.")
+				writeJSONError(w, http.StatusTooManyRequests, "Too many requests. Please try again in a few minutes.")
 				return
 			}
 			var req struct {
@@ -720,33 +720,33 @@ func main() {
 			dec := json.NewDecoder(r.Body)
 			dec.DisallowUnknownFields()
 			if err := dec.Decode(&req); err != nil {
-				writeJSONError(w, http.StatusBadRequest, "Body invalid")
+				writeJSONError(w, http.StatusBadRequest, "Invalid body")
 				return
 			}
 			req.URL = normalizeOnionURL(req.URL)
 			if !isValidOnionURL(req.URL) {
-				writeJSONError(w, http.StatusBadRequest, "URL invalid: trebuie sa fie un URL .onion v3 valid (http/https)")
+				writeJSONError(w, http.StatusBadRequest, "Invalid URL: must be a valid .onion v3 URL (http/https)")
 				return
 			}
 			log.Printf("[AUDIT] POST /api/crawl ip=%s user=%d url=%s", sanitizeForLog(ip), getUserID(r), sanitizeForLog(req.URL))
 			if err := engine.AddToQueue(req.URL, getUserID(r)); err != nil {
 				if errors.Is(err, database.ErrBlacklisted) {
-					writeJSONError(w, http.StatusForbidden, "Domeniu blocat")
+					writeJSONError(w, http.StatusForbidden, "Domain blocked")
 					return
 				}
 				log.Printf("[ERROR] POST /api/crawl user=%d url=%s: %v", getUserID(r), sanitizeForLog(req.URL), err)
-				writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
+				writeJSONError(w, http.StatusInternalServerError, "Internal error")
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
-			json.NewEncoder(w).Encode(map[string]string{"message": "URL adaugat in coada de crawling"})
+			json.NewEncoder(w).Encode(map[string]string{"message": "URL added to the crawling queue"})
 		})
 
 		r.Post("/api/recrawl", func(w http.ResponseWriter, r *http.Request) {
 			ip := clientIP(r)
 			if !isAdmin(r) && !crawlLim.allow(ip) {
-				writeJSONError(w, http.StatusTooManyRequests, "Prea multe cereri. Incearca din nou in cateva minute.")
+				writeJSONError(w, http.StatusTooManyRequests, "Too many requests. Please try again in a few minutes.")
 				return
 			}
 			var req struct {
@@ -756,37 +756,37 @@ func main() {
 			dec := json.NewDecoder(r.Body)
 			dec.DisallowUnknownFields()
 			if err := dec.Decode(&req); err != nil {
-				writeJSONError(w, http.StatusBadRequest, "Body invalid")
+				writeJSONError(w, http.StatusBadRequest, "Invalid body")
 				return
 			}
 			req.URL = normalizeOnionURL(req.URL)
 			if !isValidOnionURL(req.URL) {
-				writeJSONError(w, http.StatusBadRequest, "URL invalid")
+				writeJSONError(w, http.StatusBadRequest, "Invalid URL")
 				return
 			}
 			found, canRequeue, err := dbConn.RequeueForCrawl(req.URL, getUserID(r))
 			if err != nil {
 				log.Printf("[ERROR] POST /api/recrawl url=%s: %v", sanitizeForLog(req.URL), err)
-				writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
+				writeJSONError(w, http.StatusInternalServerError, "Internal error")
 				return
 			}
 			if !found {
-				writeJSONError(w, http.StatusNotFound, "URL-ul nu exista in baza de date")
+				writeJSONError(w, http.StatusNotFound, "URL does not exist in the database")
 				return
 			}
 			if !canRequeue {
-				writeJSONError(w, http.StatusConflict, "Nodul este deja in curs de crawling")
+				writeJSONError(w, http.StatusConflict, "Node is already being crawled")
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
-			json.NewEncoder(w).Encode(map[string]string{"message": "Nodul a fost pus in coada pentru re-crawling"})
+			json.NewEncoder(w).Encode(map[string]string{"message": "Node has been queued for re-crawling"})
 		})
 
 		r.Post("/api/crawl/bulk", func(w http.ResponseWriter, r *http.Request) {
 			ip := clientIP(r)
 			if !isAdmin(r) && !crawlLim.allow(ip) {
-				writeJSONError(w, http.StatusTooManyRequests, "Prea multe cereri. Incearca din nou in cateva minute.")
+				writeJSONError(w, http.StatusTooManyRequests, "Too many requests. Please try again in a few minutes.")
 				return
 			}
 			var req struct {
@@ -796,11 +796,11 @@ func main() {
 			dec := json.NewDecoder(r.Body)
 			dec.DisallowUnknownFields()
 			if err := dec.Decode(&req); err != nil {
-				writeJSONError(w, http.StatusBadRequest, "Body invalid")
+				writeJSONError(w, http.StatusBadRequest, "Invalid body")
 				return
 			}
 			if len(req.URLs) == 0 || len(req.URLs) > 20 {
-				writeJSONError(w, http.StatusBadRequest, "Trimite 1-20 URL-uri in campul 'urls'")
+				writeJSONError(w, http.StatusBadRequest, "Send 1-20 URLs in the 'urls' field")
 				return
 			}
 			var added, skipped int
@@ -827,7 +827,7 @@ func main() {
 			summary, err := dbConn.GetQueueSummary(getUserID(r), isAdmin(r))
 			if err != nil {
 				log.Printf("[ERROR] GET /api/queue: %v", err)
-				writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
+				writeJSONError(w, http.StatusInternalServerError, "Internal error")
 				return
 			}
 			json.NewEncoder(w).Encode(summary)
@@ -838,7 +838,7 @@ func main() {
 			stats, err := dbConn.GetTimelineStats(getUserID(r), isAdmin(r))
 			if err != nil {
 				log.Printf("[ERROR] GET /api/stats/timeline: %v", err)
-				writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
+				writeJSONError(w, http.StatusInternalServerError, "Internal error")
 				return
 			}
 			if stats == nil {
@@ -856,14 +856,14 @@ func main() {
 			case userSem <- struct{}{}:
 				defer func() { <-userSem }()
 			default:
-				writeJSONError(w, http.StatusTooManyRequests, "Ai deja un export in desfasurare — asteapta sa se termine")
+				writeJSONError(w, http.StatusTooManyRequests, "You already have an export in progress — wait for it to finish")
 				return
 			}
 			select {
 			case exportGlobalSem <- struct{}{}:
 				defer func() { <-exportGlobalSem }()
 			default:
-				writeJSONError(w, http.StatusTooManyRequests, "Prea multe exporturi simultane pe server — incearca din nou in cateva momente")
+				writeJSONError(w, http.StatusTooManyRequests, "Too many simultaneous exports on the server — try again in a few moments")
 				return
 			}
 			format := r.URL.Query().Get("format")
@@ -946,7 +946,7 @@ func main() {
 				}
 				var xlsxBuf bytes.Buffer
 				if err := xf.Write(&xlsxBuf); err != nil {
-					writeJSONError(w, http.StatusInternalServerError, "Eroare la generarea XLSX")
+					writeJSONError(w, http.StatusInternalServerError, "Error generating XLSX")
 					return
 				}
 				w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -1003,7 +1003,7 @@ func main() {
 				}
 				var pdfBuf bytes.Buffer
 				if err := pf.Output(&pdfBuf); err != nil {
-					writeJSONError(w, http.StatusInternalServerError, "Eroare la generarea PDF")
+					writeJSONError(w, http.StatusInternalServerError, "Error generating PDF")
 					return
 				}
 				w.Header().Set("Content-Type", "application/pdf")
@@ -1060,7 +1060,7 @@ func main() {
 			domains, err := dbConn.GetBlacklist()
 			if err != nil {
 				log.Printf("[ERROR] GET /api/blacklist: %v", err)
-				writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
+				writeJSONError(w, http.StatusInternalServerError, "Internal error")
 				return
 			}
 			if domains == nil {
@@ -1077,47 +1077,47 @@ func main() {
 			dec := json.NewDecoder(r.Body)
 			dec.DisallowUnknownFields()
 			if err := dec.Decode(&req); err != nil {
-				writeJSONError(w, http.StatusBadRequest, "Body invalid")
+				writeJSONError(w, http.StatusBadRequest, "Invalid body")
 				return
 			}
 			req.Domain = strings.ToLower(strings.TrimSpace(req.Domain))
 			if req.Domain == "" {
-				writeJSONError(w, http.StatusBadRequest, "Campul 'domain' este obligatoriu")
+				writeJSONError(w, http.StatusBadRequest, "The 'domain' field is required")
 				return
 			}
 			if !strings.HasSuffix(req.Domain, ".onion") {
-				writeJSONError(w, http.StatusBadRequest, "Doar domeniile .onion pot fi blocate")
+				writeJSONError(w, http.StatusBadRequest, "Only .onion domains can be blocked")
 				return
 			}
 			if err := dbConn.AddBlacklist(req.Domain); err != nil {
 				log.Printf("[ERROR] POST /api/blacklist domain=%s: %v", sanitizeForLog(req.Domain), err)
-				writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
+				writeJSONError(w, http.StatusInternalServerError, "Internal error")
 				return
 			}
 			log.Printf("[AUDIT] blacklist_add admin_user=%d domain=%s", getUserID(r), sanitizeForLog(req.Domain))
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{"message": fmt.Sprintf("Domeniu blocat: %s", req.Domain)})
+			json.NewEncoder(w).Encode(map[string]string{"message": fmt.Sprintf("Domain blocked: %s", req.Domain)})
 		})
 
 		r.Delete("/api/blacklist/{domain}", func(w http.ResponseWriter, r *http.Request) {
 			domain := strings.ToLower(strings.TrimSpace(chi.URLParam(r, "domain")))
 			if domain == "" || !strings.HasSuffix(domain, ".onion") {
-				writeJSONError(w, http.StatusBadRequest, "Domeniu invalid: trebuie sa fie un domeniu .onion")
+				writeJSONError(w, http.StatusBadRequest, "Invalid domain: must be a .onion domain")
 				return
 			}
 			found, err := dbConn.DeleteBlacklist(domain)
 			if err != nil {
 				log.Printf("[ERROR] DELETE /api/blacklist domain=%s: %v", sanitizeForLog(domain), err)
-				writeJSONError(w, http.StatusInternalServerError, "Eroare interna")
+				writeJSONError(w, http.StatusInternalServerError, "Internal error")
 				return
 			}
 			if !found {
-				writeJSONError(w, http.StatusNotFound, "Domeniu negasit in blacklist")
+				writeJSONError(w, http.StatusNotFound, "Domain not found in blacklist")
 				return
 			}
 			log.Printf("[AUDIT] blacklist_remove admin_user=%d domain=%s", getUserID(r), sanitizeForLog(domain))
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{"message": fmt.Sprintf("Domeniu scos din blacklist: %s", domain)})
+			json.NewEncoder(w).Encode(map[string]string{"message": fmt.Sprintf("Domain removed from blacklist: %s", domain)})
 		})
 	})
 
@@ -1130,9 +1130,9 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("=== [API] Serverul asculta pe portul %s ===", port)
+		log.Printf("=== [API] Server listening on port %s ===", port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Eroare la pornirea serverului: %v", err)
+			log.Fatalf("Error starting server: %v", err)
 		}
 	}()
 
@@ -1140,15 +1140,15 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Oprire graceful initiata...")
+	log.Println("Graceful shutdown initiated...")
 	engine.Stop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Printf("Eroare la oprire server HTTP: %v", err)
+		log.Printf("Error shutting down HTTP server: %v", err)
 	}
-	log.Println("Server oprit.")
+	log.Println("Server stopped.")
 }
 
 // v3OnionHostRE accepta doar adrese onion v3 valide: 56 caractere base32 (a-z2-7) + ".onion"
@@ -1210,9 +1210,9 @@ func sanitizeCSVField(s string) string {
 	return s
 }
 
-// safeLogger inlocuieste middleware.Logger standard: loghează request-urile dar
-// OMITE query string-ul pentru path-urile sensibile (ex: /api/auth/verify care
-// primeste token in URL — ar ajunge in syslog/journald).
+// safeLogger replaces the standard middleware.Logger: logs requests but
+// OMITS the query string for sensitive paths (e.g. /api/auth/verify which
+// receives the token in the URL — would end up in syslog/journald).
 func safeLogger(sensitivePaths ...string) func(http.Handler) http.Handler {
 	sensitive := make(map[string]struct{}, len(sensitivePaths))
 	for _, p := range sensitivePaths {
@@ -1245,7 +1245,7 @@ func safeLogger(sensitivePaths ...string) func(http.Handler) http.Handler {
 // Previne parole triviale gen "passwordaa" sau "aaaaaaaaaa".
 func validatePassword(p string) error {
 	if len(p) < 10 || len(p) > 72 {
-		return errors.New("Parola trebuie sa aiba intre 10 si 72 caractere")
+		return errors.New("Password must be between 10 and 72 characters")
 	}
 	var hasLower, hasUpper, hasDigit, hasSymbol bool
 	for _, r := range p {
@@ -1267,7 +1267,7 @@ func validatePassword(p string) error {
 		}
 	}
 	if classes < 3 {
-		return errors.New("Parola trebuie sa combine cel putin 3 categorii: litere mici, litere mari, cifre, simboluri")
+		return errors.New("Password must combine at least 3 categories: lowercase, uppercase, digits, symbols")
 	}
 	return nil
 }
