@@ -298,6 +298,10 @@ func main() {
 	// =========================================================================
 
 	r.Post("/api/auth/register", func(w http.ResponseWriter, r *http.Request) {
+		if os.Getenv("ALLOW_REGISTRATION") != "true" {
+			writeJSONError(w, http.StatusForbidden, "Registration is currently closed")
+			return
+		}
 		ip := clientIP(r)
 		if !registerLim.allow(ip) {
 			writeJSONError(w, http.StatusTooManyRequests, "Too many registrations from this IP. Please try again later.")
