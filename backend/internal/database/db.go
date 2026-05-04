@@ -144,6 +144,7 @@ func migrate(db *sql.DB) error {
 		)`,
 		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS host TEXT`,
 		`CREATE INDEX IF NOT EXISTS idx_nodes_host ON nodes(host)`,
+		`CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_url)`,
 		`UPDATE nodes SET host = (regexp_match(url, '^https?://([^/?#]+)'))[1] WHERE host IS NULL`,
 		// Conditional trigger: recalculate search_vector only when title or content changes
 		`CREATE OR REPLACE FUNCTION nodes_search_vector_update() RETURNS trigger AS $$

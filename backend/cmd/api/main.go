@@ -778,6 +778,7 @@ func main() {
 				writeJSONError(w, http.StatusConflict, "Node is already being crawled")
 				return
 			}
+			log.Printf("[AUDIT] POST /api/recrawl ip=%s url=%s", ip, sanitizeForLog(req.URL))
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
 			json.NewEncoder(w).Encode(map[string]string{"message": "Node has been queued for re-crawling"})
@@ -996,6 +997,7 @@ func main() {
 					pf.CellFormat(cols[4].width, 6, n.Category, "1", 0, "L", true, 0, "")
 					pf.CellFormat(cols[5].width, 6, n.LastCrawledAt, "1", 1, "L", true, 0, "")
 					pdfRows++
+					fillRow = !fillRow
 					return nil
 				})
 				if err != nil {
