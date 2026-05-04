@@ -9,14 +9,14 @@ import (
 	"strings"
 )
 
-// ErrInvalidRecipient se returneaza cand adresa destinatar e suspecta (CRLF injection).
+// ErrInvalidRecipient is returned when the recipient address is suspicious (CRLF injection).
 var ErrInvalidRecipient = errors.New("invalid email address")
 
 // SendVerificationEmail sends a confirmation link. Protects against:
-//   - header injection: refuza orice CR/LF in adresa
-//   - URL hardcodat: foloseste VERIFY_URL_BASE, fallback pe CORS_ORIGIN
+//   - header injection: rejects any CR/LF in the address
+//   - hardcoded URL: uses VERIFY_URL_BASE, falling back to CORS_ORIGIN
 //
-// Daca SMTP nu e configurat, logheaza local (util in dev) fara sa expuna tokenul in stdout-ul prod.
+// If SMTP is not configured, logs locally (useful in dev) without exposing the token in prod stdout.
 func SendVerificationEmail(to, token string) error {
 	if strings.ContainsAny(to, "\r\n") || !strings.Contains(to, "@") || len(to) > 254 {
 		return ErrInvalidRecipient
@@ -30,7 +30,7 @@ func SendVerificationEmail(to, token string) error {
 
 	base := os.Getenv("VERIFY_URL_BASE")
 	if base == "" {
-		// Fallback: prima origine din CORS_ORIGIN (util daca ai o singura origine publica).
+		// Fallback: first origin from CORS_ORIGIN (useful with a single public origin).
 		if co := os.Getenv("CORS_ORIGIN"); co != "" {
 			base = strings.SplitN(co, ",", 2)[0]
 		}
@@ -48,7 +48,7 @@ func SendVerificationEmail(to, token string) error {
 
 	auth := smtp.PlainAuth("", smtpUser, smtpPass, smtpHost)
 
-	// From header = valoarea SMTP_FROM; To = destinatarul validat mai sus.
+	// From header = SMTP_FROM value; To = the validated recipient address above.
 	msg := []byte(fmt.Sprintf(
 		"From: %s\r\n"+
 			"To: %s\r\n"+
@@ -56,8 +56,8 @@ func SendVerificationEmail(to, token string) error {
 			"MIME-Version: 1.0\r\n"+
 			"Content-Type: text/plain; charset=UTF-8\r\n"+
 			"\r\n"+
-			"Salut,\r\n\r\nApasa pe acest link pentru a-ti confirma contul:\r\n%s\r\n\r\n"+
-			"Linkul expira in 24 de ore.\r\n",
+			"Hello,\r\n\r\nClick the link below to confirm your account:\r\n%s\r\n\r\n"+
+			"This link expires in 24 hours.\r\n",
 		from, to, verifyLink,
 	))
 

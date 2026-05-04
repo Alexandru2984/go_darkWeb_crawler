@@ -233,7 +233,7 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 			last_crawled_at   = CURRENT_TIMESTAMP,
 			next_crawl_at     = CURRENT_TIMESTAMP + (INTERVAL '1 day' * nodes.re_crawl_interval_days)
 		WHERE nodes.processing_status != 'blocked';
-		`, nodeURL, userID, title, statusCode, server, status, metadata, content, newHash, category, userID)
+		`, nodeURL, title, statusCode, server, status, metadata, content, newHash, category, userID)
 		return true, err
 	}
 

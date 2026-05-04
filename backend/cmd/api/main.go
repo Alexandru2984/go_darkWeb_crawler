@@ -656,6 +656,10 @@ func main() {
 				writeJSONError(w, http.StatusBadRequest, "Parameter 'url' is required")
 				return
 			}
+			if len(nodeURL) > 2048 {
+				writeJSONError(w, http.StatusBadRequest, "Parameter 'url' exceeds maximum length")
+				return
+			}
 			node, err := dbConn.GetNodeByURL(nodeURL, getUserID(r), isAdmin(r))
 			if err != nil {
 				log.Printf("[ERROR] GET /api/node url=%s: %v", sanitizeForLog(nodeURL), err)
@@ -778,7 +782,7 @@ func main() {
 				writeJSONError(w, http.StatusConflict, "Node is already being crawled")
 				return
 			}
-			log.Printf("[AUDIT] POST /api/recrawl ip=%s url=%s", ip, sanitizeForLog(req.URL))
+			log.Printf("[AUDIT] POST /api/recrawl ip=%s url=%s", sanitizeForLog(ip), sanitizeForLog(req.URL))
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
 			json.NewEncoder(w).Encode(map[string]string{"message": "Node has been queued for re-crawling"})
@@ -873,6 +877,8 @@ func main() {
 			default:
 				format = "json"
 			}
+			ip := clientIP(r)
+			log.Printf("[AUDIT] GET /api/export ip=%s uid=%d format=%s", sanitizeForLog(ip), uid, format)
 			rc := http.NewResponseController(w)
 			rc.SetWriteDeadline(time.Now().Add(10 * time.Minute))
 			switch format {
