@@ -57,11 +57,16 @@ jobs:
 
       - name: golangci-lint
         # golangci-lint-action@v7+ is required for golangci-lint v2.x. v6
-        # rejects v2 versions with: "golangci-lint v2 is not supported by
-        # golangci-lint-action v6, you must update to golangci-lint-action v7."
+        # rejects v2 versions with an explicit error.
+        # The lint binary must be built with a Go version >= the toolchain
+        # required by go.mod (currently 1.25); v2.1.6 was built with Go 1.24
+        # and fails with "the Go language version (go1.24) used to build
+        # golangci-lint is lower than the targeted Go version (1.25.0)".
+        # v2.4.0 was the first v2 release built with Go 1.25; we pin to a
+        # known-stable patch above that.
         uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.1.6
+          version: v2.12.2
           working-directory: backend
           args: --timeout=5m
 
