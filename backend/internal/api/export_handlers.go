@@ -40,9 +40,22 @@ func (d *deps) handleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	format := r.URL.Query().Get("format")
-	switch format {
-	case "csv", "ndjson", "xlsx", "pdf", "graphml":
+	// Whitelist: reassign `format` to a string literal so CodeQL sees the
+	// value as fully untainted before it flows into the log line below.
+	// A bare `switch format { case "csv": ... }` does NOT break the data
+	// flow because the variable still references the original user input.
+	var format string
+	switch r.URL.Query().Get("format") {
+	case "csv":
+		format = "csv"
+	case "ndjson":
+		format = "ndjson"
+	case "xlsx":
+		format = "xlsx"
+	case "pdf":
+		format = "pdf"
+	case "graphml":
+		format = "graphml"
 	default:
 		format = "json"
 	}

@@ -36,7 +36,10 @@ func (d *deps) handleCrawl(w http.ResponseWriter, r *http.Request) {
 			WriteJSONError(w, http.StatusForbidden, "Domain blocked")
 			return
 		}
-		log.Printf("[ERROR] POST /api/crawl user=%d url=%s: %v", GetUserID(r), logScrub(req.URL), err)
+		// EnqueueURL embeds rawURL into some error messages ("invalid url: %s"),
+		// so err.Error() can carry user-controlled input. logScrub the err.Error()
+		// stringification too — %v alone would not be sanitized.
+		log.Printf("[ERROR] POST /api/crawl user=%d url=%s: %s", GetUserID(r), logScrub(req.URL), logScrub(err.Error()))
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}

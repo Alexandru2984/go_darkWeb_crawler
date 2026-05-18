@@ -45,11 +45,13 @@ func SendVerificationEmail(to, token string) error {
 	if strings.ContainsAny(parsed.Address, "\r\n") {
 		return ErrInvalidRecipient
 	}
-	// logScrub (defined at package level) is also the SMTP header sanitizer:
-	// CodeQL's go/email-injection query recognizes strings.ReplaceAll on
-	// "\r" and "\n" as a sanitizer for header injection too, so the same
-	// helper covers both log injection and email content injection.
-	cleanTo := logScrub(parsed.Address)
+	// Inline strings.ReplaceAll (NOT via logScrub) for the values that flow
+	// into smtp.SendMail. CodeQL's go/email-injection query has a stricter
+	// sanitizer model than go/log-injection and does not always propagate
+	// the clean taint state through a user-defined wrapper; using the
+	// standard-library call directly at the assignment site is unambiguous.
+	cleanTo := strings.ReplaceAll(parsed.Address, "\r", "")
+	cleanTo = strings.ReplaceAll(cleanTo, "\n", "")
 
 	smtpHost := os.Getenv("SMTP_HOST")
 	smtpPort := os.Getenv("SMTP_PORT")
@@ -67,7 +69,9 @@ func SendVerificationEmail(to, token string) error {
 	if base == "" {
 		base = "http://localhost:8900"
 	}
-	verifyLink := logScrub(fmt.Sprintf("%s/api/auth/verify?token=%s", strings.TrimRight(base, "/"), token))
+	verifyLink := fmt.Sprintf("%s/api/auth/verify?token=%s", strings.TrimRight(base, "/"), token)
+	verifyLink = strings.ReplaceAll(verifyLink, "\r", "")
+	verifyLink = strings.ReplaceAll(verifyLink, "\n", "")
 
 	if smtpHost == "" || smtpUser == "" {
 		// Dev mode: do NOT log the token in plain text in prod — just say we
@@ -77,9 +81,10 @@ func SendVerificationEmail(to, token string) error {
 		return nil
 	}
 
-	// Strip CR/LF from `from` too (env-supplied, but defense in depth: a
-	// misconfigured SMTP_FROM with embedded headers would otherwise inject).
-	cleanFrom := logScrub(from)
+	// Strip CR/LF from `from` too — inline strings.ReplaceAll for the same
+	// CodeQL reason as cleanTo above.
+	cleanFrom := strings.ReplaceAll(from, "\r", "")
+	cleanFrom = strings.ReplaceAll(cleanFrom, "\n", "")
 
 	auth := smtp.PlainAuth("", smtpUser, smtpPass, smtpHost)
 
