@@ -56,7 +56,10 @@ jobs:
           cache: false  # the lint action manages its own cache
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        # golangci-lint-action@v7+ is required for golangci-lint v2.x. v6
+        # rejects v2 versions with: "golangci-lint v2 is not supported by
+        # golangci-lint-action v6, you must update to golangci-lint-action v7."
+        uses: golangci/golangci-lint-action@v7
         with:
           version: v2.1.6
           working-directory: backend
