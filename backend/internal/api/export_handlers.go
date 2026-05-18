@@ -47,7 +47,7 @@ func (d *deps) handleExport(w http.ResponseWriter, r *http.Request) {
 		format = "json"
 	}
 	ip := ClientIP(r)
-	log.Printf("[AUDIT] GET /api/export ip=%s uid=%d format=%s", strconv.Quote(ip), uid, format)
+	log.Printf("[AUDIT] GET /api/export ip=%s uid=%d format=%s", logScrub(ip), uid, format)
 
 	rc := http.NewResponseController(w)
 	rc.SetWriteDeadline(time.Now().Add(10 * time.Minute))

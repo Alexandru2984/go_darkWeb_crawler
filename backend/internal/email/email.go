@@ -7,9 +7,16 @@ import (
 	"net/mail"
 	"net/smtp"
 	"os"
-	"strconv"
 	"strings"
 )
+
+// logScrub strips CR/LF before logging user-supplied values; see the same
+// helper in the api package for the explanation.
+func logScrub(s string) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", "")
+	return s
+}
 
 // ErrInvalidRecipient is returned when the recipient address fails RFC 5322
 // parsing or fails our extra CRLF check.
@@ -38,17 +45,11 @@ func SendVerificationEmail(to, token string) error {
 	if strings.ContainsAny(parsed.Address, "\r\n") {
 		return ErrInvalidRecipient
 	}
-	// stripCRLF removes carriage returns and newlines — CodeQL's
-	// go/email-injection query recognizes strings.ReplaceAll on \r and \n
-	// as a sanitizer for SMTP header injection. mail.ParseAddress already
-	// rejects CRLF, but the explicit replace is what propagates the
-	// "clean" taint state through the data flow.
-	stripCRLF := func(s string) string {
-		s = strings.ReplaceAll(s, "\r", "")
-		s = strings.ReplaceAll(s, "\n", "")
-		return s
-	}
-	cleanTo := stripCRLF(parsed.Address)
+	// logScrub (defined at package level) is also the SMTP header sanitizer:
+	// CodeQL's go/email-injection query recognizes strings.ReplaceAll on
+	// "\r" and "\n" as a sanitizer for header injection too, so the same
+	// helper covers both log injection and email content injection.
+	cleanTo := logScrub(parsed.Address)
 
 	smtpHost := os.Getenv("SMTP_HOST")
 	smtpPort := os.Getenv("SMTP_PORT")
@@ -66,19 +67,19 @@ func SendVerificationEmail(to, token string) error {
 	if base == "" {
 		base = "http://localhost:8900"
 	}
-	verifyLink := stripCRLF(fmt.Sprintf("%s/api/auth/verify?token=%s", strings.TrimRight(base, "/"), token))
+	verifyLink := logScrub(fmt.Sprintf("%s/api/auth/verify?token=%s", strings.TrimRight(base, "/"), token))
 
 	if smtpHost == "" || smtpUser == "" {
 		// Dev mode: do NOT log the token in plain text in prod — just say we
-		// would have sent it. strconv.Quote is the CodeQL-recognized
-		// log-injection sanitizer.
-		log.Printf("[email] SMTP not configured — verification email NOT sent to %s", strconv.Quote(cleanTo))
+		// would have sent it. cleanTo is already CRLF-stripped above; pass it
+		// through logScrub again so the data flow visibly stays sanitized.
+		log.Printf("[email] SMTP not configured — verification email NOT sent to %s", logScrub(cleanTo))
 		return nil
 	}
 
 	// Strip CR/LF from `from` too (env-supplied, but defense in depth: a
 	// misconfigured SMTP_FROM with embedded headers would otherwise inject).
-	cleanFrom := stripCRLF(from)
+	cleanFrom := logScrub(from)
 
 	auth := smtp.PlainAuth("", smtpUser, smtpPass, smtpHost)
 

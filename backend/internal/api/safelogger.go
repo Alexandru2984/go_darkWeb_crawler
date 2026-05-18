@@ -3,7 +3,6 @@ package api
 import (
 	"log"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
@@ -30,14 +29,13 @@ func SafeLogger(sensitivePaths ...string) func(http.Handler) http.Handler {
 						uri = r.URL.Path + "?[REDACTED]"
 					}
 				}
-				// strconv.Quote on user-controlled values (uri can contain raw
-				// query-string bytes; ClientIP comes from an nginx header) —
-				// it is the explicit log-injection sanitizer recognized by
-				// CodeQL's go/log-injection query (the %q format verb is
-				// NOT, despite being equivalent at runtime).
+				// logScrub strips CR/LF — see auth_handlers.go for why the
+				// helper has to call strings.ReplaceAll directly (CodeQL's
+				// go/log-injection query doesn't accept strconv.Quote or
+				// the %q format verb).
 				log.Printf("%s %s %d %dB %s from %s",
-					r.Method, strconv.Quote(uri), ww.Status(), ww.BytesWritten(),
-					time.Since(start).Round(time.Millisecond), strconv.Quote(ClientIP(r)))
+					r.Method, logScrub(uri), ww.Status(), ww.BytesWritten(),
+					time.Since(start).Round(time.Millisecond), logScrub(ClientIP(r)))
 			}()
 			next.ServeHTTP(ww, r)
 		})

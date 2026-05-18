@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +17,15 @@ import (
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	_ "github.com/lib/pq"
 )
+
+// logScrub strips CR/LF before logging user-supplied values. See the same
+// helper in the api package for why strings.ReplaceAll is the exact form
+// CodeQL's go/log-injection query accepts.
+func logScrub(s string) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", "")
+	return s
+}
 
 // migrationsFS embeds the SQL migration files so the binary is self-contained
 // and identical across environments. Files live in ./migrations/ next to this
@@ -778,7 +786,7 @@ func (db *DB) LogAuthEvent(event, email, ip string) {
 		event, NormalizeEmail(email), ip,
 	)
 	if err != nil {
-		log.Printf("[audit] could not log %s for %s: %v", strconv.Quote(event), strconv.Quote(email), err)
+		log.Printf("[audit] could not log %s for %s: %v", logScrub(event), logScrub(email), err)
 	}
 }
 

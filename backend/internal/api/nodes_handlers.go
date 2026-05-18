@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"strconv"
 )
 
 func (d *deps) handleNodes(w http.ResponseWriter, r *http.Request) {
@@ -32,7 +31,7 @@ func (d *deps) handleNode(w http.ResponseWriter, r *http.Request) {
 	}
 	node, err := d.cfg.DB.GetNodeByURL(nodeURL, GetUserID(r), IsAdmin(r))
 	if err != nil {
-		log.Printf("[ERROR] GET /api/node url=%s: %v", strconv.Quote(nodeURL), err)
+		log.Printf("[ERROR] GET /api/node url=%s: %v", logScrub(nodeURL), err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
@@ -74,7 +73,7 @@ func (d *deps) handleSearch(w http.ResponseWriter, r *http.Request) {
 	category := r.URL.Query().Get("category")
 	nodes, err := d.cfg.DB.SearchNodes(q, category, GetUserID(r), IsAdmin(r))
 	if err != nil {
-		log.Printf("[ERROR] GET /api/search q=%s: %v", strconv.Quote(q), err)
+		log.Printf("[ERROR] GET /api/search q=%s: %v", logScrub(q), err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
