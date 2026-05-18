@@ -111,6 +111,51 @@ logs: ## Tail logs for all services.
 ps: ## Show running compose services.
 	docker compose ps
 
+##@ Database migrations
+
+MIGRATIONS_DIR := $(BACKEND_DIR)/internal/database/migrations
+# Reads DATABASE_URL from backend/.env if present so `make migrate-*` works
+# without exporting variables. Override with `DB_URL=... make migrate-up`.
+DB_URL ?= $(shell test -f $(BACKEND_DIR)/.env && grep -E '^DATABASE_URL=' $(BACKEND_DIR)/.env | head -1 | cut -d= -f2-)
+
+# Embedded migrations always run at API startup, so these targets exist for
+# manual control during dev (rolling back, checking state, creating new files).
+# They use the external `migrate` CLI — install with:
+#   go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+MIGRATE_BIN := migrate
+MIGRATE_INSTALL_HINT := "Install: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest"
+
+.PHONY: migrate-up
+migrate-up: ## Apply all pending migrations against $$DB_URL (defaults to backend/.env DATABASE_URL).
+	@command -v $(MIGRATE_BIN) >/dev/null || (echo $(MIGRATE_INSTALL_HINT); exit 1)
+	@test -n "$(DB_URL)" || (echo "DB_URL is empty — set DB_URL=... or add DATABASE_URL to backend/.env"; exit 1)
+	$(MIGRATE_BIN) -path $(MIGRATIONS_DIR) -database "$(DB_URL)" up
+
+.PHONY: migrate-down
+migrate-down: ## Roll back the last migration. DESTRUCTIVE — wipes the schema it owns.
+	@command -v $(MIGRATE_BIN) >/dev/null || (echo $(MIGRATE_INSTALL_HINT); exit 1)
+	@test -n "$(DB_URL)" || (echo "DB_URL is empty — set DB_URL=... or add DATABASE_URL to backend/.env"; exit 1)
+	$(MIGRATE_BIN) -path $(MIGRATIONS_DIR) -database "$(DB_URL)" down 1
+
+.PHONY: migrate-version
+migrate-version: ## Show the currently-applied migration version.
+	@command -v $(MIGRATE_BIN) >/dev/null || (echo $(MIGRATE_INSTALL_HINT); exit 1)
+	@test -n "$(DB_URL)" || (echo "DB_URL is empty — set DB_URL=... or add DATABASE_URL to backend/.env"; exit 1)
+	$(MIGRATE_BIN) -path $(MIGRATIONS_DIR) -database "$(DB_URL)" version
+
+.PHONY: migrate-new
+migrate-new: ## Scaffold a new migration. Usage: make migrate-new NAME=add_users_email_index
+	@command -v $(MIGRATE_BIN) >/dev/null || (echo $(MIGRATE_INSTALL_HINT); exit 1)
+	@test -n "$(NAME)" || (echo "NAME is required: make migrate-new NAME=add_..."; exit 1)
+	$(MIGRATE_BIN) create -ext sql -dir $(MIGRATIONS_DIR) -seq $(NAME)
+
+.PHONY: migrate-force
+migrate-force: ## Force-set version (recovers from dirty state). Usage: make migrate-force V=1
+	@command -v $(MIGRATE_BIN) >/dev/null || (echo $(MIGRATE_INSTALL_HINT); exit 1)
+	@test -n "$(DB_URL)" || (echo "DB_URL is empty"; exit 1)
+	@test -n "$(V)" || (echo "V is required: make migrate-force V=1"; exit 1)
+	$(MIGRATE_BIN) -path $(MIGRATIONS_DIR) -database "$(DB_URL)" force $(V)
+
 ##@ Misc
 
 .PHONY: clean

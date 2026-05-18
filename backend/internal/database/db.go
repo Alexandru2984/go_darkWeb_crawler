@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"embed"
 	"errors"
 	"fmt"
 	"log"
@@ -11,8 +12,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang-migrate/migrate/v4"
+	pgdriver "github.com/golang-migrate/migrate/v4/database/postgres"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 	_ "github.com/lib/pq"
 )
+
+// migrationsFS embeds the SQL migration files so the binary is self-contained
+// and identical across environments. Files live in ./migrations/ next to this
+// source file; Go embed paths are relative to the embedding file.
+//
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
 
 // ErrBlacklisted is returned by EnqueueURL when the domain is on the blacklist.
 var ErrBlacklisted = errors.New("domain blocked")
@@ -38,7 +49,7 @@ func InitDB(dsn string) (*DB, error) {
 
 	log.Println("PostgreSQL connection successful!")
 
-	if err = migrate(db); err != nil {
+	if err = runMigrations(db); err != nil {
 		return nil, fmt.Errorf("error running database migrations: %w", err)
 	}
 
@@ -51,122 +62,37 @@ func InitDB(dsn string) (*DB, error) {
 	return &DB{Conn: db}, nil
 }
 
-func migrate(db *sql.DB) error {
-	// The users table is created first because nodes/edges reference it via FK.
-	if _, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS users (
-			id                       SERIAL PRIMARY KEY,
-			email                    VARCHAR(255) UNIQUE NOT NULL,
-			password_hash            VARCHAR(255) NOT NULL,
-			role                     VARCHAR(50) DEFAULT 'user',
-			is_verified              BOOLEAN DEFAULT FALSE,
-			verification_token       VARCHAR(255),
-			verification_expires_at  TIMESTAMP,
-			created_at               TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-		)
-	`); err != nil {
-		return fmt.Errorf("create users: %w", err)
-	}
-
-	// Create base tables if they don't exist (fresh installation)
-	_, err := db.Exec(`
-	CREATE TABLE IF NOT EXISTS nodes (
-		id              SERIAL PRIMARY KEY,
-		url             TEXT UNIQUE NOT NULL,
-		title           TEXT,
-		status_code     INT,
-		server_header   VARCHAR(100),
-		metadata        JSONB,
-		content         TEXT,
-		retry_count     INT DEFAULT 0,
-		next_crawl_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-		processing_status VARCHAR(20) DEFAULT 'pending',
-		depth           INT DEFAULT 0,
-		search_vector   TSVECTOR,
-		discovered_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-		last_crawled_at TIMESTAMP
-	);
-
-	CREATE TABLE IF NOT EXISTS edges (
-		source_url    TEXT REFERENCES nodes(url) ON DELETE CASCADE,
-		target_url    TEXT,
-		discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-		PRIMARY KEY (source_url, target_url)
-	);
-	`)
+// runMigrations applies all pending SQL migrations from the embedded FS using
+// golang-migrate. Migrations live in ./migrations and are versioned with
+// numeric prefixes (000001_init.up.sql / .down.sql). The migrator records
+// state in a schema_migrations table inside the same database, so this is
+// safe to run unconditionally on every startup — pending migrations are
+// applied, others are no-ops.
+func runMigrations(db *sql.DB) error {
+	driver, err := pgdriver.WithInstance(db, &pgdriver.Config{})
 	if err != nil {
-		return err
+		return fmt.Errorf("init migrate driver: %w", err)
 	}
 
-	// Incremental migrations for existing installations (idempotent)
-	incremental := []string{
-		`ALTER TABLE nodes ALTER COLUMN url TYPE TEXT`,
-		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS content TEXT`,
-		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS retry_count INT DEFAULT 0`,
-		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS next_crawl_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`,
-		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS search_vector TSVECTOR`,
-		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS content_hash TEXT`,
-		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS re_crawl_interval_days INT DEFAULT 7`,
-		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS category VARCHAR(30) DEFAULT 'unknown'`,
-		`ALTER TABLE edges ALTER COLUMN source_url TYPE TEXT`,
-		`ALTER TABLE edges ALTER COLUMN target_url TYPE TEXT`,
-		`UPDATE nodes SET processing_status = 'pending' WHERE processing_status = 'pending_v2'`,
-		`ALTER TABLE nodes DROP CONSTRAINT IF EXISTS nodes_url_key CASCADE`,
-		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS user_id INT NOT NULL DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE`,
-		`ALTER TABLE nodes ADD CONSTRAINT nodes_url_user_key UNIQUE (url, user_id)`,
-		`ALTER TABLE edges ADD COLUMN IF NOT EXISTS user_id INT NOT NULL DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE`,
-		`ALTER TABLE edges DROP CONSTRAINT IF EXISTS edges_pkey CASCADE`,
-		`ALTER TABLE edges ADD CONSTRAINT edges_pkey PRIMARY KEY (source_url, target_url, user_id)`,
-		`ALTER TABLE edges ADD CONSTRAINT edges_source_url_fkey FOREIGN KEY (source_url, user_id) REFERENCES nodes(url, user_id) ON DELETE CASCADE`,
-		`CREATE INDEX IF NOT EXISTS idx_nodes_search_vector ON nodes USING GIN(search_vector)`,
-		`CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(processing_status, next_crawl_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_nodes_category ON nodes(category)`,
-		// Email verification token expiry (security hardening)
-		`ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_expires_at TIMESTAMP`,
-		`UPDATE users SET verification_expires_at = CURRENT_TIMESTAMP + INTERVAL '24 hours'
-		   WHERE is_verified = FALSE AND verification_token IS NOT NULL AND verification_expires_at IS NULL`,
-		// Audit log for security events (login, register, invalid token etc)
-		`CREATE TABLE IF NOT EXISTS auth_audit (
-			id         SERIAL PRIMARY KEY,
-			event      TEXT NOT NULL,
-			email      TEXT,
-			ip         TEXT,
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_auth_audit_created ON auth_audit(created_at DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_auth_audit_email_event ON auth_audit(email, event, created_at DESC)`,
-		// Heartbeat for detecting nodes stuck in 'crawling' after a hard crash
-		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS crawl_started_at TIMESTAMP`,
-		// Blacklist table for blocked domains
-		`CREATE TABLE IF NOT EXISTS blacklist (
-			domain   TEXT PRIMARY KEY,
-			added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-		)`,
-		`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS host TEXT`,
-		`CREATE INDEX IF NOT EXISTS idx_nodes_host ON nodes(host)`,
-		`CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_url)`,
-		`UPDATE nodes SET host = (regexp_match(url, '^https?://([^/?#]+)'))[1] WHERE host IS NULL`,
-		// Conditional trigger: recalculate search_vector only when title or content changes
-		`CREATE OR REPLACE FUNCTION nodes_search_vector_update() RETURNS trigger AS $$
-		 BEGIN
-		   IF TG_OP = 'INSERT' OR NEW.title IS DISTINCT FROM OLD.title OR NEW.content IS DISTINCT FROM OLD.content THEN
-		     NEW.search_vector := to_tsvector('english',
-		       COALESCE(NEW.title, '') || ' ' || COALESCE(NEW.content, ''));
-		   END IF;
-		   RETURN NEW;
-		 END;
-		 $$ LANGUAGE plpgsql`,
-		`DROP TRIGGER IF EXISTS nodes_search_vector_trigger ON nodes`,
-		`CREATE TRIGGER nodes_search_vector_trigger
-		   BEFORE INSERT OR UPDATE ON nodes
-		   FOR EACH ROW EXECUTE FUNCTION nodes_search_vector_update()`,
-	}
-	for _, m := range incremental {
-		if _, err := db.Exec(m); err != nil {
-			log.Printf("⚠️ Migration skipped (probably already applied): %v", err)
-		}
+	src, err := iofs.New(migrationsFS, "migrations")
+	if err != nil {
+		return fmt.Errorf("load migration sources: %w", err)
 	}
 
+	m, err := migrate.NewWithInstance("iofs", src, "postgres", driver)
+	if err != nil {
+		return fmt.Errorf("init migrator: %w", err)
+	}
+
+	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		return fmt.Errorf("apply migrations: %w", err)
+	}
+
+	v, dirty, err := m.Version()
+	if err != nil && !errors.Is(err, migrate.ErrNilVersion) {
+		return fmt.Errorf("read migration version: %w", err)
+	}
+	log.Printf("[migrate] schema at version %d (dirty=%v)", v, dirty)
 	return nil
 }
 
