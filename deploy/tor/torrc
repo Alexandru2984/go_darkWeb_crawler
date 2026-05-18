@@ -1,0 +1,10 @@
+# SOCKS5 listener exposed inside the docker network only (compose does not
+# publish 9050 to the host). The api container talks to tor:9050.
+SocksPort 0.0.0.0:9050
+DataDirectory /var/lib/tor
+Log notice stdout
+
+# Control port is intentionally NOT enabled in dev. Circuit renewal still
+# works (the API falls back to "no control port" mode). To enable, add:
+#   ControlPort 0.0.0.0:9051
+#   HashedControlPassword <generate-with: tor --hash-password>

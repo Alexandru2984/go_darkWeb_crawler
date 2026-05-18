@@ -1,0 +1,55 @@
+# Keep the build context small. Anything not needed by `docker build` should
+# be listed here; otherwise it gets sent to the daemon on every build.
+
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# Local env / secrets
+.env
+.env.*
+.env.bak*
+.env.backup*
+.env.save*
+!.env.example
+!.env.docker.example
+
+# Build artifacts
+backend/onion-spider-api
+backend/onion-spider-api.prev
+backend/api_bin
+backend/crawler_bin
+backend/onion-spider-crawler
+frontend/dist/
+**/dist/
+**/node_modules/
+
+# GOPATH leftovers (this repo lives at $GOPATH; pkg/ and bin/ contain the
+# module cache and globally-installed tools — never part of the image).
+bin/
+pkg/
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Docs & misc
+*.md
+!README.md
+LICENSE*
+docs/
+deploy/nginx-prod.conf
+
+# Logs
+*.log
+logs/
+
+# Tooling configs that don't affect the build
+.golangci.yml
+.editorconfig
+patch_vue.py

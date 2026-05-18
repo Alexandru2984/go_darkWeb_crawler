@@ -1,0 +1,90 @@
+# Local development stack for Onion Spider.
+#
+# THIS IS NOT THE PROD DEPLOYMENT. Production runs as a systemd unit on the
+# host VPS (onion-spider.service → /home/micu/go/backend/onion-spider-api),
+# with postgres + tor on the host and nginx fronting it behind Cloudflare.
+#
+# Port mappings here are deliberately offset (5433, 8080) so that running
+# `docker compose up` on the prod box does NOT collide with the live stack
+# on 5432 / 8900 / 80. The api and tor services are kept on the internal
+# docker network only.
+#
+# Usage:
+#   cp .env.docker.example .env.docker
+#   # edit .env.docker — at minimum set a strong JWT_SECRET
+#   docker compose --env-file .env.docker up --build
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-onion_spider}
+      POSTGRES_USER: ${POSTGRES_USER:-spider_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      # Host-side 5433 to avoid clashing with a host postgres on 5432.
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-spider_user} -d ${POSTGRES_DB:-onion_spider}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  tor:
+    build:
+      context: ./deploy/tor
+    restart: unless-stopped
+    # Intentionally no host port: tor is only reachable from the api service
+    # over the internal docker network.
+    expose:
+      - "9050"
+
+  api:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "postgres://${POSTGRES_USER:-spider_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-onion_spider}?sslmode=disable"
+      PORT: "8900"
+      TOR_PROXY: "tor:9050"
+      WORKERS: "${WORKERS:-3}"
+      MAX_DEPTH: "${MAX_DEPTH:-2}"
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is required (>=32 chars, openssl rand -hex 32)}"
+      CORS_ORIGIN: "${CORS_ORIGIN:-http://localhost:8080}"
+      VERIFY_URL_BASE: "${VERIFY_URL_BASE:-http://localhost:8080}"
+      ADMIN_EMAIL: "${ADMIN_EMAIL:-}"
+      ALLOW_REGISTRATION: "${ALLOW_REGISTRATION:-false}"
+      AUDIT_RETENTION_DAYS: "${AUDIT_RETENTION_DAYS:-90}"
+      SMTP_HOST: "${SMTP_HOST:-}"
+      SMTP_PORT: "${SMTP_PORT:-587}"
+      SMTP_USER: "${SMTP_USER:-}"
+      SMTP_PASS: "${SMTP_PASS:-}"
+      SMTP_FROM: "${SMTP_FROM:-}"
+      # Tor control port stays disabled in dev (the api logs a warning and
+      # continues without circuit renewal). To enable, mount a torrc with
+      # ControlPort + HashedControlPassword and set TOR_CONTROL_* here.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      tor:
+        condition: service_started
+    # No host port for api: only the frontend (nginx) talks to it over the
+    # internal docker network. This avoids colliding with prod 8900.
+    expose:
+      - "8900"
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      # Host-side 8080 to avoid clashing with the host nginx on 80/443.
+      - "127.0.0.1:8080:80"
+
+volumes:
+  postgres-data:
