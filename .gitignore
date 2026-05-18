@@ -32,6 +32,11 @@ yarn-error.log*
 .env.development.local
 .env.test.local
 .env.production.local
+# Local backups (e.g. .env.bak.mailcow-20260509-184352) — contain secrets, never commit.
+# .env.example stays tracked because it does not match any of these patterns.
+.env.bak*
+.env.backup*
+.env.save*
 
 # --- IDEs & Editors ---
 .idea/
