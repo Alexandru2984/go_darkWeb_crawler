@@ -777,7 +777,7 @@ func (db *DB) LogAuthEvent(event, email, ip string) {
 		event, NormalizeEmail(email), ip,
 	)
 	if err != nil {
-		log.Printf("[audit] could not log %s for %s: %v", event, email, err)
+		log.Printf("[audit] could not log %q for %q: %v", event, email, err)
 	}
 }
 

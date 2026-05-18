@@ -145,32 +145,6 @@ func TestSanitizeCSVField_Empty(t *testing.T) {
 	}
 }
 
-// ── SanitizeForLog ────────────────────────────────────────────────────────────
-
-func TestSanitizeForLog_Clean(t *testing.T) {
-	input := "http://example.onion/path"
-	if got := SanitizeForLog(input); got != input {
-		t.Errorf("SanitizeForLog(%q) modified clean input: %q", input, got)
-	}
-}
-
-func TestSanitizeForLog_NewlineInjection(t *testing.T) {
-	cases := []struct {
-		input string
-		want  string
-	}{
-		{"evil\ninjected log line", `evil\ninjected log line`},
-		{"evil\rinjected", `evil\rinjected`},
-		{"line1\r\nline2", `line1\r\nline2`},
-	}
-	for _, tc := range cases {
-		got := SanitizeForLog(tc.input)
-		if got != tc.want {
-			t.Errorf("SanitizeForLog(%q) = %q, want %q", tc.input, got, tc.want)
-		}
-	}
-}
-
 // ── ClientIP ─────────────────────────────────────────────────────────────────
 
 func TestClientIP_FromRemoteAddr(t *testing.T) {

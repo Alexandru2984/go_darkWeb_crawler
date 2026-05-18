@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"log"
 	"net/http"
 	"strings"
@@ -46,7 +47,7 @@ func (d *deps) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// Rate-limit per recipient address — protects Gmail quota from abuse.
 	// Max 3 register attempts per email per hour.
 	if n, err := d.cfg.DB.CountRecentAuthEvents("register_ok", req.Email, 60); err == nil && n >= 3 {
-		log.Printf("[AUDIT] register_blocked ip=%s email=%s count=%d", SanitizeForLog(ip), SanitizeForLog(req.Email), n)
+		log.Printf("[AUDIT] register_blocked ip=%q email=%q count=%d", ip, req.Email, n)
 		WriteJSONError(w, http.StatusTooManyRequests, "This email has already received too many verification emails. Try again in an hour.")
 		return
 	}
@@ -70,18 +71,18 @@ func (d *deps) handleRegister(w http.ResponseWriter, r *http.Request) {
 	token := auth.GenerateVerificationToken()
 
 	if err := d.cfg.DB.CreateUser(req.Email, hash, role, token); err != nil {
-		log.Printf("[AUDIT] register_fail ip=%s email=%s: %v", SanitizeForLog(ip), SanitizeForLog(req.Email), err)
+		log.Printf("[AUDIT] register_fail ip=%q email=%q: %v", ip, req.Email, err)
 		d.cfg.DB.LogAuthEvent("register_fail", req.Email, ip)
 		WriteJSONError(w, http.StatusBadRequest, "Error: email already in use or invalid data")
 		return
 	}
 
 	d.cfg.DB.LogAuthEvent("register_ok", req.Email, ip)
-	log.Printf("[AUDIT] register_ok ip=%s email=%s role=%s", SanitizeForLog(ip), SanitizeForLog(req.Email), role)
+	log.Printf("[AUDIT] register_ok ip=%q email=%q role=%s", ip, req.Email, role)
 
 	go func() {
 		if err := email.SendVerificationEmail(req.Email, token); err != nil {
-			log.Printf("[email] send error to %s: %v", SanitizeForLog(req.Email), err)
+			log.Printf("[email] send error to %q: %v", req.Email, err)
 		}
 	}()
 
@@ -119,7 +120,7 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// Run bcrypt anyway to keep timing constant (do not leak lockout state).
 		auth.CheckAgainstDummy(req.Password)
 		d.cfg.DB.LogAuthEvent("login_locked", req.Email, ip)
-		log.Printf("[AUDIT] login_locked ip=%s email=%s count=%d", SanitizeForLog(ip), SanitizeForLog(req.Email), n)
+		log.Printf("[AUDIT] login_locked ip=%q email=%q count=%d", ip, req.Email, n)
 		WriteJSONError(w, http.StatusTooManyRequests, "Account temporarily locked due to too many failed attempts. Wait 15 minutes.")
 		return
 	}
@@ -138,13 +139,13 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if user == nil {
 		auth.CheckAgainstDummy(req.Password)
 		d.cfg.DB.LogAuthEvent("login_fail", req.Email, ip)
-		log.Printf("[AUDIT] login_fail ip=%s email=%s reason=unknown_user", SanitizeForLog(ip), SanitizeForLog(req.Email))
+		log.Printf("[AUDIT] login_fail ip=%q email=%q reason=unknown_user", ip, req.Email)
 		WriteJSONError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 	if !auth.CheckPasswordHash(req.Password, user.PasswordHash) {
 		d.cfg.DB.LogAuthEvent("login_fail", req.Email, ip)
-		log.Printf("[AUDIT] login_fail ip=%s email=%s reason=bad_password", SanitizeForLog(ip), SanitizeForLog(req.Email))
+		log.Printf("[AUDIT] login_fail ip=%q email=%q reason=bad_password", ip, req.Email)
 		WriteJSONError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
@@ -157,12 +158,12 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	token, err := auth.GenerateToken(user.ID, user.Email, user.Role)
 	if err != nil {
-		log.Printf("[ERROR] JWT generation for %s: %v", SanitizeForLog(user.Email), err)
+		log.Printf("[ERROR] JWT generation for %q: %v", user.Email, err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
 	d.cfg.DB.LogAuthEvent("login_ok", req.Email, ip)
-	log.Printf("[AUDIT] login_ok ip=%s email=%s role=%s", SanitizeForLog(ip), SanitizeForLog(user.Email), user.Role)
+	log.Printf("[AUDIT] login_ok ip=%q email=%q role=%s", ip, user.Email, user.Role)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"token": token, "role": user.Role, "email": user.Email})
@@ -199,7 +200,7 @@ func (d *deps) handleVerifyGET(w http.ResponseWriter, r *http.Request) {
 <form method="POST" action="/api/auth/verify">
 <input type="hidden" name="token" value="%s">
 <button type="submit" style="padding:0.75rem 1.5rem;font-size:1rem;cursor:pointer">Confirm</button>
-</form></body></html>`, token)
+</form></body></html>`, html.EscapeString(token))
 }
 
 // handleVerifyPOST actually consumes the token (accepts JSON or form-encoded body).
@@ -235,11 +236,11 @@ func (d *deps) handleVerifyPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.cfg.DB.VerifyUser(token); err != nil {
-		log.Printf("[AUDIT] verify_fail ip=%s: %v", SanitizeForLog(ip), err)
+		log.Printf("[AUDIT] verify_fail ip=%q: %v", ip, err)
 		WriteJSONError(w, http.StatusBadRequest, "Token invalid, expired or already used")
 		return
 	}
-	log.Printf("[AUDIT] verify_ok ip=%s", SanitizeForLog(ip))
+	log.Printf("[AUDIT] verify_ok ip=%q", ip)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Write([]byte(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Account verified</title></head><body style="font-family:sans-serif;max-width:480px;margin:4rem auto;text-align:center"><h1>Account successfully verified!</h1><p><a href="/">Back to login</a></p></body></html>`))

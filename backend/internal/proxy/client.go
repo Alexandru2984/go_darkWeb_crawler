@@ -41,13 +41,29 @@ func NewTorClientWithTransport(socksProxyAddress string) (*http.Transport, *http
 		return dialer.Dial(network, address)
 	}
 
+	// InsecureSkipVerify is INTENTIONAL for .onion crawling: there is no PKI
+	// rooted in a .onion namespace, so almost every onion service ships a
+	// self-signed certificate. The certificate's identity guarantees are
+	// already provided by Tor's NTOR handshake plus the v3 onion address
+	// (which is the public key), so x509 verification adds nothing here and
+	// would simply reject every site. MinVersion still enforces TLS 1.2+.
+	//
+	// CodeQL flags this as "Disabled TLS certificate check"; the alert is
+	// expected for an onion crawler and should be dismissed as won't-fix
+	// with a reference to this comment.
+	//nolint:gosec // G402: see comment above — onion services don't have a CA chain.
+	tlsConfig := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true,
+	}
+
 	transport := &http.Transport{
 		DialContext:           dialCtx,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true}, // Many onion sites have self-signed certificates
+		TLSClientConfig:       tlsConfig,
 	}
 
 	client := &http.Client{

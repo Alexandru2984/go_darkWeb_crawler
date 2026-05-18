@@ -43,14 +43,6 @@ func ClientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-// SanitizeForLog escapes newlines so user-controlled values cannot inject
-// forged log lines (URLs may contain %0a/%0d).
-func SanitizeForLog(s string) string {
-	s = strings.ReplaceAll(s, "\n", "\\n")
-	s = strings.ReplaceAll(s, "\r", "\\r")
-	return s
-}
-
 // SanitizeCSVField prevents CSV/XLSX formula injection by prefixing values that
 // start with =, +, -, @, tab or carriage return with a single quote.
 func SanitizeCSVField(s string) string {

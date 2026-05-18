@@ -89,8 +89,18 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 
 	// collectOnion resolves an href/src against baseURL, normalizes it and adds it if .onion
 	collectOnion := func(href string) {
-		if href == "" || href == "#" || strings.HasPrefix(href, "javascript:") ||
-			strings.HasPrefix(href, "mailto:") {
+		// Case-insensitive scheme check: `JavaScript:` / `MAILTO:` / `\tjavascript:`
+		// would slip past a naive HasPrefix on the raw href. Lowercase + trim
+		// covers known dangerous schemes; the final http/https check below is
+		// the load-bearing gate, this is defense-in-depth that also satisfies
+		// CodeQL's "incomplete URL scheme check" query.
+		lower := strings.ToLower(strings.TrimSpace(href))
+		if lower == "" || lower == "#" ||
+			strings.HasPrefix(lower, "javascript:") ||
+			strings.HasPrefix(lower, "mailto:") ||
+			strings.HasPrefix(lower, "data:") ||
+			strings.HasPrefix(lower, "vbscript:") ||
+			strings.HasPrefix(lower, "file:") {
 			return
 		}
 		parsed, err := url.Parse(strings.TrimSpace(href))

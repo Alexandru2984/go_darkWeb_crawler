@@ -17,7 +17,10 @@ updates:
       - dependencies
       - go
 
-  # Frontend (npm)
+  # Frontend (npm). Major bumps on the Vite + Vue toolchain almost always need
+  # manual migration (peer-dep churn, breaking config). Dependabot proposed
+  # vite 5 → 8 last cycle and the build failed; we'd rather review those by
+  # hand than have CI red on auto-PRs. Minor + patch stay grouped.
   - package-ecosystem: npm
     directory: /frontend
     schedule:
@@ -29,6 +32,9 @@ updates:
     groups:
       npm-minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     labels:
       - dependencies
       - javascript

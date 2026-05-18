@@ -4,23 +4,40 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/mail"
 	"net/smtp"
 	"os"
 	"strings"
 )
 
-// ErrInvalidRecipient is returned when the recipient address is suspicious (CRLF injection).
+// ErrInvalidRecipient is returned when the recipient address fails RFC 5322
+// parsing or fails our extra CRLF check.
 var ErrInvalidRecipient = errors.New("invalid email address")
 
 // SendVerificationEmail sends a confirmation link. Protects against:
-//   - header injection: rejects any CR/LF in the address
-//   - hardcoded URL: uses VERIFY_URL_BASE, falling back to CORS_ORIGIN
+//   - header injection: the recipient is parsed with net/mail.ParseAddress, so
+//     only the canonical addr-spec form (no embedded CRLF, no display name
+//     tricks) flows into the SMTP envelope and headers.
+//   - hardcoded URL: uses VERIFY_URL_BASE, falling back to CORS_ORIGIN.
 //
-// If SMTP is not configured, logs locally (useful in dev) without exposing the token in prod stdout.
+// If SMTP is not configured, logs locally (useful in dev) without exposing the
+// token in prod stdout.
 func SendVerificationEmail(to, token string) error {
-	if strings.ContainsAny(to, "\r\n") || !strings.Contains(to, "@") || len(to) > 254 {
+	if len(to) > 254 {
 		return ErrInvalidRecipient
 	}
+	// net/mail.ParseAddress is a recognized RFC 5322 sanitizer: it rejects
+	// CRLF, header continuation tricks, and addresses without a localpart or
+	// domain. We use the parsed `Address` field downstream so no untrusted
+	// substring of the original input reaches the SMTP message.
+	parsed, err := mail.ParseAddress(to)
+	if err != nil || parsed.Address == "" {
+		return ErrInvalidRecipient
+	}
+	if strings.ContainsAny(parsed.Address, "\r\n") {
+		return ErrInvalidRecipient
+	}
+	cleanTo := parsed.Address
 
 	smtpHost := os.Getenv("SMTP_HOST")
 	smtpPort := os.Getenv("SMTP_PORT")
@@ -41,14 +58,18 @@ func SendVerificationEmail(to, token string) error {
 	verifyLink := fmt.Sprintf("%s/api/auth/verify?token=%s", strings.TrimRight(base, "/"), token)
 
 	if smtpHost == "" || smtpUser == "" {
-		// Dev mode: do NOT log the token in plain text in prod — just say we would have sent it.
-		log.Printf("[email] SMTP not configured — verification email NOT sent to %s", to)
+		// Dev mode: do NOT log the token in plain text in prod — just say we
+		// would have sent it. %q sanitizes the recipient for log injection.
+		log.Printf("[email] SMTP not configured — verification email NOT sent to %q", cleanTo)
 		return nil
 	}
 
+	// Strip CR/LF from `from` too (env-supplied, but defense in depth: a
+	// misconfigured SMTP_FROM with embedded headers would otherwise inject).
+	cleanFrom := strings.ReplaceAll(strings.ReplaceAll(from, "\r", ""), "\n", "")
+
 	auth := smtp.PlainAuth("", smtpUser, smtpPass, smtpHost)
 
-	// From header = SMTP_FROM value; To = the validated recipient address above.
 	msg := []byte(fmt.Sprintf(
 		"From: %s\r\n"+
 			"To: %s\r\n"+
@@ -58,8 +79,8 @@ func SendVerificationEmail(to, token string) error {
 			"\r\n"+
 			"Hello,\r\n\r\nClick the link below to confirm your account:\r\n%s\r\n\r\n"+
 			"This link expires in 24 hours.\r\n",
-		from, to, verifyLink,
+		cleanFrom, cleanTo, verifyLink,
 	))
 
-	return smtp.SendMail(smtpHost+":"+smtpPort, auth, from, []string{to}, msg)
+	return smtp.SendMail(smtpHost+":"+smtpPort, auth, cleanFrom, []string{cleanTo}, msg)
 }

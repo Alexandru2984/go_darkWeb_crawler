@@ -29,9 +29,13 @@ func SafeLogger(sensitivePaths ...string) func(http.Handler) http.Handler {
 						uri = r.URL.Path + "?[REDACTED]"
 					}
 				}
-				log.Printf("%s %s %d %dB %s from %s",
+				// %q on user-controlled values (uri may contain query-string
+				// content; ClientIP comes from a header) — Go's quoted form
+				// escapes CR/LF and is recognized by static analyzers as a
+				// log-injection sanitizer.
+				log.Printf("%s %q %d %dB %s from %q",
 					r.Method, uri, ww.Status(), ww.BytesWritten(),
-					time.Since(start).Round(time.Millisecond), SanitizeForLog(ClientIP(r)))
+					time.Since(start).Round(time.Millisecond), ClientIP(r))
 			}()
 			next.ServeHTTP(ww, r)
 		})

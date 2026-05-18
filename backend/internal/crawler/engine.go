@@ -176,20 +176,20 @@ func (e *Engine) worker(ctx context.Context, id int) {
 
 		// Crawl-time validation: we process exclusively .onion addresses
 		if parsedTarget, err := url.Parse(targetUrl); err != nil || !strings.HasSuffix(strings.ToLower(parsedTarget.Hostname()), ".onion") {
-			log.Printf("[Worker %d] Non-.onion URL in DB, marked as invalid: %s", id, sanitizeForLog(targetUrl))
+			log.Printf("[Worker %d] Non-.onion URL in DB, marked as invalid: %q", id, targetUrl)
 			_ = e.DB.MarkRobotsBlocked(targetUrl, userID)
 			continue
 		}
 
-		log.Printf("[Worker %d] Waiting for rate-limit permission for: %s", id, sanitizeForLog(targetUrl))
+		log.Printf("[Worker %d] Waiting for rate-limit permission for: %q", id, targetUrl)
 		if !e.waitForDomain(ctx, targetUrl) {
 			return // context cancelled while waiting
 		}
-		log.Printf("[Worker %d] Crawl approved: %s (Depth: %d, User: %d)", id, sanitizeForLog(targetUrl), depth, userID)
+		log.Printf("[Worker %d] Crawl approved: %q (Depth: %d, User: %d)", id, targetUrl, depth, userID)
 
 		// Check robots.txt before scraping
 		if !IsAllowed(ctx, client, targetUrl) {
-			log.Printf("[Worker %d] Blocked by robots.txt: %s", id, sanitizeForLog(targetUrl))
+			log.Printf("[Worker %d] Blocked by robots.txt: %q", id, targetUrl)
 			if err := e.DB.MarkRobotsBlocked(targetUrl, userID); err != nil {
 				log.Printf("[Worker %d] DB Error marking robots blocked: %v", id, err)
 			}
@@ -198,9 +198,9 @@ func (e *Engine) worker(ctx context.Context, id int) {
 
 		result, err := ScrapePage(ctx, client, targetUrl)
 		if err != nil {
-			log.Printf("[Worker %d] Network/SOCKS error at %s: %v", id, sanitizeForLog(targetUrl), err)
+			log.Printf("[Worker %d] Network/SOCKS error at %q: %v", id, targetUrl, err)
 			if errRetry := e.DB.FailNodeWithRetry(targetUrl, userID); errRetry != nil {
-				log.Printf("[Worker %d] DB Error on retry for %s: %v", id, sanitizeForLog(targetUrl), errRetry)
+				log.Printf("[Worker %d] DB Error on retry for %q: %v", id, targetUrl, errRetry)
 			}
 			e.onNetworkError()
 			continue
@@ -214,7 +214,7 @@ func (e *Engine) worker(ctx context.Context, id int) {
 				log.Printf("[Worker %d] Error on retry after SaveNode failure: %v", id, retryErr)
 			}
 		} else if !changed {
-			log.Printf("[Worker %d] Content unchanged (identical hash): %s", id, sanitizeForLog(targetUrl))
+			log.Printf("[Worker %d] Content unchanged (identical hash): %q", id, targetUrl)
 		}
 
 		if depth < e.MaxDepth {
@@ -232,12 +232,12 @@ func (e *Engine) worker(ctx context.Context, id int) {
 					}
 				}
 				if len(sitemapURLs) > 0 {
-					log.Printf("[Worker %d] Sitemap: %d additional URLs from %s", id, len(sitemapURLs), sanitizeForLog(targetUrl))
+					log.Printf("[Worker %d] Sitemap: %d additional URLs from %q", id, len(sitemapURLs), targetUrl)
 				}
 			}
-			log.Printf("[Worker %d] Completed: %s (found %d new links)", id, sanitizeForLog(targetUrl), len(result.FoundOnions))
+			log.Printf("[Worker %d] Completed: %q (found %d new links)", id, targetUrl, len(result.FoundOnions))
 		} else {
-			log.Printf("[Worker %d] Completed: %s (max depth %d reached, ignoring %d new links)", id, sanitizeForLog(targetUrl), e.MaxDepth, len(result.FoundOnions))
+			log.Printf("[Worker %d] Completed: %q (max depth %d reached, ignoring %d new links)", id, targetUrl, e.MaxDepth, len(result.FoundOnions))
 		}
 
 		select {
@@ -276,12 +276,4 @@ func (e *Engine) onNetworkError() {
 // AddToQueue manually adds a URL to the queue without overwriting existing data
 func (e *Engine) AddToQueue(rawURL string, userID int) error {
 	return e.DB.EnqueueURL(rawURL, 0, userID)
-}
-
-// sanitizeForLog replaces newlines in user-controlled values
-// to prevent log injection (URLs may contain %0a/%0d).
-func sanitizeForLog(s string) string {
-	s = strings.ReplaceAll(s, "\n", "\\n")
-	s = strings.ReplaceAll(s, "\r", "\\r")
-	return s
 }
