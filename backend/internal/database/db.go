@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -777,7 +778,7 @@ func (db *DB) LogAuthEvent(event, email, ip string) {
 		event, NormalizeEmail(email), ip,
 	)
 	if err != nil {
-		log.Printf("[audit] could not log %q for %q: %v", event, email, err)
+		log.Printf("[audit] could not log %s for %s: %v", strconv.Quote(event), strconv.Quote(email), err)
 	}
 }
 

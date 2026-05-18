@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -45,11 +46,11 @@ func (d *deps) handleBlacklistAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.cfg.DB.AddBlacklist(req.Domain); err != nil {
-		log.Printf("[ERROR] POST /api/blacklist domain=%q: %v", req.Domain, err)
+		log.Printf("[ERROR] POST /api/blacklist domain=%s: %v", strconv.Quote(req.Domain), err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
-	log.Printf("[AUDIT] blacklist_add admin_user=%d domain=%q", GetUserID(r), req.Domain)
+	log.Printf("[AUDIT] blacklist_add admin_user=%d domain=%s", GetUserID(r), strconv.Quote(req.Domain))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"message": fmt.Sprintf("Domain blocked: %s", req.Domain)})
 }
@@ -62,7 +63,7 @@ func (d *deps) handleBlacklistDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	found, err := d.cfg.DB.DeleteBlacklist(domain)
 	if err != nil {
-		log.Printf("[ERROR] DELETE /api/blacklist domain=%q: %v", domain, err)
+		log.Printf("[ERROR] DELETE /api/blacklist domain=%s: %v", strconv.Quote(domain), err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
@@ -70,7 +71,7 @@ func (d *deps) handleBlacklistDelete(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusNotFound, "Domain not found in blacklist")
 		return
 	}
-	log.Printf("[AUDIT] blacklist_remove admin_user=%d domain=%q", GetUserID(r), domain)
+	log.Printf("[AUDIT] blacklist_remove admin_user=%d domain=%s", GetUserID(r), strconv.Quote(domain))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"message": fmt.Sprintf("Domain removed from blacklist: %s", domain)})
 }

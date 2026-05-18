@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 
 	"onion-spider/internal/database"
 )
@@ -30,13 +31,13 @@ func (d *deps) handleCrawl(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusBadRequest, "Invalid URL: must be a valid .onion v3 URL (http/https)")
 		return
 	}
-	log.Printf("[AUDIT] POST /api/crawl ip=%q user=%d url=%q", ip, GetUserID(r), req.URL)
+	log.Printf("[AUDIT] POST /api/crawl ip=%s user=%d url=%s", strconv.Quote(ip), GetUserID(r), strconv.Quote(req.URL))
 	if err := d.cfg.Engine.AddToQueue(req.URL, GetUserID(r)); err != nil {
 		if errors.Is(err, database.ErrBlacklisted) {
 			WriteJSONError(w, http.StatusForbidden, "Domain blocked")
 			return
 		}
-		log.Printf("[ERROR] POST /api/crawl user=%d url=%q: %v", GetUserID(r), req.URL, err)
+		log.Printf("[ERROR] POST /api/crawl user=%d url=%s: %v", GetUserID(r), strconv.Quote(req.URL), err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
@@ -68,7 +69,7 @@ func (d *deps) handleRecrawl(w http.ResponseWriter, r *http.Request) {
 	}
 	found, canRequeue, err := d.cfg.DB.RequeueForCrawl(req.URL, GetUserID(r))
 	if err != nil {
-		log.Printf("[ERROR] POST /api/recrawl url=%q: %v", req.URL, err)
+		log.Printf("[ERROR] POST /api/recrawl url=%s: %v", strconv.Quote(req.URL), err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
@@ -80,7 +81,7 @@ func (d *deps) handleRecrawl(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusConflict, "Node is already being crawled")
 		return
 	}
-	log.Printf("[AUDIT] POST /api/recrawl ip=%q url=%q", ip, req.URL)
+	log.Printf("[AUDIT] POST /api/recrawl ip=%s url=%s", strconv.Quote(ip), strconv.Quote(req.URL))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Node has been queued for re-crawling"})
@@ -113,7 +114,7 @@ func (d *deps) handleCrawlBulk(w http.ResponseWriter, r *http.Request) {
 			skipped++
 			continue
 		}
-		log.Printf("[AUDIT] POST /api/crawl/bulk ip=%q user=%d url=%q", ip, GetUserID(r), u)
+		log.Printf("[AUDIT] POST /api/crawl/bulk ip=%s user=%d url=%s", strconv.Quote(ip), GetUserID(r), strconv.Quote(u))
 		if err := d.cfg.Engine.AddToQueue(u, GetUserID(r)); err != nil {
 			skipped++
 		} else {
