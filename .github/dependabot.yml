@@ -1,0 +1,66 @@
+version: 2
+
+updates:
+  # Backend (Go modules)
+  - package-ecosystem: gomod
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Bucharest
+    open-pull-requests-limit: 5
+    groups:
+      go-minor-and-patch:
+        update-types: [minor, patch]
+    labels:
+      - dependencies
+      - go
+
+  # Frontend (npm)
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Bucharest
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+    labels:
+      - dependencies
+      - javascript
+
+  # Dockerfiles (base images)
+  - package-ecosystem: docker
+    directories:
+      - /backend
+      - /frontend
+      - /deploy/tor
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Bucharest
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - docker
+
+  # GitHub Actions versions
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Bucharest
+    open-pull-requests-limit: 5
+    groups:
+      actions-all:
+        patterns: ["*"]
+    labels:
+      - dependencies
+      - github-actions

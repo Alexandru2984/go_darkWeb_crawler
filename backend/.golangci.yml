@@ -1,0 +1,61 @@
+version: "2"
+
+# We run golangci-lint v2.x (Aug 2025+). The `default: standard` linter set is
+# errcheck + govet + ineffassign + staticcheck + unused — that's the floor.
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+
+  settings:
+    errcheck:
+      # Functions whose error returns are deliberately ignored throughout the
+      # codebase. Listing them here keeps the lint signal high without
+      # peppering the source with `_ =`.
+      exclude-functions:
+        # HTTP response writes: if the client connection has died, there is
+        # nothing actionable to do.
+        - (net/http.ResponseWriter).Write
+        - (*encoding/json.Encoder).Encode
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+
+        # Deferred / cleanup closes — the error is not actionable at the point
+        # of defer.
+        - (*database/sql.Rows).Close
+        - (io.Closer).Close
+
+        # excelize streaming exports — per-cell SetCellValue errors are not
+        # worth aborting an entire export over.
+        - (*github.com/xuri/excelize/v2.File).SetSheetName
+        - (*github.com/xuri/excelize/v2.File).SetCellValue
+        - (*github.com/xuri/excelize/v2.File).Close
+
+        # xml.EscapeText writes to a strings.Builder which never errors.
+        - encoding/xml.EscapeText
+
+        # csv.Writer.Write returns errors only if the underlying writer fails,
+        # i.e. the HTTP client disconnected — same rationale as ResponseWriter.
+        - (*encoding/csv.Writer).Write
+
+        # ResponseController.SetWriteDeadline failing only means the underlying
+        # writer doesn't support deadlines — best-effort.
+        - (*net/http.ResponseController).SetWriteDeadline
+
+  exclusions:
+    rules:
+      # Test files: more permissive — test setup often closes sockets in
+      # cleanup funcs where the error is irrelevant.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+      # tor_controller.go SetDeadline + Close on net.Conn — closing a control
+      # connection after a NEWNYM signal failure is best-effort.
+      - path: internal/proxy/tor_controller\.go
+        text: "Error return value of `conn\\."
+        linters:
+          - errcheck

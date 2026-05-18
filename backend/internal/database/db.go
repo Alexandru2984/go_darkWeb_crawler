@@ -262,7 +262,10 @@ func (db *DB) EnqueueURL(rawURL string, depth int, userID int) error {
 	}
 	host := strings.ToLower(parsed.Host)
 	var count int
-	db.Conn.QueryRow(`SELECT COUNT(*) FROM blacklist WHERE domain = $1`, host).Scan(&count)
+	// Best-effort blacklist check: on Scan error count stays 0 (fail-open) so a
+	// transient DB hiccup never blocks legitimate enqueues. A persistent error
+	// would surface on the subsequent INSERT anyway.
+	_ = db.Conn.QueryRow(`SELECT COUNT(*) FROM blacklist WHERE domain = $1`, host).Scan(&count)
 	if count > 0 {
 		return ErrBlacklisted
 	}
@@ -319,7 +322,9 @@ func (db *DB) SaveEdge(source, target string, targetDepth int, userID int) error
 	// Check the blacklist before adding the target node to the queue
 	if targetHost != "" {
 		var count int
-		db.Conn.QueryRow(`SELECT COUNT(*) FROM blacklist WHERE domain = $1`, targetHost).Scan(&count)
+		// Same fail-open rationale as in EnqueueURL: a Scan error leaves count
+		// at 0 so blacklist DB hiccups don't drop edge discoveries silently.
+		_ = db.Conn.QueryRow(`SELECT COUNT(*) FROM blacklist WHERE domain = $1`, targetHost).Scan(&count)
 		if count == 0 {
 			_, _ = db.Conn.Exec(
 				`INSERT INTO nodes (url, host, processing_status, depth, user_id) VALUES ($1, $2, 'pending', $3, $4) ON CONFLICT (url, user_id) DO UPDATE

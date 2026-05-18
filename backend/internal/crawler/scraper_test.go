@@ -81,8 +81,6 @@ func TestScrapePage(t *testing.T) {
 }
 
 func TestScrapePageExtraLinkSources(t *testing.T) {
-	const onionURL = "http://test1234567890abc.onion/page"
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		fmt.Fprintf(w, `<html><head>

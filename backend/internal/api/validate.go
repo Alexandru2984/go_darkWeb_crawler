@@ -53,7 +53,7 @@ func NormalizeOnionURL(rawURL string) string {
 // "passwordaa" or "aaaaaaaaaa".
 func ValidatePassword(p string) error {
 	if len(p) < 10 || len(p) > 72 {
-		return errors.New("Password must be between 10 and 72 characters")
+		return errors.New("password must be between 10 and 72 characters")
 	}
 	var hasLower, hasUpper, hasDigit, hasSymbol bool
 	for _, r := range p {
@@ -75,7 +75,7 @@ func ValidatePassword(p string) error {
 		}
 	}
 	if classes < 3 {
-		return errors.New("Password must combine at least 3 categories: lowercase, uppercase, digits, symbols")
+		return errors.New("password must combine at least 3 categories: lowercase, uppercase, digits, symbols")
 	}
 	return nil
 }

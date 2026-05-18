@@ -72,7 +72,7 @@ func TestRenewCircuit_AuthFailed(t *testing.T) {
 	if renewed {
 		t.Error("expected renewed=false on auth error")
 	}
-	if !strings.Contains(err.Error(), "Tor authentication failed") {
+	if !strings.Contains(err.Error(), "tor authentication failed") {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }

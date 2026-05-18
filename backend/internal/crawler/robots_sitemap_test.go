@@ -1,6 +1,7 @@
 package crawler
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -22,10 +23,10 @@ func TestRobotsIsAllowed_Disallowed(t *testing.T) {
 	delete(globalRobotsCache.entries, server.Listener.Addr().String())
 	globalRobotsCache.mu.Unlock()
 
-	if IsAllowed(nil, server.Client(), server.URL+"/admin/panel") {
+	if IsAllowed(context.Background(), server.Client(), server.URL+"/admin/panel") {
 		t.Error("expected blocked for /admin/panel, but was allowed")
 	}
-	if IsAllowed(nil, server.Client(), server.URL+"/private/data") {
+	if IsAllowed(context.Background(), server.Client(), server.URL+"/private/data") {
 		t.Error("expected blocked for /private/data, but was allowed")
 	}
 }
@@ -44,7 +45,7 @@ func TestRobotsIsAllowed_Allowed(t *testing.T) {
 	delete(globalRobotsCache.entries, server.Listener.Addr().String())
 	globalRobotsCache.mu.Unlock()
 
-	if !IsAllowed(nil, server.Client(), server.URL+"/public/page") {
+	if !IsAllowed(context.Background(), server.Client(), server.URL+"/public/page") {
 		t.Error("expected allowed for /public/page, but was blocked")
 	}
 }
@@ -59,7 +60,7 @@ func TestRobotsIsAllowed_NoRobots(t *testing.T) {
 	delete(globalRobotsCache.entries, server.Listener.Addr().String())
 	globalRobotsCache.mu.Unlock()
 
-	if !IsAllowed(nil, server.Client(), server.URL+"/anything") {
+	if !IsAllowed(context.Background(), server.Client(), server.URL+"/anything") {
 		t.Error("no robots.txt — should be fail-open (allowed)")
 	}
 }
@@ -79,11 +80,11 @@ func TestRobotsParseRobots_UASpecific(t *testing.T) {
 	globalRobotsCache.mu.Unlock()
 
 	// /spider-only is disallowed by the OnionSpider section
-	if IsAllowed(nil, server.Client(), server.URL+"/spider-only/page") {
+	if IsAllowed(context.Background(), server.Client(), server.URL+"/spider-only/page") {
 		t.Error("expected blocked for /spider-only/page (OnionSpider section)")
 	}
 	// /all is disallowed by the * section
-	if IsAllowed(nil, server.Client(), server.URL+"/all/page") {
+	if IsAllowed(context.Background(), server.Client(), server.URL+"/all/page") {
 		t.Error("expected blocked for /all/page (* section)")
 	}
 }
@@ -105,7 +106,7 @@ func TestSitemapFetch_URLSet(t *testing.T) {
 	defer server.Close()
 
 	// Inject the test server URL instead of a real .onion
-	urls := fetchAndParseSitemap(nil, server.Client(), server.URL+"/sitemap.xml", false)
+	urls := fetchAndParseSitemap(context.Background(), server.Client(), server.URL+"/sitemap.xml", false)
 	if len(urls) != 2 {
 		t.Errorf("expected 2 .onion URLs, got %d: %v", len(urls), urls)
 	}
@@ -136,7 +137,7 @@ func TestSitemapFetch_SitemapIndex(t *testing.T) {
 
 	// The sub-sitemap is not .onion, so it won't be processed by recursion.
 	// The test verifies the parser doesn't panic.
-	urls := fetchAndParseSitemap(nil, server.Client(), server.URL+"/sitemap.xml", true)
+	urls := fetchAndParseSitemap(context.Background(), server.Client(), server.URL+"/sitemap.xml", true)
 	_ = urls
 }
 
@@ -146,8 +147,8 @@ func TestSitemapFetch_NoSitemap(t *testing.T) {
 	}))
 	defer server.Close()
 
-	urls := FetchSitemapURLs(nil, server.Client(), server.URL+"/page")
-	if urls != nil && len(urls) > 0 {
+	urls := FetchSitemapURLs(context.Background(), server.Client(), server.URL+"/page")
+	if len(urls) > 0 {
 		t.Errorf("expected empty list, got: %v", urls)
 	}
 }

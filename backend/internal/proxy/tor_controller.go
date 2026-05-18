@@ -66,7 +66,7 @@ func (c *TorController) RenewCircuit() (bool, error) {
 		return false, fmt.Errorf("error reading auth response: %w", err)
 	}
 	if !strings.HasPrefix(line, "250") {
-		return false, fmt.Errorf("Tor authentication failed: %s", strings.TrimSpace(line))
+		return false, fmt.Errorf("tor authentication failed: %s", strings.TrimSpace(line))
 	}
 
 	// SIGNAL NEWNYM — request a new circuit
