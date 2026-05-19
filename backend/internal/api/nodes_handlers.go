@@ -2,7 +2,7 @@ package api
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 )
 
@@ -11,7 +11,7 @@ func (d *deps) handleNodes(w http.ResponseWriter, r *http.Request) {
 	limit, offset := ParsePagination(r)
 	nodes, err := d.cfg.DB.GetNodes(limit, offset, GetUserID(r), IsAdmin(r))
 	if err != nil {
-		log.Printf("[ERROR] GET /api/nodes: %v", err)
+		slog.ErrorContext(r.Context(), "get_nodes_failed", "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
@@ -31,7 +31,7 @@ func (d *deps) handleNode(w http.ResponseWriter, r *http.Request) {
 	}
 	node, err := d.cfg.DB.GetNodeByURL(nodeURL, GetUserID(r), IsAdmin(r))
 	if err != nil {
-		log.Printf("[ERROR] GET /api/node url=%s: %v", logScrub(nodeURL), err)
+		slog.ErrorContext(r.Context(), "get_node_failed", "url", nodeURL, "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
@@ -47,7 +47,7 @@ func (d *deps) handleEdges(w http.ResponseWriter, r *http.Request) {
 	limit, offset := ParsePagination(r)
 	edges, err := d.cfg.DB.GetEdges(limit, offset, GetUserID(r), IsAdmin(r))
 	if err != nil {
-		log.Printf("[ERROR] GET /api/edges: %v", err)
+		slog.ErrorContext(r.Context(), "get_edges_failed", "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
@@ -73,7 +73,7 @@ func (d *deps) handleSearch(w http.ResponseWriter, r *http.Request) {
 	category := r.URL.Query().Get("category")
 	nodes, err := d.cfg.DB.SearchNodes(q, category, GetUserID(r), IsAdmin(r))
 	if err != nil {
-		log.Printf("[ERROR] GET /api/search q=%s: %v", logScrub(q), err)
+		slog.ErrorContext(r.Context(), "search_failed", "q", q, "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}

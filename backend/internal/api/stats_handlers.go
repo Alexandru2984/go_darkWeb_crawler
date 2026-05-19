@@ -2,7 +2,7 @@ package api
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"onion-spider/internal/database"
@@ -40,7 +40,7 @@ func (d *deps) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	stats, err := d.cfg.DB.GetTimelineStats(GetUserID(r), IsAdmin(r))
 	if err != nil {
-		log.Printf("[ERROR] GET /api/stats/timeline: %v", err)
+		slog.ErrorContext(r.Context(), "get_timeline_failed", "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}

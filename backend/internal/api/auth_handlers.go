@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -13,22 +13,23 @@ import (
 	"onion-spider/internal/email"
 )
 
-// logScrub strips CR/LF from a string before it lands in a log line. Done as
-// an inline-recognized strings.ReplaceAll pair (no wrapper) because that is
-// the exact sanitizer pattern CodeQL's go/log-injection query accepts — a
-// helper function or strconv.Quote does NOT propagate the clean taint state
-// through CodeQL's flow analysis, even though both escape CR/LF at runtime.
-func logScrub(s string) string {
-	s = strings.ReplaceAll(s, "\r", "")
-	s = strings.ReplaceAll(s, "\n", "")
-	return s
-}
+// logScrub kept commented-out as a placeholder. slog with KV attributes
+// serializes values as escaped JSON (or quoted text) so the CR/LF wrapper
+// is no longer needed for log-injection defense. If a future Sprintf-style
+// log statement reappears, replicate the helper here:
+//
+//	func logScrub(s string) string {
+//	    s = strings.ReplaceAll(s, "\r", "")
+//	    s = strings.ReplaceAll(s, "\n", "")
+//	    return s
+//	}
 
 func (d *deps) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if !d.cfg.AllowRegistration {
 		WriteJSONError(w, http.StatusForbidden, "Registration is currently closed")
 		return
 	}
+	ctx := r.Context()
 	ip := ClientIP(r)
 	if !d.registerLim.Allow(ip) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Too many registrations from this IP. Please try again later.")
@@ -58,7 +59,7 @@ func (d *deps) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// Rate-limit per recipient address — protects Gmail quota from abuse.
 	// Max 3 register attempts per email per hour.
 	if n, err := d.cfg.DB.CountRecentAuthEvents("register_ok", req.Email, 60); err == nil && n >= 3 {
-		log.Printf("[AUDIT] register_blocked ip=%s email=%s count=%d", logScrub(ip), logScrub(req.Email), n)
+		slog.InfoContext(ctx, "register_blocked", "ip", ip, "email", req.Email, "count", n)
 		WriteJSONError(w, http.StatusTooManyRequests, "This email has already received too many verification emails. Try again in an hour.")
 		return
 	}
@@ -82,18 +83,18 @@ func (d *deps) handleRegister(w http.ResponseWriter, r *http.Request) {
 	token := auth.GenerateVerificationToken()
 
 	if err := d.cfg.DB.CreateUser(req.Email, hash, role, token); err != nil {
-		log.Printf("[AUDIT] register_fail ip=%s email=%s: %v", logScrub(ip), logScrub(req.Email), err)
+		slog.InfoContext(ctx, "register_fail", "ip", ip, "email", req.Email, "err", err)
 		d.cfg.DB.LogAuthEvent("register_fail", req.Email, ip)
 		WriteJSONError(w, http.StatusBadRequest, "Error: email already in use or invalid data")
 		return
 	}
 
 	d.cfg.DB.LogAuthEvent("register_ok", req.Email, ip)
-	log.Printf("[AUDIT] register_ok ip=%s email=%s role=%s", logScrub(ip), logScrub(req.Email), role)
+	slog.InfoContext(ctx, "register_ok", "ip", ip, "email", req.Email, "role", role)
 
 	go func() {
 		if err := email.SendVerificationEmail(req.Email, token); err != nil {
-			log.Printf("[email] send error to %s: %v", logScrub(req.Email), err)
+			slog.ErrorContext(ctx, "email_send_failed", "to", req.Email, "err", err)
 		}
 	}()
 
@@ -103,6 +104,7 @@ func (d *deps) handleRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	ip := ClientIP(r)
 	if !d.loginLim.Allow(ip) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Too many login attempts. Please try again in 1 minute.")
@@ -131,14 +133,14 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// Run bcrypt anyway to keep timing constant (do not leak lockout state).
 		auth.CheckAgainstDummy(req.Password)
 		d.cfg.DB.LogAuthEvent("login_locked", req.Email, ip)
-		log.Printf("[AUDIT] login_locked ip=%s email=%s count=%d", logScrub(ip), logScrub(req.Email), n)
+		slog.InfoContext(ctx, "login_locked", "ip", ip, "email", req.Email, "count", n)
 		WriteJSONError(w, http.StatusTooManyRequests, "Account temporarily locked due to too many failed attempts. Wait 15 minutes.")
 		return
 	}
 
 	user, err := d.cfg.DB.GetUserByEmail(req.Email)
 	if err != nil {
-		log.Printf("[ERROR] GetUserByEmail: %v", err)
+		slog.ErrorContext(ctx, "get_user_by_email_failed", "err", err)
 		// Run bcrypt to keep timing constant even on DB error.
 		auth.CheckAgainstDummy(req.Password)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
@@ -150,13 +152,13 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if user == nil {
 		auth.CheckAgainstDummy(req.Password)
 		d.cfg.DB.LogAuthEvent("login_fail", req.Email, ip)
-		log.Printf("[AUDIT] login_fail ip=%s email=%s reason=unknown_user", logScrub(ip), logScrub(req.Email))
+		slog.InfoContext(ctx, "login_fail", "ip", ip, "email", req.Email, "reason", "unknown_user")
 		WriteJSONError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 	if !auth.CheckPasswordHash(req.Password, user.PasswordHash) {
 		d.cfg.DB.LogAuthEvent("login_fail", req.Email, ip)
-		log.Printf("[AUDIT] login_fail ip=%s email=%s reason=bad_password", logScrub(ip), logScrub(req.Email))
+		slog.InfoContext(ctx, "login_fail", "ip", ip, "email", req.Email, "reason", "bad_password")
 		WriteJSONError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
@@ -169,12 +171,12 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	token, err := auth.GenerateToken(user.ID, user.Email, user.Role)
 	if err != nil {
-		log.Printf("[ERROR] JWT generation for %s: %v", logScrub(user.Email), err)
+		slog.ErrorContext(ctx, "jwt_generate_failed", "email", user.Email, "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
 	d.cfg.DB.LogAuthEvent("login_ok", req.Email, ip)
-	log.Printf("[AUDIT] login_ok ip=%s email=%s role=%s", logScrub(ip), logScrub(user.Email), user.Role)
+	slog.InfoContext(ctx, "login_ok", "ip", ip, "email", user.Email, "role", user.Role)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"token": token, "role": user.Role, "email": user.Email})
@@ -216,6 +218,7 @@ func (d *deps) handleVerifyGET(w http.ResponseWriter, r *http.Request) {
 
 // handleVerifyPOST actually consumes the token (accepts JSON or form-encoded body).
 func (d *deps) handleVerifyPOST(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	ip := ClientIP(r)
 	if !d.verifyLim.Allow(ip) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Too many attempts. Please try again in 1 minute.")
@@ -247,11 +250,11 @@ func (d *deps) handleVerifyPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.cfg.DB.VerifyUser(token); err != nil {
-		log.Printf("[AUDIT] verify_fail ip=%s: %v", logScrub(ip), err)
+		slog.InfoContext(ctx, "verify_fail", "ip", ip, "err", err)
 		WriteJSONError(w, http.StatusBadRequest, "Token invalid, expired or already used")
 		return
 	}
-	log.Printf("[AUDIT] verify_ok ip=%s", logScrub(ip))
+	slog.InfoContext(ctx, "verify_ok", "ip", ip)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Write([]byte(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Account verified</title></head><body style="font-family:sans-serif;max-width:480px;margin:4rem auto;text-align:center"><h1>Account successfully verified!</h1><p><a href="/">Back to login</a></p></body></html>`))

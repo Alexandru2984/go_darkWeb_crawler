@@ -7,7 +7,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
@@ -17,15 +17,6 @@ import (
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	_ "github.com/lib/pq"
 )
-
-// logScrub strips CR/LF before logging user-supplied values. See the same
-// helper in the api package for why strings.ReplaceAll is the exact form
-// CodeQL's go/log-injection query accepts.
-func logScrub(s string) string {
-	s = strings.ReplaceAll(s, "\r", "")
-	s = strings.ReplaceAll(s, "\n", "")
-	return s
-}
 
 // migrationsFS embeds the SQL migration files so the binary is self-contained
 // and identical across environments. Files live in ./migrations/ next to this
@@ -56,7 +47,7 @@ func InitDB(dsn string) (*DB, error) {
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
-	log.Println("PostgreSQL connection successful!")
+	slog.Info("postgres_connected")
 
 	if err = runMigrations(db); err != nil {
 		return nil, fmt.Errorf("error running database migrations: %w", err)
@@ -65,7 +56,7 @@ func InitDB(dsn string) (*DB, error) {
 	// Nodes left in 'crawling' from a previous crash will never be retried.
 	// Reset them to 'pending' on every startup.
 	if _, err = db.Exec(`UPDATE nodes SET processing_status = 'pending' WHERE processing_status = 'crawling'`); err != nil {
-		log.Printf("⚠️ Could not reset 'crawling' nodes: %v", err)
+		slog.Warn("reset_crawling_nodes_failed", "err", err)
 	}
 
 	return &DB{Conn: db}, nil
@@ -101,7 +92,7 @@ func runMigrations(db *sql.DB) error {
 	if err != nil && !errors.Is(err, migrate.ErrNilVersion) {
 		return fmt.Errorf("read migration version: %w", err)
 	}
-	log.Printf("[migrate] schema at version %d (dirty=%v)", v, dirty)
+	slog.Info("migrate_complete", "version", v, "dirty", dirty)
 	return nil
 }
 
@@ -786,7 +777,7 @@ func (db *DB) LogAuthEvent(event, email, ip string) {
 		event, NormalizeEmail(email), ip,
 	)
 	if err != nil {
-		log.Printf("[audit] could not log %s for %s: %v", logScrub(event), logScrub(email), err)
+		slog.Error("auth_audit_write_failed", "event", event, "email", email, "err", err)
 	}
 }
 

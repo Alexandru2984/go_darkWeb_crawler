@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -60,7 +60,7 @@ func (d *deps) handleExport(w http.ResponseWriter, r *http.Request) {
 		format = "json"
 	}
 	ip := ClientIP(r)
-	log.Printf("[AUDIT] GET /api/export ip=%s uid=%d format=%s", logScrub(ip), uid, format)
+	slog.InfoContext(r.Context(), "export_request", "ip", ip, "uid", uid, "format", format)
 
 	rc := http.NewResponseController(w)
 	rc.SetWriteDeadline(time.Now().Add(10 * time.Minute))
@@ -100,7 +100,7 @@ func (d *deps) exportJSON(w http.ResponseWriter, r *http.Request, uid int, isAdm
 	})
 	w.Write([]byte("]"))
 	if err != nil {
-		log.Printf("[EXPORT] JSON error: %v", err)
+		slog.ErrorContext(r.Context(), "export_failed", "format", "json", "err", err)
 	}
 }
 
@@ -110,7 +110,7 @@ func (d *deps) exportNDJSON(w http.ResponseWriter, r *http.Request, uid int, isA
 	enc := json.NewEncoder(w)
 	err := d.cfg.DB.ExportNodes(r.Context(), uid, isAdmin, func(n database.Node) error { return enc.Encode(n) })
 	if err != nil {
-		log.Printf("[EXPORT] NDJSON error: %v", err)
+		slog.ErrorContext(r.Context(), "export_failed", "format", "ndjson", "err", err)
 	}
 }
 
@@ -128,7 +128,7 @@ func (d *deps) exportCSV(w http.ResponseWriter, r *http.Request, uid int, isAdmi
 	})
 	cw.Flush()
 	if err != nil {
-		log.Printf("[EXPORT] CSV error: %v", err)
+		slog.ErrorContext(r.Context(), "export_failed", "format", "csv", "err", err)
 	}
 }
 
@@ -155,7 +155,7 @@ func (d *deps) exportXLSX(w http.ResponseWriter, r *http.Request, uid int, isAdm
 		return nil
 	})
 	if err != nil {
-		log.Printf("[EXPORT] XLSX error: %v", err)
+		slog.ErrorContext(r.Context(), "export_failed", "format", "xlsx", "err", err)
 	}
 	var xlsxBuf bytes.Buffer
 	if err := xf.Write(&xlsxBuf); err != nil {
@@ -215,7 +215,7 @@ func (d *deps) exportPDF(w http.ResponseWriter, r *http.Request, uid int, isAdmi
 		return nil
 	})
 	if err != nil {
-		log.Printf("[EXPORT] PDF error: %v", err)
+		slog.ErrorContext(r.Context(), "export_failed", "format", "pdf", "err", err)
 	}
 	var pdfBuf bytes.Buffer
 	if err := pf.Output(&pdfBuf); err != nil {
@@ -250,14 +250,14 @@ func (d *deps) exportGraphML(w http.ResponseWriter, r *http.Request, uid int, is
 		return nil
 	})
 	if err != nil {
-		log.Printf("[EXPORT] GraphML nodes error: %v", err)
+		slog.ErrorContext(r.Context(), "export_failed", "format", "graphml", "kind", "nodes", "err", err)
 	}
 	err = d.cfg.DB.ExportGraphMLEdges(r.Context(), uid, isAdmin, func(ge database.GraphMLEdge) error {
 		fmt.Fprintf(w, "    <edge source=\"n%d\" target=\"n%d\"/>\n", ge.SourceID, ge.TargetID)
 		return nil
 	})
 	if err != nil {
-		log.Printf("[EXPORT] GraphML edges error: %v", err)
+		slog.ErrorContext(r.Context(), "export_failed", "format", "graphml", "kind", "edges", "err", err)
 	}
 	fmt.Fprint(w, "  </graph>\n</graphml>\n")
 }

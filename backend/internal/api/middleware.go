@@ -2,7 +2,7 @@ package api
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -62,7 +62,7 @@ func LoadDBRole(db *database.DB) func(http.Handler) http.Handler {
 			}
 			role, err := db.GetUserRole(uid)
 			if err != nil {
-				log.Printf("[ERROR] LoadDBRole uid=%d: %v", uid, err)
+				slog.ErrorContext(r.Context(), "load_db_role_failed", "uid", uid, "err", err)
 				WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 				return
 			}

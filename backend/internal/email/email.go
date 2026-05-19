@@ -3,20 +3,12 @@ package email
 import (
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/mail"
 	"net/smtp"
 	"os"
 	"strings"
 )
-
-// logScrub strips CR/LF before logging user-supplied values; see the same
-// helper in the api package for the explanation.
-func logScrub(s string) string {
-	s = strings.ReplaceAll(s, "\r", "")
-	s = strings.ReplaceAll(s, "\n", "")
-	return s
-}
 
 // ErrInvalidRecipient is returned when the recipient address fails RFC 5322
 // parsing or fails our extra CRLF check.
@@ -74,10 +66,11 @@ func SendVerificationEmail(to, token string) error {
 	verifyLink = strings.ReplaceAll(verifyLink, "\n", "")
 
 	if smtpHost == "" || smtpUser == "" {
-		// Dev mode: do NOT log the token in plain text in prod — just say we
-		// would have sent it. cleanTo is already CRLF-stripped above; pass it
-		// through logScrub again so the data flow visibly stays sanitized.
-		log.Printf("[email] SMTP not configured — verification email NOT sent to %s", logScrub(cleanTo))
+		// Dev mode: do NOT log the token in plain text — just record the
+		// dropped recipient. cleanTo is already CRLF-stripped above; slog
+		// serializes the value as a JSON-escaped attribute so log injection
+		// is structurally impossible.
+		slog.Info("smtp_not_configured_email_dropped", "to", cleanTo)
 		return nil
 	}
 

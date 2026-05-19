@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -33,7 +33,8 @@ func getJWTSecret() []byte {
 	jwtSecretOnce.Do(func() {
 		s := os.Getenv("JWT_SECRET")
 		if len(s) < MinSecretLen {
-			log.Fatalf("FATAL: JWT_SECRET is missing or shorter than %d characters. Generate with: openssl rand -hex 32", MinSecretLen)
+			slog.Error("jwt_secret_invalid", "min_chars", MinSecretLen, "hint", "generate with: openssl rand -hex 32")
+			os.Exit(1)
 		}
 		jwtSecret = []byte(s)
 	})
@@ -48,7 +49,8 @@ func MustInitSecrets() {
 	_ = getJWTSecret()
 	h, err := bcrypt.GenerateFromPassword([]byte("dummy-timing-equalization-placeholder"), 12)
 	if err != nil {
-		log.Fatalf("FATAL: cannot generate dummyHash: %v", err)
+		slog.Error("dummy_hash_generation_failed", "err", err)
+		os.Exit(1)
 	}
 	dummyHash = string(h)
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/xml"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -100,7 +100,7 @@ func fetchAndParseSitemap(ctx context.Context, client *http.Client, sitemapURL s
 	// Try standard urlset
 	var us urlSet
 	if err := xml.Unmarshal(body, &us); err != nil {
-		log.Printf("[Sitemap] Could not parse %s: %v", sitemapURL, err)
+		slog.WarnContext(ctx, "sitemap_parse_failed", "url", sitemapURL, "err", err)
 		return nil
 	}
 

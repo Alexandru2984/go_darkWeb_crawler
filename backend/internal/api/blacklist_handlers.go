@@ -3,7 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -14,7 +14,7 @@ func (d *deps) handleBlacklistList(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	domains, err := d.cfg.DB.GetBlacklist()
 	if err != nil {
-		log.Printf("[ERROR] GET /api/blacklist: %v", err)
+		slog.ErrorContext(r.Context(), "blacklist_list_failed", "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
@@ -25,6 +25,7 @@ func (d *deps) handleBlacklistList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *deps) handleBlacklistAdd(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	var req struct {
 		Domain string `json:"domain"`
 	}
@@ -45,16 +46,17 @@ func (d *deps) handleBlacklistAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.cfg.DB.AddBlacklist(req.Domain); err != nil {
-		log.Printf("[ERROR] POST /api/blacklist domain=%s: %v", logScrub(req.Domain), err)
+		slog.ErrorContext(ctx, "blacklist_add_failed", "domain", req.Domain, "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
-	log.Printf("[AUDIT] blacklist_add admin_user=%d domain=%s", GetUserID(r), logScrub(req.Domain))
+	slog.InfoContext(ctx, "blacklist_add", "admin_user", GetUserID(r), "domain", req.Domain)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"message": fmt.Sprintf("Domain blocked: %s", req.Domain)})
 }
 
 func (d *deps) handleBlacklistDelete(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	domain := strings.ToLower(strings.TrimSpace(chi.URLParam(r, "domain")))
 	if domain == "" || !strings.HasSuffix(domain, ".onion") {
 		WriteJSONError(w, http.StatusBadRequest, "Invalid domain: must be a .onion domain")
@@ -62,7 +64,7 @@ func (d *deps) handleBlacklistDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	found, err := d.cfg.DB.DeleteBlacklist(domain)
 	if err != nil {
-		log.Printf("[ERROR] DELETE /api/blacklist domain=%s: %v", logScrub(domain), err)
+		slog.ErrorContext(ctx, "blacklist_delete_failed", "domain", domain, "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
@@ -70,7 +72,7 @@ func (d *deps) handleBlacklistDelete(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusNotFound, "Domain not found in blacklist")
 		return
 	}
-	log.Printf("[AUDIT] blacklist_remove admin_user=%d domain=%s", GetUserID(r), logScrub(domain))
+	slog.InfoContext(ctx, "blacklist_remove", "admin_user", GetUserID(r), "domain", domain)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"message": fmt.Sprintf("Domain removed from blacklist: %s", domain)})
 }

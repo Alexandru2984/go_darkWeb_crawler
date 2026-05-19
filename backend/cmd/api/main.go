@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,19 +13,24 @@ import (
 	"onion-spider/internal/auth"
 	"onion-spider/internal/crawler"
 	"onion-spider/internal/database"
+	"onion-spider/internal/logging"
 	"onion-spider/internal/proxy"
 
 	"github.com/joho/godotenv"
 )
 
 func main() {
-	if err := godotenv.Load(); err != nil {
-		log.Println("⚠️  No .env file found, using system environment variables")
-	}
+	// godotenv MUST run before logger init so LOG_LEVEL / LOG_FORMAT are
+	// picked up from .env on dev boxes.
+	_ = godotenv.Load() // missing .env is fine in prod (systemd EnvironmentFile)
+
+	logger := logging.NewDefault()
+	logger.Info("startup", "service", "onion-spider-api")
 
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		log.Fatal("FATAL: DATABASE_URL is missing")
+		logger.Error("DATABASE_URL is missing")
+		os.Exit(1)
 	}
 
 	// Force-load JWT_SECRET at startup — log.Fatal if missing or weak.
@@ -59,7 +63,8 @@ func main() {
 
 	dbConn, err := database.InitDB(dsn)
 	if err != nil {
-		log.Fatalf("FATAL: DB connection: %v", err)
+		logger.Error("db connection failed", "err", err)
+		os.Exit(1)
 	}
 
 	engine := crawler.NewEngine(dbConn, torProxy, workers, maxDepth)
@@ -75,10 +80,10 @@ func main() {
 		30*time.Second,
 	)
 	if _, err := torCtrl.RenewCircuit(); err != nil {
-		log.Printf("⚠️  TorController: control port unavailable, circuit renewal disabled: %v", err)
+		logger.Warn("tor control port unavailable; circuit renewal disabled", "err", err)
 	} else {
 		engine.TorCtrl = torCtrl
-		log.Println("✅ TorController active")
+		logger.Info("tor controller active")
 	}
 
 	engine.Start()
@@ -91,11 +96,11 @@ func main() {
 		for range ticker.C {
 			n, err := dbConn.ResetStuckCrawling(10 * time.Minute)
 			if err != nil {
-				log.Printf("[sweeper] ResetStuckCrawling error: %v", err)
+				logger.Error("sweeper failed", "op", "ResetStuckCrawling", "err", err)
 				continue
 			}
 			if n > 0 {
-				log.Printf("[sweeper] recovered %d nodes stuck in 'crawling'", n)
+				logger.Info("sweeper recovered stuck nodes", "count", n)
 			}
 		}
 	}()
@@ -112,11 +117,11 @@ func main() {
 		run := func() {
 			n, err := dbConn.PurgeOldAuditLogs(auditRetention)
 			if err != nil {
-				log.Printf("[retention] PurgeOldAuditLogs error: %v", err)
+				logger.Error("retention purge failed", "op", "PurgeOldAuditLogs", "err", err)
 				return
 			}
 			if n > 0 {
-				log.Printf("[retention] deleted %d auth_audit entries older than %v", n, auditRetention)
+				logger.Info("retention purged auth_audit", "count", n, "older_than", auditRetention.String())
 			}
 		}
 		run()
@@ -145,9 +150,10 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("=== [API] Server listening on port %s ===", port)
+		logger.Info("server listening", "port", port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Error starting server: %v", err)
+			logger.Error("server start failed", "err", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -155,13 +161,13 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Graceful shutdown initiated...")
+	logger.Info("graceful shutdown initiated")
 	engine.Stop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Printf("Error shutting down HTTP server: %v", err)
+		logger.Error("http server shutdown failed", "err", err)
 	}
-	log.Println("Server stopped.")
+	logger.Info("server stopped")
 }

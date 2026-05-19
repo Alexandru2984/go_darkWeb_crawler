@@ -3,13 +3,14 @@ package api
 import (
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"onion-spider/internal/database"
 )
 
 func (d *deps) handleCrawl(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	ip := ClientIP(r)
 	if !IsAdmin(r) && !d.crawlLim.Allow(ip) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Too many requests. Please try again in a few minutes.")
@@ -30,16 +31,13 @@ func (d *deps) handleCrawl(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusBadRequest, "Invalid URL: must be a valid .onion v3 URL (http/https)")
 		return
 	}
-	log.Printf("[AUDIT] POST /api/crawl ip=%s user=%d url=%s", logScrub(ip), GetUserID(r), logScrub(req.URL))
+	slog.InfoContext(ctx, "crawl_request", "ip", ip, "user", GetUserID(r), "url", req.URL)
 	if err := d.cfg.Engine.AddToQueue(req.URL, GetUserID(r)); err != nil {
 		if errors.Is(err, database.ErrBlacklisted) {
 			WriteJSONError(w, http.StatusForbidden, "Domain blocked")
 			return
 		}
-		// EnqueueURL embeds rawURL into some error messages ("invalid url: %s"),
-		// so err.Error() can carry user-controlled input. logScrub the err.Error()
-		// stringification too — %v alone would not be sanitized.
-		log.Printf("[ERROR] POST /api/crawl user=%d url=%s: %s", GetUserID(r), logScrub(req.URL), logScrub(err.Error()))
+		slog.ErrorContext(ctx, "crawl_enqueue_failed", "user", GetUserID(r), "url", req.URL, "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
@@ -49,6 +47,7 @@ func (d *deps) handleCrawl(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *deps) handleRecrawl(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	ip := ClientIP(r)
 	if !IsAdmin(r) && !d.crawlLim.Allow(ip) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Too many requests. Please try again in a few minutes.")
@@ -71,7 +70,7 @@ func (d *deps) handleRecrawl(w http.ResponseWriter, r *http.Request) {
 	}
 	found, canRequeue, err := d.cfg.DB.RequeueForCrawl(req.URL, GetUserID(r))
 	if err != nil {
-		log.Printf("[ERROR] POST /api/recrawl url=%s: %v", logScrub(req.URL), err)
+		slog.ErrorContext(ctx, "recrawl_failed", "url", req.URL, "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
@@ -83,13 +82,14 @@ func (d *deps) handleRecrawl(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusConflict, "Node is already being crawled")
 		return
 	}
-	log.Printf("[AUDIT] POST /api/recrawl ip=%s url=%s", logScrub(ip), logScrub(req.URL))
+	slog.InfoContext(ctx, "recrawl_request", "ip", ip, "url", req.URL)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Node has been queued for re-crawling"})
 }
 
 func (d *deps) handleCrawlBulk(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	ip := ClientIP(r)
 	if !IsAdmin(r) && !d.crawlLim.Allow(ip) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Too many requests. Please try again in a few minutes.")
@@ -116,7 +116,7 @@ func (d *deps) handleCrawlBulk(w http.ResponseWriter, r *http.Request) {
 			skipped++
 			continue
 		}
-		log.Printf("[AUDIT] POST /api/crawl/bulk ip=%s user=%d url=%s", logScrub(ip), GetUserID(r), logScrub(u))
+		slog.InfoContext(ctx, "crawl_bulk_item", "ip", ip, "user", GetUserID(r), "url", u)
 		if err := d.cfg.Engine.AddToQueue(u, GetUserID(r)); err != nil {
 			skipped++
 		} else {
@@ -132,7 +132,7 @@ func (d *deps) handleQueue(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	summary, err := d.cfg.DB.GetQueueSummary(GetUserID(r), IsAdmin(r))
 	if err != nil {
-		log.Printf("[ERROR] GET /api/queue: %v", err)
+		slog.ErrorContext(r.Context(), "get_queue_failed", "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}

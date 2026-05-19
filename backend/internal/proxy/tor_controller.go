@@ -3,7 +3,7 @@ package proxy
 import (
 	"bufio"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"strings"
@@ -82,7 +82,7 @@ func (c *TorController) RenewCircuit() (bool, error) {
 	}
 
 	c.lastRenewal = time.Now()
-	log.Println("🔄 Tor circuit renewed (SIGNAL NEWNYM).")
+	slog.Info("tor_circuit_renewed")
 	return true, nil
 }
 

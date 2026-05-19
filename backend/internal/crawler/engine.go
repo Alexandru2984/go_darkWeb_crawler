@@ -2,7 +2,7 @@ package crawler
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"onion-spider/internal/database"
@@ -46,7 +46,7 @@ func NewEngine(db *database.DB, proxyAddr string, workerCount int, maxDepth int)
 func (e *Engine) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	e.cancel = cancel
-	log.Printf("🚀 Starting crawling engine with %d workers (MaxDepth: %d, Politeness Active)...", e.Workers, e.MaxDepth)
+	slog.InfoContext(ctx, "crawler_start", "workers", e.Workers, "max_depth", e.MaxDepth)
 	for i := 0; i < e.Workers; i++ {
 		e.wg.Add(1)
 		go func(id int) {
@@ -55,10 +55,10 @@ func (e *Engine) Start() {
 				e.worker(ctx, id)
 				select {
 				case <-ctx.Done():
-					log.Printf("[Worker %d] Stopped permanently.", id)
+					slog.InfoContext(ctx, "worker_stopped_permanently", "worker", id)
 					return
 				case <-time.After(10 * time.Second):
-					log.Printf("[Worker %d] Restarting after Tor error...", id)
+					slog.WarnContext(ctx, "worker_restarting", "worker", id, "reason", "tor_error")
 				}
 			}
 		}(i)
@@ -94,7 +94,7 @@ func (e *Engine) Stop() {
 		e.cancel()
 	}
 	e.wg.Wait()
-	log.Println("🛑 Crawling engine stopped.")
+	slog.Info("crawler_stopped")
 }
 
 // waitForDomain ensures we don't hammer the same domain — enforces a 5-second delay.
@@ -133,11 +133,12 @@ func (e *Engine) waitForDomain(ctx context.Context, targetUrl string) bool {
 }
 
 func (e *Engine) worker(ctx context.Context, id int) {
-	log.Printf("[Worker %d] Active", id)
+	log := slog.With("worker", id)
+	log.InfoContext(ctx, "worker_active")
 
 	transport, client, err := proxy.NewTorClientWithTransport(e.Proxy)
 	if err != nil {
-		log.Printf("[Worker %d] Fatal Tor error: %v", id, err)
+		log.ErrorContext(ctx, "tor_client_init_failed", "err", err)
 		return
 	}
 
@@ -149,14 +150,14 @@ func (e *Engine) worker(ctx context.Context, id int) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("[Worker %d] Stopped.", id)
+			log.InfoContext(ctx, "worker_stopped")
 			return
 		default:
 		}
 
 		targetUrl, depth, userID, err := e.DB.GetNextPendingNode()
 		if err != nil {
-			log.Printf("[Worker %d] Error fetching from queue: %v", id, err)
+			log.ErrorContext(ctx, "queue_fetch_failed", "err", err)
 			select {
 			case <-ctx.Done():
 				return
@@ -176,31 +177,31 @@ func (e *Engine) worker(ctx context.Context, id int) {
 
 		// Crawl-time validation: we process exclusively .onion addresses
 		if parsedTarget, err := url.Parse(targetUrl); err != nil || !strings.HasSuffix(strings.ToLower(parsedTarget.Hostname()), ".onion") {
-			log.Printf("[Worker %d] Non-.onion URL in DB, marked as invalid: %s", id, logScrub(targetUrl))
+			log.WarnContext(ctx, "non_onion_url_skipped", "url", targetUrl)
 			_ = e.DB.MarkRobotsBlocked(targetUrl, userID)
 			continue
 		}
 
-		log.Printf("[Worker %d] Waiting for rate-limit permission for: %s", id, logScrub(targetUrl))
+		log.DebugContext(ctx, "rate_limit_wait", "url", targetUrl)
 		if !e.waitForDomain(ctx, targetUrl) {
 			return // context cancelled while waiting
 		}
-		log.Printf("[Worker %d] Crawl approved: %s (Depth: %d, User: %d)", id, logScrub(targetUrl), depth, userID)
+		log.InfoContext(ctx, "crawl_started", "url", targetUrl, "depth", depth, "user", userID)
 
 		// Check robots.txt before scraping
 		if !IsAllowed(ctx, client, targetUrl) {
-			log.Printf("[Worker %d] Blocked by robots.txt: %s", id, logScrub(targetUrl))
+			log.InfoContext(ctx, "robots_blocked", "url", targetUrl)
 			if err := e.DB.MarkRobotsBlocked(targetUrl, userID); err != nil {
-				log.Printf("[Worker %d] DB Error marking robots blocked: %v", id, err)
+				log.ErrorContext(ctx, "mark_robots_blocked_failed", "err", err)
 			}
 			continue
 		}
 
 		result, err := ScrapePage(ctx, client, targetUrl)
 		if err != nil {
-			log.Printf("[Worker %d] Network/SOCKS error at %s: %v", id, logScrub(targetUrl), err)
+			log.WarnContext(ctx, "scrape_failed", "url", targetUrl, "err", err)
 			if errRetry := e.DB.FailNodeWithRetry(targetUrl, userID); errRetry != nil {
-				log.Printf("[Worker %d] DB Error on retry for %s: %v", id, logScrub(targetUrl), errRetry)
+				log.ErrorContext(ctx, "retry_mark_failed", "url", targetUrl, "err", errRetry)
 			}
 			e.onNetworkError()
 			continue
@@ -209,18 +210,18 @@ func (e *Engine) worker(ctx context.Context, id int) {
 		e.globalErrorCount.Store(0)
 		changed, err := e.DB.SaveNode(targetUrl, result.Title, result.ServerHeader, result.StatusCode, "completed", result.Metadata, result.Content, result.Category, userID)
 		if err != nil {
-			log.Printf("[Worker %d] Error saving node: %v", id, err)
+			log.ErrorContext(ctx, "save_node_failed", "err", err)
 			if retryErr := e.DB.FailNodeWithRetry(targetUrl, userID); retryErr != nil {
-				log.Printf("[Worker %d] Error on retry after SaveNode failure: %v", id, retryErr)
+				log.ErrorContext(ctx, "retry_after_save_failed", "err", retryErr)
 			}
 		} else if !changed {
-			log.Printf("[Worker %d] Content unchanged (identical hash): %s", id, logScrub(targetUrl))
+			log.DebugContext(ctx, "content_unchanged", "url", targetUrl)
 		}
 
 		if depth < e.MaxDepth {
 			for _, foundUrl := range result.FoundOnions {
 				if err = e.DB.SaveEdge(targetUrl, foundUrl, depth+1, userID); err != nil {
-					log.Printf("[Worker %d] Error saving edge: %v", id, err)
+					log.ErrorContext(ctx, "save_edge_failed", "err", err)
 				}
 			}
 			// At depth=0 we also fetch sitemap.xml for additional discovery
@@ -228,16 +229,16 @@ func (e *Engine) worker(ctx context.Context, id int) {
 				sitemapURLs := FetchSitemapURLs(ctx, client, targetUrl)
 				for _, su := range sitemapURLs {
 					if err = e.DB.SaveEdge(targetUrl, su, 1, userID); err != nil {
-						log.Printf("[Worker %d] Sitemap edge error: %v", id, err)
+						log.ErrorContext(ctx, "save_sitemap_edge_failed", "err", err)
 					}
 				}
 				if len(sitemapURLs) > 0 {
-					log.Printf("[Worker %d] Sitemap: %d additional URLs from %s", id, len(sitemapURLs), logScrub(targetUrl))
+					log.InfoContext(ctx, "sitemap_discovered", "url", targetUrl, "count", len(sitemapURLs))
 				}
 			}
-			log.Printf("[Worker %d] Completed: %s (found %d new links)", id, logScrub(targetUrl), len(result.FoundOnions))
+			log.InfoContext(ctx, "crawl_completed", "url", targetUrl, "new_links", len(result.FoundOnions))
 		} else {
-			log.Printf("[Worker %d] Completed: %s (max depth %d reached, ignoring %d new links)", id, logScrub(targetUrl), e.MaxDepth, len(result.FoundOnions))
+			log.InfoContext(ctx, "crawl_completed_max_depth", "url", targetUrl, "max_depth", e.MaxDepth, "ignored_links", len(result.FoundOnions))
 		}
 
 		select {
@@ -258,7 +259,7 @@ func (e *Engine) onNetworkError() {
 	}
 	renewed, err := e.TorCtrl.RenewCircuit()
 	if err != nil {
-		log.Printf("[TorCtrl] Error renewing circuit: %v", err)
+		slog.Error("tor_circuit_renew_failed", "err", err)
 		return
 	}
 	if renewed {
@@ -273,17 +274,8 @@ func (e *Engine) onNetworkError() {
 		e.transportsMu.Unlock()
 	}
 }
+
 // AddToQueue manually adds a URL to the queue without overwriting existing data
 func (e *Engine) AddToQueue(rawURL string, userID int) error {
 	return e.DB.EnqueueURL(rawURL, 0, userID)
-}
-
-// logScrub strips CR/LF from a string before logging — strings.ReplaceAll on
-// "\r" and "\n" is the exact sanitizer CodeQL's go/log-injection query
-// accepts. See the same-named helper in the api package for the longer
-// explanation.
-func logScrub(s string) string {
-	s = strings.ReplaceAll(s, "\r", "")
-	s = strings.ReplaceAll(s, "\n", "")
-	return s
 }
