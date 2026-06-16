@@ -70,16 +70,22 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 	const maxContentBytes = 100 * 1024 // 100KB — prevents storing gigantic pages in the DB
 	result.Content = truncateUTF8(content, maxContentBytes)
 
-	metaDataMap := make(map[string]string)
+	metaData := make(map[string]any)
 	doc.Find("meta").Each(func(i int, s *goquery.Selection) {
 		name, _ := s.Attr("name")
 		content, _ := s.Attr("content")
 		if name == "description" || name == "keywords" {
-			metaDataMap[name] = truncateUTF8(strings.TrimSpace(content), 1000)
+			metaData[name] = truncateUTF8(strings.TrimSpace(content), 1000)
 		}
 	})
-	if len(metaDataMap) > 0 {
-		if jsonBytes, err := json.Marshal(metaDataMap); err == nil {
+	// Structured intelligence: crypto addresses, PGP keys and contact emails
+	// found in the page text. Stored under metadata.entities so existing
+	// consumers (which read description/keywords) keep working unchanged.
+	if ents := ExtractEntities(result.Content); !ents.Empty() {
+		metaData["entities"] = ents
+	}
+	if len(metaData) > 0 {
+		if jsonBytes, err := json.Marshal(metaData); err == nil {
 			result.Metadata = string(jsonBytes)
 		}
 	}

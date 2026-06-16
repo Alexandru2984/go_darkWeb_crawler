@@ -98,22 +98,39 @@ func (e *Engine) Stop() {
 	slog.Info("crawler_stopped")
 }
 
-// waitForDomain ensures we don't hammer the same domain — enforces a 5-second delay.
+// defaultDomainDelay is the baseline politeness gap between two requests to the
+// same domain. maxDomainDelay caps a hostile/oversized robots Crawl-delay so it
+// can't park a worker for minutes.
+const (
+	defaultDomainDelay = 5 * time.Second
+	maxDomainDelay     = 60 * time.Second
+)
+
+// waitForDomain ensures we don't hammer the same domain. The gap is
+// max(defaultDomainDelay, robots Crawl-delay), capped at maxDomainDelay.
 // Returns false if the context was cancelled while waiting.
-func (e *Engine) waitForDomain(ctx context.Context, targetUrl string) bool {
+func (e *Engine) waitForDomain(ctx context.Context, targetUrl string, minDelay time.Duration) bool {
 	parsed, err := url.Parse(targetUrl)
 	if err != nil {
 		return true
 	}
 	host := parsed.Host
 
+	delay := defaultDomainDelay
+	if minDelay > delay {
+		delay = minDelay
+	}
+	if delay > maxDomainDelay {
+		delay = maxDomainDelay
+	}
+
 	e.domainMu.Lock()
 	lastAccess, exists := e.domainLastAccess[host]
 
 	if exists {
 		elapsed := time.Since(lastAccess)
-		if elapsed < 5*time.Second {
-			waitTime := 5*time.Second - elapsed
+		if elapsed < delay {
+			waitTime := delay - elapsed
 			e.domainLastAccess[host] = time.Now().Add(waitTime)
 			e.domainMu.Unlock()
 			select {
@@ -184,13 +201,8 @@ func (e *Engine) worker(ctx context.Context, id int) {
 			continue
 		}
 
-		log.DebugContext(ctx, "rate_limit_wait", "url", targetUrl)
-		if !e.waitForDomain(ctx, targetUrl) {
-			return // context cancelled while waiting
-		}
-		log.InfoContext(ctx, "crawl_started", "url", targetUrl, "depth", depth, "user", userID)
-
-		// Check robots.txt before scraping
+		// Check robots.txt first — this also populates the per-host Crawl-delay
+		// in the shared cache so the politeness wait below can honor it.
 		if !IsAllowed(ctx, client, targetUrl) {
 			log.InfoContext(ctx, "robots_blocked", "url", targetUrl)
 			metrics.CrawlsTotal.WithLabelValues("robots_blocked").Inc()
@@ -199,6 +211,14 @@ func (e *Engine) worker(ctx context.Context, id int) {
 			}
 			continue
 		}
+
+		// Politeness: max(default, robots Crawl-delay) between hits to a domain.
+		crawlDelay := CrawlDelay(ctx, client, targetUrl)
+		log.DebugContext(ctx, "rate_limit_wait", "url", targetUrl, "crawl_delay", crawlDelay)
+		if !e.waitForDomain(ctx, targetUrl, crawlDelay) {
+			return // context cancelled while waiting
+		}
+		log.InfoContext(ctx, "crawl_started", "url", targetUrl, "depth", depth, "user", userID)
 
 		result, err := ScrapePage(ctx, client, targetUrl)
 		if err != nil {

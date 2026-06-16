@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,7 +23,8 @@ type robotsCache struct {
 }
 
 type robotsEntry struct {
-	disallowed []string // path prefixes disallowed for crawlers
+	disallowed []string      // path prefixes disallowed for crawlers
+	crawlDelay time.Duration // Crawl-delay directive (0 if unset)
 	fetchedAt  time.Time
 	ttl        time.Duration
 }
@@ -99,15 +101,51 @@ func fetchRobots(ctx context.Context, client *http.Client, base *url.URL) *robot
 	}
 	defer resp.Body.Close()
 
-	entry.disallowed = parseRobots(io.LimitReader(resp.Body, 64*1024), robotsUA)
+	entry.disallowed, entry.crawlDelay = parseRobots(io.LimitReader(resp.Body, 64*1024), robotsUA)
 	return entry
 }
 
-// parseRobots reads a robots.txt and extracts disallowed paths for the given UA.
-// Supports User-agent: * and User-agent: OnionSpider sections.
-func parseRobots(body io.Reader, ua string) []string {
+// CrawlDelay returns the Crawl-delay advertised in robots.txt for the target's
+// host, or 0 if none. It reuses the same cache as IsAllowed, so when called
+// right after IsAllowed for the same URL it is a cache hit (no extra fetch).
+func CrawlDelay(ctx context.Context, client *http.Client, targetURL string) time.Duration {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	parsed, err := url.Parse(targetURL)
+	if err != nil {
+		return 0
+	}
+	host := parsed.Host
+
+	globalRobotsCache.mu.Lock()
+	entry, ok := globalRobotsCache.entries[host]
+	if ok && time.Since(entry.fetchedAt) > entry.ttl {
+		delete(globalRobotsCache.entries, host)
+		ok = false
+	}
+	globalRobotsCache.mu.Unlock()
+
+	if !ok {
+		entry = fetchRobots(ctx, client, parsed)
+		globalRobotsCache.mu.Lock()
+		if len(globalRobotsCache.entries) >= globalRobotsCache.maxSize {
+			evictOldest(globalRobotsCache.entries)
+		}
+		globalRobotsCache.entries[host] = entry
+		globalRobotsCache.mu.Unlock()
+	}
+	return entry.crawlDelay
+}
+
+// parseRobots reads a robots.txt and extracts disallowed paths and the
+// Crawl-delay for the given UA. Supports User-agent: * and the crawler's own
+// UA. A UA-specific Crawl-delay takes precedence over the wildcard one.
+func parseRobots(body io.Reader, ua string) ([]string, time.Duration) {
 	var disallowed []string
+	var wildcardDelay, uaDelay time.Duration
 	applies := false
+	uaSpecific := false
 	scanner := bufio.NewScanner(body)
 
 	for scanner.Scan() {
@@ -125,17 +163,33 @@ func parseRobots(body io.Reader, ua string) []string {
 
 		switch strings.ToLower(field) {
 		case "user-agent":
-			applies = value == "*" || strings.EqualFold(value, ua)
+			uaSpecific = strings.EqualFold(value, ua)
+			applies = value == "*" || uaSpecific
 		case "disallow":
 			if applies && value != "" && len(disallowed) < 1000 {
 				disallowed = append(disallowed, value)
+			}
+		case "crawl-delay":
+			if applies {
+				if secs, err := strconv.ParseFloat(value, 64); err == nil && secs > 0 {
+					d := time.Duration(secs * float64(time.Second))
+					if uaSpecific {
+						uaDelay = d
+					} else {
+						wildcardDelay = d
+					}
+				}
 			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		log.Printf("[robots.txt] Scan error: %v", err)
 	}
-	return disallowed
+	delay := wildcardDelay
+	if uaDelay > 0 {
+		delay = uaDelay
+	}
+	return disallowed, delay
 }
 
 // evictOldest removes the entry with the oldest fetchedAt from the map (O(n), acceptable for maxSize=500)

@@ -12,6 +12,9 @@ const (
 	CategoryDirectory    = "directory"
 	CategoryNews         = "news"
 	CategorySocial       = "social"
+	CategoryHacking      = "hacking"
+	CategoryCrypto       = "crypto-service"
+	CategoryHosting      = "hosting"
 	CategoryUnknown      = "unknown"
 )
 
@@ -30,6 +33,30 @@ var categoryRules = []categoryRule{
 			"marketplace", "market", "shop", "store", "buy", "sell", "vendor",
 			"listing", "product", "cart", "checkout", "escrow", "bitcoin",
 			"monero", "drugs", "weapons", "accounts", "carding", "cvv",
+		},
+	},
+	{
+		category: CategoryHacking,
+		keywords: []string{
+			"exploit", "malware", "ransomware", "botnet", "rat ", "stealer",
+			"hacking", "hacker", "ddos", "0day", "zero-day", "cracked",
+			"brute force", "phishing", "keylogger", "rootkit",
+		},
+	},
+	{
+		category: CategoryCrypto,
+		keywords: []string{
+			"mixer", "tumbler", "bitcoin mixer", "coin mixing", "exchange",
+			"swap", "clean coins", "launder", "wallet", "mixing service",
+			"anonymous bitcoin", "monero exchange",
+		},
+	},
+	{
+		category: CategoryHosting,
+		keywords: []string{
+			"hosting", "host your", "image host", "file host", "upload",
+			"pastebin", "paste", "tor hosting", "onion hosting", "web hosting",
+			"vps", "server rental",
 		},
 	},
 	{
