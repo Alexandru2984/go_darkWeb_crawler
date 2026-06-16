@@ -267,9 +267,20 @@ func (db *DB) SaveEdge(source, target string, targetDepth int, userID int) error
 	return err
 }
 
-// GetNextPendingNode atomically fetches the next URL to be crawled.
-// Priority: 'pending' nodes > 'completed' nodes with expired next_crawl_at.
-// Sets crawl_started_at to allow the sweeper to recover stuck nodes.
+// GetNextPendingNode atomically claims the next URL to crawl, with fair
+// scheduling across tenants.
+//
+// Fairness: candidates are ordered first by how many of the owning user's nodes
+// are already in-flight ('crawling'), so a worker always prefers a user with
+// fewer active crawls. This is work-conserving — a single tenant alone gets
+// every worker — but under contention the pool is shared evenly instead of one
+// user with a huge backlog starving everyone else.
+//
+// Within a user, 'pending' beats expired 'completed' (re-crawl), then oldest
+// next_crawl_at. The candidate row is locked with FOR UPDATE OF n SKIP LOCKED
+// so concurrent workers never collide. The match is on the full (url, user_id)
+// key — matching on url alone would flip every tenant's copy of the same URL to
+// 'crawling' at once.
 func (db *DB) GetNextPendingNode() (string, int, int, error) {
 	var nodeURL string
 	var depth int
@@ -278,18 +289,23 @@ func (db *DB) GetNextPendingNode() (string, int, int, error) {
 		UPDATE nodes
 		SET processing_status = 'crawling',
 		    crawl_started_at  = CURRENT_TIMESTAMP
-		WHERE url = (
-			SELECT url FROM nodes
-			WHERE (
-				(processing_status = 'pending' AND next_crawl_at <= CURRENT_TIMESTAMP)
-				OR
-				(processing_status = 'completed' AND next_crawl_at <= CURRENT_TIMESTAMP)
-			)
+		WHERE (url, user_id) = (
+			SELECT n.url, n.user_id
+			FROM nodes n
+			LEFT JOIN (
+				SELECT user_id, COUNT(*) AS inflight
+				FROM nodes
+				WHERE processing_status = 'crawling'
+				GROUP BY user_id
+			) c ON c.user_id = n.user_id
+			WHERE n.processing_status IN ('pending', 'completed')
+			  AND n.next_crawl_at <= CURRENT_TIMESTAMP
 			ORDER BY
-				CASE WHEN processing_status = 'pending' THEN 0 ELSE 1 END ASC,
-				next_crawl_at ASC
+				COALESCE(c.inflight, 0) ASC,
+				CASE WHEN n.processing_status = 'pending' THEN 0 ELSE 1 END ASC,
+				n.next_crawl_at ASC
 			LIMIT 1
-			FOR UPDATE SKIP LOCKED
+			FOR UPDATE OF n SKIP LOCKED
 		)
 		RETURNING url, depth, user_id
 	`).Scan(&nodeURL, &depth, &userID)
