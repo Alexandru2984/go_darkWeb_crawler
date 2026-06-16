@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Network } from 'vis-network'
+import { CATEGORY_COLORS, CATEGORY_LABELS, allCategories } from './lib/categories.js'
 
 const status = ref({ status: 'offline', nodes_crawled: 0, pending_nodes: 0, db_connected: false, active_workers: 0 })
 const nodes = ref([])
@@ -86,7 +87,7 @@ const handleAuth = async () => {
     } else {
       authMessage.value = data.error || 'Authentication error.'
     }
-  } catch (err) {
+  } catch {
     authMessage.value = 'Connection error.'
   }
 }
@@ -134,32 +135,9 @@ const downloadExport = (format) => {
 }
 
 
-// Colors per category — used in both the table and the graph
-const CATEGORY_COLORS = {
-  marketplace:    '#e74c3c',
-  forum:          '#e67e22',
-  'search-engine':'#3498db',
-  blog:           '#9b59b6',
-  wiki:           '#1abc9c',
-  directory:      '#f39c12',
-  news:           '#27ae60',
-  social:         '#e91e63',
-  unknown:        '#555555',
-}
-
-const CATEGORY_LABELS = {
-  marketplace:    '🛒 Marketplace',
-  forum:          '💬 Forum',
-  'search-engine':'🔍 Search Engine',
-  blog:           '📝 Blog',
-  wiki:           '📚 Wiki',
-  directory:      '📁 Directory',
-  news:           '📰 News',
-  social:         '👥 Social',
-  unknown:        '❓ Unknown',
-}
-
-const allCategories = Object.keys(CATEGORY_LABELS)
+// Category colors/labels live in ./lib/categories.js (shared, unit-tested, and
+// kept in sync with the backend categorizer). Imported bindings are available
+// in the template under <script setup>.
 
 const filteredNodes = computed(() => {
   if (selectedCategory.value === 'all') return nodes.value
@@ -254,7 +232,7 @@ const startCrawl = async () => {
       message.value = `Error: ${text || res.statusText}`
       messageType.value = 'error'
     }
-  } catch (err) {
+  } catch {
     message.value = 'API connection error.'
     messageType.value = 'error'
   } finally {

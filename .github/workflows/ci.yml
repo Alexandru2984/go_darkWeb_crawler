@@ -129,6 +129,12 @@ jobs:
       - name: npm ci
         run: npm ci --no-audit --no-fund
 
+      - name: lint
+        run: npm run lint
+
+      - name: unit tests
+        run: npm run test:unit
+
       - name: npm run build
         run: npm run build
 
