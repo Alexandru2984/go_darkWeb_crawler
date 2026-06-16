@@ -14,9 +14,11 @@ import (
 	"onion-spider/internal/crawler"
 	"onion-spider/internal/database"
 	"onion-spider/internal/logging"
+	"onion-spider/internal/metrics"
 	"onion-spider/internal/proxy"
 
 	"github.com/joho/godotenv"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -132,7 +134,28 @@ func main() {
 		}
 	}()
 
-	handler := api.New(api.Config{
+	// Queue-depth gauge poller: refresh onionspider_queue_nodes every 30s so
+	// Prometheus can chart pending/crawling/failed backlog over time.
+	go func() {
+		refresh := func() {
+			counts, err := dbConn.GlobalStatusCounts()
+			if err != nil {
+				logger.Warn("queue gauge refresh failed", "err", err)
+				return
+			}
+			for status, n := range counts {
+				metrics.QueueNodes.WithLabelValues(status).Set(float64(n))
+			}
+		}
+		refresh()
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			refresh()
+		}
+	}()
+
+	apiHandler := api.New(api.Config{
 		DB:                dbConn,
 		Engine:            engine,
 		AllowRegistration: os.Getenv("ALLOW_REGISTRATION") == "true",
@@ -141,9 +164,32 @@ func main() {
 		CORSOrigins:       api.SplitAndTrim(corsOrigin, ","),
 	})
 
+	// Ops endpoints live on the root mux, OUTSIDE the chi middleware stack and
+	// outside /api/. The prod nginx only proxies /api/, so /metrics, /healthz
+	// and /readyz are reachable only on 127.0.0.1:<port> directly — never
+	// exposed publicly. /healthz is liveness (process up); /readyz pings the DB.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		pingCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := dbConn.Conn.PingContext(pingCtx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("db unavailable"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ready"))
+	})
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.Handle("/", apiHandler)
+
 	srv := &http.Server{
 		Addr:         "127.0.0.1:" + port,
-		Handler:      handler,
+		Handler:      mux,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,

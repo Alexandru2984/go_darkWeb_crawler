@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"onion-spider/internal/database"
+	"onion-spider/internal/metrics"
 	"onion-spider/internal/proxy"
 	"strings"
 	"sync"
@@ -178,6 +179,7 @@ func (e *Engine) worker(ctx context.Context, id int) {
 		// Crawl-time validation: we process exclusively .onion addresses
 		if parsedTarget, err := url.Parse(targetUrl); err != nil || !strings.HasSuffix(strings.ToLower(parsedTarget.Hostname()), ".onion") {
 			log.WarnContext(ctx, "non_onion_url_skipped", "url", targetUrl)
+			metrics.CrawlsTotal.WithLabelValues("non_onion").Inc()
 			_ = e.DB.MarkRobotsBlocked(targetUrl, userID)
 			continue
 		}
@@ -191,6 +193,7 @@ func (e *Engine) worker(ctx context.Context, id int) {
 		// Check robots.txt before scraping
 		if !IsAllowed(ctx, client, targetUrl) {
 			log.InfoContext(ctx, "robots_blocked", "url", targetUrl)
+			metrics.CrawlsTotal.WithLabelValues("robots_blocked").Inc()
 			if err := e.DB.MarkRobotsBlocked(targetUrl, userID); err != nil {
 				log.ErrorContext(ctx, "mark_robots_blocked_failed", "err", err)
 			}
@@ -200,6 +203,7 @@ func (e *Engine) worker(ctx context.Context, id int) {
 		result, err := ScrapePage(ctx, client, targetUrl)
 		if err != nil {
 			log.WarnContext(ctx, "scrape_failed", "url", targetUrl, "err", err)
+			metrics.CrawlsTotal.WithLabelValues("scrape_error").Inc()
 			if errRetry := e.DB.FailNodeWithRetry(targetUrl, userID); errRetry != nil {
 				log.ErrorContext(ctx, "retry_mark_failed", "url", targetUrl, "err", errRetry)
 			}
@@ -208,6 +212,8 @@ func (e *Engine) worker(ctx context.Context, id int) {
 		}
 		// Success — reset the error counter
 		e.globalErrorCount.Store(0)
+		metrics.CrawlsTotal.WithLabelValues("success").Inc()
+		metrics.LinksDiscovered.Add(float64(len(result.FoundOnions)))
 		changed, err := e.DB.SaveNode(targetUrl, result.Title, result.ServerHeader, result.StatusCode, "completed", result.Metadata, result.Content, result.Category, userID)
 		if err != nil {
 			log.ErrorContext(ctx, "save_node_failed", "err", err)

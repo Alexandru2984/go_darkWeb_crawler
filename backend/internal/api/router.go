@@ -31,6 +31,7 @@ func New(cfg Config) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
+	r.Use(MetricsMiddleware)
 	r.Use(SafeLogger("/api/auth/verify"))
 	r.Use(middleware.Recoverer)
 	r.Use(JWTMiddleware)

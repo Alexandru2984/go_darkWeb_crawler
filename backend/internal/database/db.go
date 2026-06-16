@@ -809,6 +809,27 @@ func (db *DB) PurgeOldAuditLogs(olderThan time.Duration) (int64, error) {
 	return n, nil
 }
 
+// GlobalStatusCounts returns the number of nodes in each processing_status
+// across ALL users. Used by the metrics poller to expose queue depth — it is
+// intentionally not user-scoped (operational visibility, not tenant data).
+func (db *DB) GlobalStatusCounts() (map[string]int, error) {
+	rows, err := db.Conn.Query(`SELECT processing_status, COUNT(*) FROM nodes GROUP BY processing_status`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := make(map[string]int)
+	for rows.Next() {
+		var status string
+		var n int
+		if err := rows.Scan(&status, &n); err != nil {
+			return nil, err
+		}
+		counts[status] = n
+	}
+	return counts, rows.Err()
+}
+
 // GetUserRole returns the current role of the user from the DB (bypasses JWT claims).
 // Used on admin-only endpoints to immediately invalidate demotions,
 // rather than waiting for the JWT to expire.
@@ -820,4 +841,3 @@ func (db *DB) GetUserRole(userID int) (string, error) {
 	}
 	return role, err
 }
-
