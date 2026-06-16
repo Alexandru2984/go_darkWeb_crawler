@@ -2,6 +2,21 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Network } from 'vis-network'
 import { CATEGORY_COLORS, CATEGORY_LABELS, allCategories } from './lib/categories.js'
+import ResetPassword from './components/ResetPassword.vue'
+
+// Password-reset deep link: emails point at /reset-password?token=… . When that
+// path is loaded we render the standalone reset view instead of the dashboard.
+const resetToken = ref(
+  (() => {
+    try {
+      const u = new URL(window.location.href)
+      if (u.pathname === '/reset-password') return u.searchParams.get('token') || ''
+    } catch {
+      /* ignore */
+    }
+    return ''
+  })(),
+)
 
 const status = ref({ status: 'offline', nodes_crawled: 0, pending_nodes: 0, db_connected: false, active_workers: 0 })
 const nodes = ref([])
@@ -87,6 +102,26 @@ const handleAuth = async () => {
     } else {
       authMessage.value = data.error || 'Authentication error.'
     }
+  } catch {
+    authMessage.value = 'Connection error.'
+  }
+}
+
+const handleForgot = async () => {
+  if (!authEmail.value) {
+    authMessage.value = 'Enter your email above, then click "Forgot password?".'
+    return
+  }
+  authMessage.value = 'Sending…'
+  try {
+    const res = await fetch('/api/auth/forgot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: authEmail.value }),
+    })
+    const data = await res.json().catch(() => ({}))
+    // The endpoint always returns a generic message (no account enumeration).
+    authMessage.value = data.message || 'If an account exists for that address, a reset link has been sent.'
   } catch {
     authMessage.value = 'Connection error.'
   }
@@ -373,7 +408,8 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="app-wrapper">
+  <ResetPassword v-if="resetToken" :token="resetToken" />
+  <div v-else class="app-wrapper">
     <div class="container">
       <header>
         <div class="logo-area">
@@ -414,6 +450,7 @@ onUnmounted(() => {
           <p class="auth-toggle" @click="authMode = authMode === 'login' ? 'register' : 'login'">
             {{ authMode === 'login' ? "Don't have an account? Register" : 'Already have an account? Sign In' }}
           </p>
+          <p v-if="authMode === 'login'" class="auth-toggle" @click="handleForgot">Forgot password?</p>
           <p v-if="authMessage" class="info-message">{{ authMessage }}</p>
         </div>
       </div>
