@@ -25,6 +25,21 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    # Throwaway Postgres so the DB/API integration tests (gated on
+    # TEST_DATABASE_URL) actually run in CI instead of skipping.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: onion_spider_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -38,6 +53,8 @@ jobs:
         run: go vet ./...
 
       - name: go test (with race detector)
+        env:
+          TEST_DATABASE_URL: postgres://postgres:test@localhost:5432/onion_spider_test?sslmode=disable
         run: go test -race -timeout 5m ./...
 
       - name: go build
