@@ -43,6 +43,13 @@ To protect the server and ensure passive browsing:
   rejection; the HTTP server binds to `127.0.0.1` only, behind an nginx reverse
   proxy that adds HSTS, CSP and the rest of the security headers.
 
+## 📚 API
+
+The full REST API is documented as an OpenAPI 3.0 spec at
+[`docs/openapi.yaml`](docs/openapi.yaml) — endpoints, request/response schemas,
+auth scheme and error codes. Paste it into any Swagger/Redoc viewer to browse
+it interactively.
+
 ## 🚀 Tech Stack
 
 - **Backend:** Go (Golang)

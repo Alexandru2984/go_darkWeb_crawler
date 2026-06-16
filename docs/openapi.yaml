@@ -1,0 +1,417 @@
+openapi: 3.0.3
+info:
+  title: Onion Spider API
+  version: "1.0.0"
+  description: |
+    REST API for the Onion Spider dark-web crawler.
+
+    Authentication is via a JWT bearer token obtained from `POST /api/auth/login`.
+    The token embeds a `token_version`; it is rejected once the version is bumped
+    (password reset or `logout-all`). Authorization (admin vs user) is resolved
+    from the database on every request, not from the token claims.
+
+    Operational endpoints `/healthz`, `/readyz` and `/metrics` are served on the
+    process root (not under `/api`) and are NOT exposed publicly by the
+    production reverse proxy — they are reachable only on localhost.
+servers:
+  - url: https://go.micutu.com
+    description: Production
+  - url: http://localhost:8900
+    description: Local backend (direct)
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+    Message:
+      type: object
+      properties:
+        message: { type: string }
+    Node:
+      type: object
+      properties:
+        id: { type: integer }
+        url: { type: string }
+        title: { type: string }
+        status_code: { type: integer }
+        server_header: { type: string }
+        processing_status:
+          type: string
+          enum: [pending, crawling, completed, failed, blocked]
+        category: { type: string }
+        last_crawled_at: { type: string }
+        user_id: { type: integer }
+    NodeDetail:
+      allOf:
+        - $ref: '#/components/schemas/Node'
+        - type: object
+          properties:
+            content: { type: string }
+            metadata:
+              type: string
+              description: JSON string; may include description/keywords and an `entities` object (btc/xmr/eth/emails/pgp_keys).
+            content_hash: { type: string }
+            discovered_at: { type: string }
+    Edge:
+      type: object
+      properties:
+        source: { type: string }
+        target: { type: string }
+    Status:
+      type: object
+      properties:
+        status: { type: string, example: online }
+        db_connected: { type: boolean }
+        nodes_crawled: { type: integer }
+        pending_nodes: { type: integer }
+        failed_nodes: { type: integer }
+        crawling_nodes: { type: integer }
+        blocked_nodes: { type: integer }
+        total_edges: { type: integer }
+        active_workers: { type: integer }
+    QueueSummary:
+      type: object
+      properties:
+        status_counts:
+          type: object
+          additionalProperties: { type: integer }
+        next_items:
+          type: array
+          items:
+            type: object
+            properties:
+              url: { type: string }
+              depth: { type: integer }
+              status: { type: string }
+              discovered_at: { type: string }
+  responses:
+    Unauthorized:
+      description: Missing, invalid, expired or revoked token
+      content:
+        application/json: { schema: { $ref: '#/components/schemas/Error' } }
+    Forbidden:
+      description: Authenticated but insufficient privileges
+      content:
+        application/json: { schema: { $ref: '#/components/schemas/Error' } }
+    TooManyRequests:
+      description: Rate limit exceeded
+      content:
+        application/json: { schema: { $ref: '#/components/schemas/Error' } }
+
+paths:
+  /api/auth/register:
+    post:
+      summary: Register a new account (disabled unless ALLOW_REGISTRATION=true)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 10, maxLength: 72 }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
+        '400': { description: Invalid data, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { description: Registration closed, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /api/auth/login:
+    post:
+      summary: Log in and obtain a JWT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string }
+                password: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  role: { type: string }
+                  email: { type: string }
+        '400': { description: Bad request }
+        '401': { description: Invalid credentials }
+        '403': { description: Account not verified }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /api/auth/verify:
+    get:
+      summary: Email-verification confirmation page (does not consume the token)
+      parameters:
+        - in: query
+          name: token
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: HTML confirmation page, content: { text/html: {} } }
+        '400': { description: Invalid token }
+    post:
+      summary: Consume an email-verification token (JSON or form body)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { token: { type: string } }
+      responses:
+        '200': { description: HTML success page, content: { text/html: {} } }
+        '400': { description: Token invalid, expired or already used }
+
+  /api/auth/forgot:
+    post:
+      summary: Request a password-reset email
+      description: Always returns 200 with a generic message (no account enumeration).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties: { email: { type: string, format: email } }
+      responses:
+        '200': { description: Generic acknowledgement, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /api/auth/reset:
+    post:
+      summary: Set a new password using a reset token
+      description: On success, all existing sessions for the account are revoked.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token: { type: string }
+                password: { type: string, minLength: 10, maxLength: 72 }
+      responses:
+        '200': { description: Password updated, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
+        '400': { description: Invalid token or password }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /api/auth/logout-all:
+    post:
+      summary: Revoke all sessions for the current user
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: All sessions revoked, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/status:
+    get:
+      summary: Service + crawl statistics (own data; globals for admins)
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Status' } } } }
+
+  /api/nodes:
+    get:
+      summary: List crawled nodes (own; all for admins)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: query, name: page, schema: { type: integer, default: 1 } }
+        - { in: query, name: limit, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Node' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/node:
+    get:
+      summary: Full detail of a single node by URL
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: query, name: url, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/NodeDetail' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Not found }
+
+  /api/edges:
+    get:
+      summary: List link edges (own; all for admins)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: query, name: page, schema: { type: integer, default: 1 } }
+        - { in: query, name: limit, schema: { type: integer, default: 200, maximum: 1000 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Edge' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/search:
+    get:
+      summary: Full-text search over titles and content
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: query, name: q, required: true, schema: { type: string, maxLength: 200 } }
+        - { in: query, name: category, schema: { type: string } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Node' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /api/crawl:
+    post:
+      summary: Enqueue a single .onion URL for crawling
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties: { url: { type: string, description: "v3 .onion http(s) URL" } }
+      responses:
+        '202': { description: Queued, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
+        '400': { description: Invalid URL }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { description: Domain blocked }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /api/recrawl:
+    post:
+      summary: Re-queue an existing node for immediate re-crawl
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties: { url: { type: string } }
+      responses:
+        '202': { description: Queued }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: URL not found }
+        '409': { description: Node already being crawled }
+
+  /api/crawl/bulk:
+    post:
+      summary: Enqueue 1–20 .onion URLs at once
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [urls]
+              properties:
+                urls: { type: array, items: { type: string }, minItems: 1, maxItems: 20 }
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { added: { type: integer }, skipped: { type: integer } }
+        '400': { description: Invalid body }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/queue:
+    get:
+      summary: Queue status counts and next items
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/QueueSummary' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/stats/timeline:
+    get:
+      summary: Nodes discovered per day over the last 30 days
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  timeline:
+                    type: array
+                    items:
+                      type: object
+                      properties: { date: { type: string }, count: { type: integer } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/export:
+    get:
+      summary: Export nodes (and graph) in various formats
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: format
+          schema: { type: string, enum: [json, ndjson, csv, xlsx, pdf, graphml], default: json }
+      responses:
+        '200': { description: Export stream (content type depends on format) }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { description: Export already in progress or server export limit reached }
+
+  /api/blacklist:
+    get:
+      summary: List blocked domains (admin only)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { domains: { type: array, items: { type: string } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      summary: Block a .onion domain (admin only)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [domain]
+              properties: { domain: { type: string } }
+      responses:
+        '200': { description: Domain blocked, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
+        '400': { description: Invalid domain }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/blacklist/{domain}:
+    delete:
+      summary: Unblock a domain (admin only)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: domain, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Domain removed, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
+        '400': { description: Invalid domain }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: Domain not in blacklist }
