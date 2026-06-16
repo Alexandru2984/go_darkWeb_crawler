@@ -58,7 +58,7 @@ func TestCheckPasswordHash_RejectsOver72Bytes(t *testing.T) {
 }
 
 func TestGenerateAndValidateToken_RoundTrip(t *testing.T) {
-	tok, err := GenerateToken(42, "user@example.com", "admin")
+	tok, err := GenerateToken(42, "user@example.com", "admin", 7)
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
@@ -68,6 +68,9 @@ func TestGenerateAndValidateToken_RoundTrip(t *testing.T) {
 	}
 	if claims.UserID != 42 || claims.Email != "user@example.com" || claims.Role != "admin" {
 		t.Errorf("claims not preserved: %+v", claims)
+	}
+	if claims.TokenVersion != 7 {
+		t.Errorf("token_version not preserved: got %d, want 7", claims.TokenVersion)
 	}
 }
 

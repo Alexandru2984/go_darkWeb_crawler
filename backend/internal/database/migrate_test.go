@@ -77,14 +77,15 @@ func TestMigrationsApplyAndIdempotent(t *testing.T) {
 		t.Fatalf("second runMigrations (should be no-op): %v", err)
 	}
 
-	// schema_migrations should record version 1, not dirty.
+	// schema_migrations should record the latest version, not dirty.
+	const latestVersion = 2
 	var v int
 	var dirty bool
 	if err := db.QueryRow(`SELECT version, dirty FROM schema_migrations`).Scan(&v, &dirty); err != nil {
 		t.Fatalf("read schema_migrations: %v", err)
 	}
-	if v != 1 || dirty {
-		t.Errorf("schema_migrations = (version=%d, dirty=%v), want (1, false)", v, dirty)
+	if v != latestVersion || dirty {
+		t.Errorf("schema_migrations = (version=%d, dirty=%v), want (%d, false)", v, dirty, latestVersion)
 	}
 
 	// Expected tables exist.

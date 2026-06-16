@@ -23,6 +23,7 @@ func New(cfg Config) http.Handler {
 		loginLim:    NewCrawlLimiter(5, time.Minute),
 		registerLim: NewCrawlLimiter(3, time.Hour),
 		verifyLim:   NewCrawlLimiter(10, time.Minute),
+		resetLim:    NewCrawlLimiter(5, time.Hour),
 
 		exportGlobalSem: make(chan struct{}, 4),
 		exportPerUser:   &sync.Map{},
@@ -47,6 +48,8 @@ func New(cfg Config) http.Handler {
 	r.Post("/api/auth/login", d.handleLogin)
 	r.Get("/api/auth/verify", d.handleVerifyGET)
 	r.Post("/api/auth/verify", d.handleVerifyPOST)
+	r.Post("/api/auth/forgot", d.handleForgotPassword)
+	r.Post("/api/auth/reset", d.handleResetPassword)
 
 	// Public-ish: shows only that the server is running; private counts gated
 	// behind LoadDBRole so admin sees globals, others see only their own.
@@ -56,6 +59,8 @@ func New(cfg Config) http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(RequireAuth)
 		r.Use(LoadDBRole(cfg.DB))
+
+		r.Post("/api/auth/logout-all", d.handleLogoutAll)
 
 		r.Get("/api/nodes", d.handleNodes)
 		r.Get("/api/node", d.handleNode)

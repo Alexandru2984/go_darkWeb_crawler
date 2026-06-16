@@ -169,7 +169,7 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := auth.GenerateToken(user.ID, user.Email, user.Role)
+	token, err := auth.GenerateToken(user.ID, user.Email, user.Role, user.TokenVersion)
 	if err != nil {
 		slog.ErrorContext(ctx, "jwt_generate_failed", "email", user.Email, "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
@@ -258,4 +258,112 @@ func (d *deps) handleVerifyPOST(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Write([]byte(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Account verified</title></head><body style="font-family:sans-serif;max-width:480px;margin:4rem auto;text-align:center"><h1>Account successfully verified!</h1><p><a href="/">Back to login</a></p></body></html>`))
+}
+
+// handleForgotPassword issues a password-reset token and emails it. The
+// response is ALWAYS a generic 200 — it never reveals whether the email exists
+// (account-enumeration defense), mirroring the login timing strategy.
+func (d *deps) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	ip := ClientIP(r)
+	if !d.resetLim.Allow(ip) {
+		WriteJSONError(w, http.StatusTooManyRequests, "Too many reset requests. Please try again later.")
+		return
+	}
+	var req struct {
+		Email string `json:"email"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		WriteJSONError(w, http.StatusBadRequest, "Invalid data")
+		return
+	}
+	req.Email = database.NormalizeEmail(req.Email)
+
+	const genericMsg = "If an account exists for that address, a reset link has been sent."
+
+	// Only act on syntactically-valid emails, but still return the generic
+	// message for invalid ones so the response is indistinguishable.
+	if EmailRegex.MatchString(req.Email) && len(req.Email) <= 254 {
+		// Per-recipient cap: at most 3 reset emails per hour.
+		if n, err := d.cfg.DB.CountRecentAuthEvents("reset_request", req.Email, 60); err == nil && n >= 3 {
+			slog.InfoContext(ctx, "reset_blocked", "ip", ip, "email", req.Email, "count", n)
+		} else {
+			token := auth.GenerateVerificationToken()
+			found, err := d.cfg.DB.SetResetToken(req.Email, token)
+			if err != nil {
+				slog.ErrorContext(ctx, "set_reset_token_failed", "err", err)
+			} else if found {
+				d.cfg.DB.LogAuthEvent("reset_request", req.Email, ip)
+				slog.InfoContext(ctx, "reset_request", "ip", ip, "email", req.Email)
+				go func() {
+					if err := email.SendPasswordResetEmail(req.Email, token); err != nil {
+						slog.ErrorContext(ctx, "reset_email_send_failed", "to", req.Email, "err", err)
+					}
+				}()
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": genericMsg})
+}
+
+// handleResetPassword consumes a reset token and sets a new password. Success
+// bumps the user's token_version (in DB.ResetPassword), revoking all sessions.
+func (d *deps) handleResetPassword(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	ip := ClientIP(r)
+	if !d.resetLim.Allow(ip) {
+		WriteJSONError(w, http.StatusTooManyRequests, "Too many attempts. Please try again later.")
+		return
+	}
+	var req struct {
+		Token    string `json:"token"`
+		Password string `json:"password"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		WriteJSONError(w, http.StatusBadRequest, "Invalid data")
+		return
+	}
+	if len(req.Token) < 16 || len(req.Token) > 128 || !TokenSafeRE.MatchString(req.Token) {
+		WriteJSONError(w, http.StatusBadRequest, "Invalid token")
+		return
+	}
+	if err := ValidatePassword(req.Password); err != nil {
+		WriteJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	hash, err := auth.HashPassword(req.Password)
+	if err != nil {
+		WriteJSONError(w, http.StatusBadRequest, "Password cannot be processed")
+		return
+	}
+	if err := d.cfg.DB.ResetPassword(req.Token, hash); err != nil {
+		slog.InfoContext(ctx, "reset_fail", "ip", ip, "err", err)
+		WriteJSONError(w, http.StatusBadRequest, "Token invalid, expired or already used")
+		return
+	}
+	slog.InfoContext(ctx, "reset_ok", "ip", ip)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Password updated. Please log in with your new password."})
+}
+
+// handleLogoutAll revokes every session for the authenticated user by bumping
+// token_version. Useful after a suspected token leak.
+func (d *deps) handleLogoutAll(w http.ResponseWriter, r *http.Request) {
+	uid := GetUserID(r)
+	if err := d.cfg.DB.BumpTokenVersion(uid); err != nil {
+		slog.ErrorContext(r.Context(), "logout_all_failed", "uid", uid, "err", err)
+		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
+		return
+	}
+	slog.InfoContext(r.Context(), "logout_all", "uid", uid)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "All sessions have been logged out."})
 }

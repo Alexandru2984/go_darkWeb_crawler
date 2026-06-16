@@ -27,6 +27,7 @@ type deps struct {
 	loginLim    *CrawlLimiter
 	registerLim *CrawlLimiter
 	verifyLim   *CrawlLimiter
+	resetLim    *CrawlLimiter
 
 	// Export concurrency control: max 1 export per user (per-user semaphore in
 	// the sync.Map) AND a global cap (exportGlobalSem) so we never OOM.

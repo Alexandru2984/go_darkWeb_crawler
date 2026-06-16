@@ -725,6 +725,7 @@ type User struct {
 	Role              string `json:"role"`
 	IsVerified        bool   `json:"is_verified"`
 	VerificationToken string `json:"-"`
+	TokenVersion      int    `json:"-"`
 	CreatedAt         string `json:"created_at"`
 }
 
@@ -747,13 +748,63 @@ func (db *DB) CreateUser(email, passwordHash, role, token string) error {
 func (db *DB) GetUserByEmail(email string) (*User, error) {
 	var u User
 	err := db.Conn.QueryRow(`
-		SELECT id, email, password_hash, role, is_verified, COALESCE(verification_token, ''), to_char(created_at, 'YYYY-MM-DD HH24:MI:SS')
+		SELECT id, email, password_hash, role, is_verified, COALESCE(verification_token, ''), token_version, to_char(created_at, 'YYYY-MM-DD HH24:MI:SS')
 		FROM users WHERE email = $1
-	`, NormalizeEmail(email)).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.IsVerified, &u.VerificationToken, &u.CreatedAt)
+	`, NormalizeEmail(email)).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.IsVerified, &u.VerificationToken, &u.TokenVersion, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	return &u, err
+}
+
+// SetResetToken stores a password-reset token (valid 1h) for the user with the
+// given email, if one exists. Returns (found, error). Callers must NOT reveal
+// `found` to the client — that would enable account enumeration.
+func (db *DB) SetResetToken(email, token string) (bool, error) {
+	res, err := db.Conn.Exec(`
+		UPDATE users
+		SET reset_token = $2, reset_expires_at = CURRENT_TIMESTAMP + INTERVAL '1 hour'
+		WHERE email = $1
+	`, NormalizeEmail(email), token)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ResetPassword consumes a valid, unexpired reset token: sets the new password
+// hash, clears the token, and bumps token_version to revoke every existing
+// session. Returns an error if the token is invalid/expired/used.
+func (db *DB) ResetPassword(token, newHash string) error {
+	if len(token) < 16 {
+		return errors.New("invalid token")
+	}
+	res, err := db.Conn.Exec(`
+		UPDATE users
+		SET password_hash    = $2,
+		    reset_token      = NULL,
+		    reset_expires_at = NULL,
+		    token_version    = token_version + 1
+		WHERE reset_token = $1
+		  AND reset_expires_at IS NOT NULL
+		  AND reset_expires_at > CURRENT_TIMESTAMP
+	`, token, newHash)
+	if err != nil {
+		return err
+	}
+	aff, _ := res.RowsAffected()
+	if aff == 0 {
+		return errors.New("token invalid, expired or already used")
+	}
+	return nil
+}
+
+// BumpTokenVersion increments the user's token_version, invalidating all
+// previously-issued JWTs (logout everywhere).
+func (db *DB) BumpTokenVersion(userID int) error {
+	_, err := db.Conn.Exec(`UPDATE users SET token_version = token_version + 1 WHERE id = $1`, userID)
+	return err
 }
 
 // VerifyUser sets the user as verified, only if the token has not expired.
@@ -846,14 +897,17 @@ func (db *DB) GlobalStatusCounts() (map[string]int, error) {
 	return counts, rows.Err()
 }
 
-// GetUserRole returns the current role of the user from the DB (bypasses JWT claims).
-// Used on admin-only endpoints to immediately invalidate demotions,
-// rather than waiting for the JWT to expire.
-func (db *DB) GetUserRole(userID int) (string, error) {
-	var role string
-	err := db.Conn.QueryRow(`SELECT role FROM users WHERE id = $1`, userID).Scan(&role)
+// GetUserAuthInfo returns the user's current role and token_version from the DB
+// (bypassing JWT claims), plus whether the user still exists. Used by the auth
+// middleware to (a) invalidate role demotions immediately and (b) reject tokens
+// whose version is stale (revoked via reset/logout-all) or whose user is gone.
+func (db *DB) GetUserAuthInfo(userID int) (role string, tokenVersion int, found bool, err error) {
+	err = db.Conn.QueryRow(`SELECT role, token_version FROM users WHERE id = $1`, userID).Scan(&role, &tokenVersion)
 	if err == sql.ErrNoRows {
-		return "", nil
+		return "", 0, false, nil
 	}
-	return role, err
+	if err != nil {
+		return "", 0, false, err
+	}
+	return role, tokenVersion, true, nil
 }

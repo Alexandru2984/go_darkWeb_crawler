@@ -149,3 +149,70 @@ func TestGetNextPendingNode_PerTenantClaim(t *testing.T) {
 		t.Errorf("both claims returned the same tenant (%d) — (url,user_id) match is broken", firstUID)
 	}
 }
+
+func TestPasswordReset_Flow(t *testing.T) {
+	db := newTestDB(t)
+	uid := mustUser(t, db, "u@example.com")
+
+	_, v0, found, err := db.GetUserAuthInfo(uid)
+	if err != nil || !found {
+		t.Fatalf("GetUserAuthInfo: found=%v err=%v", found, err)
+	}
+
+	const tok = "resettoken1234567890abcdef"
+	ok, err := db.SetResetToken("u@example.com", tok)
+	if err != nil || !ok {
+		t.Fatalf("SetResetToken: ok=%v err=%v", ok, err)
+	}
+
+	if err := db.ResetPassword(tok, "newhash"); err != nil {
+		t.Fatalf("ResetPassword (valid token): %v", err)
+	}
+
+	// token_version must be bumped (all sessions revoked).
+	_, v1, _, _ := db.GetUserAuthInfo(uid)
+	if v1 != v0+1 {
+		t.Errorf("token_version not bumped: %d -> %d", v0, v1)
+	}
+
+	// Password hash must be the new one.
+	u, _ := db.GetUserByEmail("u@example.com")
+	if u == nil || u.PasswordHash != "newhash" {
+		t.Errorf("password hash not updated: %+v", u)
+	}
+
+	// Reusing the same token must fail.
+	if err := db.ResetPassword(tok, "another"); err == nil {
+		t.Error("reused reset token was accepted")
+	}
+}
+
+func TestPasswordReset_Expired(t *testing.T) {
+	db := newTestDB(t)
+	mustUser(t, db, "u@example.com")
+
+	const tok = "expiredtoken1234567890abcdef"
+	if _, err := db.SetResetToken("u@example.com", tok); err != nil {
+		t.Fatalf("SetResetToken: %v", err)
+	}
+	// Force the token into the past.
+	if _, err := db.Conn.Exec(
+		`UPDATE users SET reset_expires_at = CURRENT_TIMESTAMP - INTERVAL '1 hour' WHERE reset_token=$1`, tok,
+	); err != nil {
+		t.Fatalf("expire token: %v", err)
+	}
+	if err := db.ResetPassword(tok, "x"); err == nil {
+		t.Error("expired reset token was accepted")
+	}
+}
+
+func TestSetResetToken_UnknownEmailNotFound(t *testing.T) {
+	db := newTestDB(t)
+	found, err := db.SetResetToken("nobody@example.com", "tok1234567890abcdef")
+	if err != nil {
+		t.Fatalf("SetResetToken: %v", err)
+	}
+	if found {
+		t.Error("SetResetToken reported found=true for a non-existent email")
+	}
+}

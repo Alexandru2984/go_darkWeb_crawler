@@ -72,6 +72,10 @@ type Claims struct {
 	UserID int    `json:"user_id"`
 	Email  string `json:"email"`
 	Role   string `json:"role"`
+	// TokenVersion is compared against the user's current token_version in the
+	// DB on each authenticated request. A mismatch (because the version was
+	// bumped on password reset / logout-all) invalidates the token immediately.
+	TokenVersion int `json:"tv"`
 	jwt.RegisteredClaims
 }
 
@@ -93,12 +97,13 @@ func CheckPasswordHash(password, hash string) bool {
 	return err == nil
 }
 
-func GenerateToken(userID int, email, role string) (string, error) {
+func GenerateToken(userID int, email, role string, tokenVersion int) (string, error) {
 	now := time.Now()
 	claims := &Claims{
-		UserID: userID,
-		Email:  email,
-		Role:   role,
+		UserID:       userID,
+		Email:        email,
+		Role:         role,
+		TokenVersion: tokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(now.Add(TokenTTL)),
 			IssuedAt:  jwt.NewNumericDate(now),

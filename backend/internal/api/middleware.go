@@ -49,9 +49,15 @@ func RequireAuth(next http.Handler) http.Handler {
 	})
 }
 
-// LoadDBRole reads the current role from the DB and stores it in the request
-// context. Prevents an admin demoted via SQL UPDATE from retaining privileges
-// until the JWT expires (4h). The role from JWT claims is NOT used for authz.
+// LoadDBRole reads the current role and token_version from the DB and stores
+// the role in the request context. It serves three purposes, all bypassing the
+// (cacheable, 4h-lived) JWT claims:
+//   - an admin demoted via SQL UPDATE loses privileges on the next request;
+//   - a token whose version is stale (revoked via password reset / logout-all)
+//     is rejected with 401;
+//   - a token for a since-deleted user is rejected with 401.
+//
+// The role from JWT claims is NEVER used for authz.
 func LoadDBRole(db *database.DB) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -60,10 +66,18 @@ func LoadDBRole(db *database.DB) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			role, err := db.GetUserRole(uid)
+			role, tokenVersion, found, err := db.GetUserAuthInfo(uid)
 			if err != nil {
 				slog.ErrorContext(r.Context(), "load_db_role_failed", "uid", uid, "err", err)
 				WriteJSONError(w, http.StatusInternalServerError, "Internal error")
+				return
+			}
+			if !found {
+				WriteJSONError(w, http.StatusUnauthorized, "Session no longer valid")
+				return
+			}
+			if claims, ok := r.Context().Value(userContextKey).(*auth.Claims); ok && claims.TokenVersion != tokenVersion {
+				WriteJSONError(w, http.StatusUnauthorized, "Session has been revoked, please log in again")
 				return
 			}
 			ctx := context.WithValue(r.Context(), dbRoleContextKey, role)
