@@ -10,9 +10,17 @@ vendor/
 *.test
 *.out
 cover.out
+coverage.html
+
+# Compiled backend binaries — build artifacts, regenerable via `make build`.
+# Never commit these (they bloat git history and are a supply-chain/integrity risk).
+backend/api
 backend/api_bin
 backend/crawler_bin
 backend/onion-spider-api
+backend/onion-spider-crawler
+backend/*.prev
+backend/tmp/
 
 # --- Node/Frontend Specific ---
 node_modules/
