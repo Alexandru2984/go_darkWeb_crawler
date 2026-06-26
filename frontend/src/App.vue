@@ -10,7 +10,11 @@ const resetToken = ref(
   (() => {
     try {
       const u = new URL(window.location.href)
-      if (u.pathname === '/reset-password') return u.searchParams.get('token') || ''
+      if (u.pathname === '/reset-password') {
+        const token = u.searchParams.get('token') || ''
+        if (token) window.history.replaceState({}, document.title, '/reset-password')
+        return token
+      }
     } catch {
       /* ignore */
     }
