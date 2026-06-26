@@ -365,7 +365,16 @@ type Stats struct {
 // GetStats returns complete statistics about the crawling state
 func (db *DB) GetStats(userID int, isAdmin bool) (Stats, error) {
 	var s Stats
-	err := db.Conn.QueryRow(`SELECT COUNT(*) FILTER (WHERE processing_status = 'completed'), COUNT(*) FILTER (WHERE processing_status = 'pending' AND user_id = $1), COUNT(*) FILTER (WHERE processing_status = 'failed'), COUNT(*) FILTER (WHERE processing_status = 'crawling'), COUNT(*) FILTER (WHERE processing_status = 'blocked') FROM nodes WHERE (user_id = $1 OR $2) `, userID, isAdmin).Scan(&s.NodesCrawled, &s.PendingNodes, &s.FailedNodes, &s.CrawlingNodes, &s.BlockedNodes)
+	err := db.Conn.QueryRow(`
+		SELECT
+			COUNT(*) FILTER (WHERE processing_status = 'completed'),
+			COUNT(*) FILTER (WHERE processing_status = 'pending'),
+			COUNT(*) FILTER (WHERE processing_status = 'failed'),
+			COUNT(*) FILTER (WHERE processing_status = 'crawling'),
+			COUNT(*) FILTER (WHERE processing_status = 'blocked')
+		FROM nodes
+		WHERE (user_id = $1 OR $2)
+	`, userID, isAdmin).Scan(&s.NodesCrawled, &s.PendingNodes, &s.FailedNodes, &s.CrawlingNodes, &s.BlockedNodes)
 	if err != nil {
 		return s, err
 	}

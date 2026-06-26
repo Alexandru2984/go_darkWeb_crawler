@@ -150,6 +150,35 @@ func TestGetNextPendingNode_PerTenantClaim(t *testing.T) {
 	}
 }
 
+func TestGetStats_AdminSeesAllPendingNodes(t *testing.T) {
+	db := newTestDB(t)
+	admin := mustUser(t, db, "admin@example.com")
+	user := mustUser(t, db, "user@example.com")
+
+	if err := db.EnqueueURL("http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad.onion/", 0, admin); err != nil {
+		t.Fatalf("enqueue admin: %v", err)
+	}
+	if err := db.EnqueueURL("http://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbd.onion/", 0, user); err != nil {
+		t.Fatalf("enqueue user: %v", err)
+	}
+
+	adminStats, err := db.GetStats(admin, true)
+	if err != nil {
+		t.Fatalf("GetStats admin: %v", err)
+	}
+	if adminStats.PendingNodes != 2 {
+		t.Fatalf("admin pending nodes = %d, want 2", adminStats.PendingNodes)
+	}
+
+	userStats, err := db.GetStats(user, false)
+	if err != nil {
+		t.Fatalf("GetStats user: %v", err)
+	}
+	if userStats.PendingNodes != 1 {
+		t.Fatalf("user pending nodes = %d, want 1", userStats.PendingNodes)
+	}
+}
+
 func TestPasswordReset_Flow(t *testing.T) {
 	db := newTestDB(t)
 	uid := mustUser(t, db, "u@example.com")
