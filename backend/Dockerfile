@@ -3,7 +3,7 @@
 # Stage 1 builds a statically-linked Go binary; stage 2 is distroless static
 # (no shell, no package manager, ~2MB base). Runs as nonroot by default.
 
-ARG GO_VERSION=1.25
+ARG GO_VERSION=1.25.11
 FROM golang:${GO_VERSION}-alpine AS builder
 
 WORKDIR /src
