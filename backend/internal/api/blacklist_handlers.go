@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"onion-spider/internal/onion"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -41,8 +42,8 @@ func (d *deps) handleBlacklistAdd(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusBadRequest, "The 'domain' field is required")
 		return
 	}
-	if !strings.HasSuffix(req.Domain, ".onion") {
-		WriteJSONError(w, http.StatusBadRequest, "Only .onion domains can be blocked")
+	if !onion.IsV3Host(req.Domain) {
+		WriteJSONError(w, http.StatusBadRequest, "Only valid v3 .onion domains can be blocked")
 		return
 	}
 	if err := d.cfg.DB.AddBlacklist(req.Domain); err != nil {
@@ -58,8 +59,8 @@ func (d *deps) handleBlacklistAdd(w http.ResponseWriter, r *http.Request) {
 func (d *deps) handleBlacklistDelete(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	domain := strings.ToLower(strings.TrimSpace(chi.URLParam(r, "domain")))
-	if domain == "" || !strings.HasSuffix(domain, ".onion") {
-		WriteJSONError(w, http.StatusBadRequest, "Invalid domain: must be a .onion domain")
+	if domain == "" || !onion.IsV3Host(domain) {
+		WriteJSONError(w, http.StatusBadRequest, "Invalid domain: must be a valid v3 .onion domain")
 		return
 	}
 	found, err := d.cfg.DB.DeleteBlacklist(domain)

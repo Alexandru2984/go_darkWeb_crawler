@@ -36,7 +36,7 @@ func TestScrapePage(t *testing.T) {
 				</style>
 				
 				<ul>
-					<li><a href="http://duckduckgogg42xjoc72x3sjiqbvzwsgxgjvpeqg5unfxgf2fsvawd.onion/search?q=test">DuckDuckGo</a></li>
+					<li><a href="http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad.onion/search?q=test">DuckDuckGo</a></li>
 					<li><a href="/local-page">Local Page (Should be ignored)</a></li>
 				</ul>
 			</body>
@@ -74,7 +74,7 @@ func TestScrapePage(t *testing.T) {
 	}
 
 	// The full URL with path must be preserved (fix #5)
-	expectedOnion := "http://duckduckgogg42xjoc72x3sjiqbvzwsgxgjvpeqg5unfxgf2fsvawd.onion/search?q=test"
+	expectedOnion := "http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad.onion/search?q=test"
 	if result.FoundOnions[0] != expectedOnion {
 		t.Errorf("Incorrect extracted onion link. Expected '%s', got '%s'", expectedOnion, result.FoundOnions[0])
 	}
@@ -84,13 +84,13 @@ func TestScrapePageExtraLinkSources(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		fmt.Fprintf(w, `<html><head>
-			<link rel="canonical" href="http://canonical1234567890.onion/canon">
-			<meta http-equiv="refresh" content="5; url=http://refresh1234567890.onion/redir">
+			<link rel="canonical" href="http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad.onion/canon">
+			<meta http-equiv="refresh" content="5; url=http://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbd.onion/redir">
 		</head><body>
-			<form action="http://form1234567890abcde.onion/submit">
+			<form action="http://cccccccccccccccccccccccccccccccccccccccccccccccccccccccd.onion/submit">
 				<input type="submit">
 			</form>
-			<map><area href="http://area1234567890abcd.onion/area"></map>
+			<map><area href="http://dddddddddddddddddddddddddddddddddddddddddddddddddddddddd.onion/area"></map>
 		</body></html>`)
 	}))
 	defer server.Close()
@@ -101,10 +101,10 @@ func TestScrapePageExtraLinkSources(t *testing.T) {
 	}
 
 	wantURLs := []string{
-		"http://canonical1234567890.onion/canon",
-		"http://refresh1234567890.onion/redir",
-		"http://form1234567890abcde.onion/submit",
-		"http://area1234567890abcd.onion/area",
+		"http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad.onion/canon",
+		"http://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbd.onion/redir",
+		"http://cccccccccccccccccccccccccccccccccccccccccccccccccccccccd.onion/submit",
+		"http://dddddddddddddddddddddddddddddddddddddddddddddddddddddddd.onion/area",
 	}
 
 	found := make(map[string]bool)

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"onion-spider/internal/onion"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -120,8 +121,7 @@ func ScrapePage(ctx context.Context, client *http.Client, targetURL string) (*Sc
 		if resolved.Path == "" {
 			resolved.Path = "/"
 		}
-		if (resolved.Scheme == "http" || resolved.Scheme == "https") &&
-			strings.HasSuffix(resolved.Host, ".onion") {
+		if onion.IsV3URL(resolved.String()) {
 			result.FoundOnions = append(result.FoundOnions, resolved.String())
 		}
 	}

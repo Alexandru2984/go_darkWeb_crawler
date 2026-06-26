@@ -90,6 +90,7 @@ func TestIsValidOnionURL_Invalid(t *testing.T) {
 		"",
 		"http://google.com",
 		"ftp://facebookwkhpilnemxj7asber7cyc673hlcrbjnoa7iwmqrxyqqipcid.onion",
+		"http://facebookwkhpilnemxj7asber7cyc673hlcrbjnoa7iwmqrxyqqipcid.onion:99999",
 		"http://short.onion",
 		"javascript:alert(1)",
 		"http://facebookwkhpilnemxj7asber7cyc673hlcrbjnoa7iwmqrxyqqipcid.onion.evil.com",
@@ -169,6 +170,34 @@ func TestClientIP_NoPort(t *testing.T) {
 	// SplitHostPort will fail, should return RemoteAddr as-is
 	if got := ClientIP(r); got != "10.0.0.1" {
 		t.Errorf("ClientIP = %q, want %q", got, "10.0.0.1")
+	}
+}
+
+func TestTrustedRealIP_TrustsLocalProxyHeader(t *testing.T) {
+	var got string
+	h := TrustedRealIP(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = ClientIP(r)
+	}))
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = "127.0.0.1:12345"
+	r.Header.Set("X-Real-IP", "203.0.113.9")
+	h.ServeHTTP(httptest.NewRecorder(), r)
+	if got != "203.0.113.9" {
+		t.Errorf("ClientIP after TrustedRealIP = %q, want %q", got, "203.0.113.9")
+	}
+}
+
+func TestTrustedRealIP_IgnoresUntrustedPeerHeader(t *testing.T) {
+	var got string
+	h := TrustedRealIP(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = ClientIP(r)
+	}))
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = "198.51.100.7:12345"
+	r.Header.Set("X-Real-IP", "203.0.113.9")
+	h.ServeHTTP(httptest.NewRecorder(), r)
+	if got != "198.51.100.7" {
+		t.Errorf("ClientIP after spoofed TrustedRealIP = %q, want %q", got, "198.51.100.7")
 	}
 }
 

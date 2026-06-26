@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"strings"
+	"onion-spider/internal/onion"
 	"time"
 
 	"golang.org/x/net/proxy"
@@ -74,7 +74,7 @@ func NewTorClientWithTransport(socksProxyAddress string) (*http.Transport, *http
 				return fmt.Errorf("too many redirects")
 			}
 			// Only allow redirects within the .onion space — clearnet is forbidden
-			if !strings.HasSuffix(req.URL.Hostname(), ".onion") {
+			if !onion.IsV3Hostname(req.URL.Hostname()) {
 				return fmt.Errorf("redirect to clearnet blocked: %s", req.URL.Host)
 			}
 			// Do not follow redirects to another onion domain (prevents cross-site tracking)

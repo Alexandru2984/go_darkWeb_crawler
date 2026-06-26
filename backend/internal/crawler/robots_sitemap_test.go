@@ -95,8 +95,8 @@ func TestSitemapFetch_URLSet(t *testing.T) {
 			w.Header().Set("Content-Type", "application/xml")
 			fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>http://test1234567890abc.onion/page1</loc></url>
-  <url><loc>http://test1234567890abc.onion/page2</loc></url>
+  <url><loc>http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad.onion/page1</loc></url>
+  <url><loc>http://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbd.onion/page2</loc></url>
   <url><loc>http://not-onion.com/page3</loc></url>
 </urlset>`)
 			return
@@ -126,7 +126,7 @@ func TestSitemapFetch_SitemapIndex(t *testing.T) {
 			w.Header().Set("Content-Type", "application/xml")
 			fmt.Fprint(w, `<?xml version="1.0"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>http://abc1234567890xyz.onion/deep</loc></url>
+  <url><loc>http://cccccccccccccccccccccccccccccccccccccccccccccccccccccccd.onion/deep</loc></url>
 </urlset>`)
 		default:
 			w.WriteHeader(404)

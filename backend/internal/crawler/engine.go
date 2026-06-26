@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"onion-spider/internal/database"
 	"onion-spider/internal/metrics"
+	"onion-spider/internal/onion"
 	"onion-spider/internal/proxy"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -194,7 +194,7 @@ func (e *Engine) worker(ctx context.Context, id int) {
 		}
 
 		// Crawl-time validation: we process exclusively .onion addresses
-		if parsedTarget, err := url.Parse(targetUrl); err != nil || !strings.HasSuffix(strings.ToLower(parsedTarget.Hostname()), ".onion") {
+		if parsedTarget, err := url.Parse(targetUrl); err != nil || !onion.IsV3Hostname(parsedTarget.Hostname()) {
 			log.WarnContext(ctx, "non_onion_url_skipped", "url", targetUrl)
 			metrics.CrawlsTotal.WithLabelValues("non_onion").Inc()
 			_ = e.DB.MarkRobotsBlocked(targetUrl, userID)

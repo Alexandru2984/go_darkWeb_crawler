@@ -7,13 +7,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"onion-spider/internal/onion"
 	"strings"
 )
 
 // sitemapIndex represents a sitemap file that lists other sitemap files
 type sitemapIndex struct {
-	XMLName  xml.Name      `xml:"sitemapindex"`
-	Sitemaps []sitemapLoc  `xml:"sitemap"`
+	XMLName  xml.Name     `xml:"sitemapindex"`
+	Sitemaps []sitemapLoc `xml:"sitemap"`
 }
 
 type sitemapLoc struct {
@@ -70,7 +71,7 @@ func fetchAndParseSitemap(ctx context.Context, client *http.Client, sitemapURL s
 	}
 
 	const (
-		maxSitemapURLs  = 300
+		maxSitemapURLs   = 300
 		maxChildSitemaps = 50
 	)
 
@@ -115,11 +116,7 @@ func fetchAndParseSitemap(ctx context.Context, client *http.Client, sitemapURL s
 	return result
 }
 
-// isOnionURL checks whether a URL belongs to a .onion domain
+// isOnionURL checks whether a URL belongs to a v3 .onion domain.
 func isOnionURL(rawURL string) bool {
-	u, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil {
-		return false
-	}
-	return (u.Scheme == "http" || u.Scheme == "https") && strings.HasSuffix(u.Host, ".onion")
+	return onion.IsV3URL(strings.TrimSpace(rawURL))
 }
