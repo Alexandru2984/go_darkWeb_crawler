@@ -2,15 +2,31 @@ package proxy
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/http"
 	"onion-spider/internal/onion"
+	"strings"
 	"time"
 
 	"golang.org/x/net/proxy"
 )
+
+// isolationCredential maps a destination host to a stable, opaque SOCKS5
+// credential. Tor treats a differing username/password as a separate isolation
+// domain, so one credential per host yields one circuit per host.
+//
+// The value is hashed rather than passing the hostname through verbatim: SOCKS5
+// caps credentials at 255 bytes, and a fixed-width token keeps the field free of
+// anything the remote site could influence. Truncating to 128 bits is ample —
+// this only needs to avoid collisions between hostnames, not resist preimages.
+func isolationCredential(host string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(host)))
+	return hex.EncodeToString(sum[:16])
+}
 
 // NewTorClient creates an HTTP client that routes exclusively through SOCKS5 (Tor)
 func NewTorClient(socksProxyAddress string) (*http.Client, error) {
@@ -21,17 +37,38 @@ func NewTorClient(socksProxyAddress string) (*http.Client, error) {
 // NewTorClientWithTransport returneaza atat transport-ul cat si clientul,
 // astfel incat engine-ul sa poata apela CloseIdleConnections() dupa SIGNAL NEWNYM.
 func NewTorClientWithTransport(socksProxyAddress string) (*http.Transport, *http.Client, error) {
-	dialer, err := proxy.SOCKS5("tcp", socksProxyAddress, nil, proxy.Direct)
-	if err != nil {
+	// Validate the proxy address once, up front. The real dialers are built
+	// per-destination below, so without this an unusable address would only
+	// surface on the first crawl instead of at client construction.
+	if _, err := proxy.SOCKS5("tcp", socksProxyAddress, nil, proxy.Direct); err != nil {
 		return nil, nil, fmt.Errorf("error initializing SOCKS5: %w", err)
 	}
 
-	// Use DialContext if the SOCKS5 dialer supports it (cancellable context).
-	// Altfel, wrap cu verificare context inainte de dial.
 	type contextDialer interface {
 		DialContext(ctx context.Context, network, address string) (net.Conn, error)
 	}
+
+	// STREAM ISOLATION: a fresh SOCKS5 dialer per destination host, each with a
+	// distinct username/password derived from that host. Tor enables
+	// IsolateSOCKSAuth on SocksPort by default, so distinct credentials force
+	// distinct circuits.
+	//
+	// Without this, every request a worker makes shares one isolation key and
+	// Tor is free to carry crawls of unrelated onion services over the same
+	// circuit — which hands any relay on that circuit a correlation: "the same
+	// client is reading site A and site B". Keying on the host (rather than
+	// per-request) keeps one circuit per site, so connection reuse and the
+	// per-domain politeness delay still behave as before.
 	dialCtx := func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			host = address
+		}
+		cred := isolationCredential(host)
+		dialer, err := proxy.SOCKS5("tcp", socksProxyAddress, &proxy.Auth{User: cred, Password: cred}, proxy.Direct)
+		if err != nil {
+			return nil, fmt.Errorf("error initializing SOCKS5: %w", err)
+		}
 		if cd, ok := dialer.(contextDialer); ok {
 			return cd.DialContext(ctx, network, address)
 		}
