@@ -8,6 +8,30 @@ services on the box, so there is no file in this repo to deploy — `/etc/tor/to
 is host-wide and owns configuration this project has no business overwriting
 (other projects' `HiddenServiceDir` entries live in it).
 
+## Hidden service
+
+The app is also published as a Tor hidden service, served by the
+`deploy/nginx/onion_spider_onion.conf` vhost:
+
+```
+HiddenServiceDir /var/lib/tor/onionspider/
+HiddenServicePort 80 127.0.0.1:8122
+```
+
+The address is in `/var/lib/tor/onionspider/hostname`.
+
+This exists because the clearnet vhost is proxied through Cloudflare, which
+terminates TLS and therefore sees every request in plaintext — credentials,
+search terms, and the onion addresses an account is crawling. That is a property
+of where the TLS connection ends, and no application-level hardening changes it.
+Over the hidden service there is no CDN and no exit node, Tor's encryption runs
+end to end, and the .onion address *is* the service's public key, so there is no
+certificate authority in the trust path either.
+
+**Back up `/var/lib/tor/onionspider/`.** The private key in that directory is the
+address. Lose it and the service can never be reached at that name again; leak it
+and someone else can impersonate the service at that name.
+
 ## What this project needs from the host Tor
 
 **SOCKS port** — `127.0.0.1:9050`, the default. No configuration needed.
