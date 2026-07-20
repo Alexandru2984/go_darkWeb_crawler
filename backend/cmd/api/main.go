@@ -107,6 +107,42 @@ func main() {
 		}
 	}()
 
+	// Revive sweeper: return nodes that have been 'failed' for a long time to the
+	// queue. Without this, an outage lasting longer than the retry budget kills
+	// the whole queue permanently — every node exhausts its retries, 'failed' is
+	// terminal for the scheduler, and the crawler sits idle after the cause is
+	// fixed. Batched so a large backlog trickles back instead of arriving at once.
+	reviveAfter := 7 * 24 * time.Hour
+	if v := os.Getenv("REVIVE_FAILED_AFTER_DAYS"); v != "" {
+		if d, err := strconv.Atoi(v); err == nil && d > 0 {
+			reviveAfter = time.Duration(d) * 24 * time.Hour
+		}
+	}
+	reviveBatch := 500
+	if v := os.Getenv("REVIVE_BATCH"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			reviveBatch = n
+		}
+	}
+	go func() {
+		run := func() {
+			n, err := dbConn.ReviveFailedNodes(reviveAfter, reviveBatch)
+			if err != nil {
+				logger.Error("revive sweeper failed", "op", "ReviveFailedNodes", "err", err)
+				return
+			}
+			if n > 0 {
+				logger.Info("revived failed nodes", "count", n, "older_than", reviveAfter.String())
+			}
+		}
+		run()
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			run()
+		}
+	}()
+
 	// auth_audit retention: delete entries older than 90 days (configurable).
 	// Solves GDPR (PII = email) + unbounded table growth. Runs at startup + every 24h.
 	auditRetention := 90 * 24 * time.Hour

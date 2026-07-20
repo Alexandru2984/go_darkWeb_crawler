@@ -2,8 +2,10 @@ package database
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"testing"
+	"time"
 )
 
 // newTestDB returns a *DB backed by a throwaway Postgres at $TEST_DATABASE_URL,
@@ -243,5 +245,106 @@ func TestSetResetToken_UnknownEmailNotFound(t *testing.T) {
 	}
 	if found {
 		t.Error("SetResetToken reported found=true for a non-existent email")
+	}
+}
+
+// mustNode inserts a node owned by userID in the given state, with next_crawl_at
+// pushed `ageDays` into the past.
+func mustNode(t *testing.T, db *DB, url string, userID int, status string, ageDays int) {
+	t.Helper()
+	_, err := db.Conn.Exec(`
+		INSERT INTO nodes (url, user_id, processing_status, retry_count, next_crawl_at, depth)
+		VALUES ($1, $2, $3, 5, CURRENT_TIMESTAMP - ($4 || ' days')::INTERVAL, 0)
+	`, url, userID, status, ageDays)
+	if err != nil {
+		t.Fatalf("insert node %s: %v", url, err)
+	}
+}
+
+func nodeState(t *testing.T, db *DB, url string) (string, int) {
+	t.Helper()
+	var status string
+	var retries int
+	if err := db.Conn.QueryRow(
+		`SELECT processing_status, retry_count FROM nodes WHERE url=$1`, url,
+	).Scan(&status, &retries); err != nil {
+		t.Fatalf("read node %s: %v", url, err)
+	}
+	return status, retries
+}
+
+// A queue-wide outage leaves every node 'failed' with retries exhausted, and
+// 'failed' is terminal for the scheduler — so without revival the crawler stays
+// idle forever after the cause is fixed.
+func TestReviveFailedNodes_ReturnsStaleFailuresToQueue(t *testing.T) {
+	db := newTestDB(t)
+	uid := mustUser(t, db, "u@example.com")
+	mustNode(t, db, "http://old.onion/", uid, "failed", 30)
+
+	n, err := db.ReviveFailedNodes(7*24*time.Hour, 100)
+	if err != nil {
+		t.Fatalf("ReviveFailedNodes: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("revived %d nodes, want 1", n)
+	}
+	status, retries := nodeState(t, db, "http://old.onion/")
+	if status != "pending" {
+		t.Errorf("status = %q, want pending", status)
+	}
+	// The retry budget has to be reset too, or the node fails once and is
+	// immediately terminal again.
+	if retries != 0 {
+		t.Errorf("retry_count = %d, want 0", retries)
+	}
+}
+
+func TestReviveFailedNodes_LeavesRecentFailuresAlone(t *testing.T) {
+	db := newTestDB(t)
+	uid := mustUser(t, db, "u@example.com")
+	mustNode(t, db, "http://recent.onion/", uid, "failed", 1)
+
+	n, err := db.ReviveFailedNodes(7*24*time.Hour, 100)
+	if err != nil {
+		t.Fatalf("ReviveFailedNodes: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("revived %d nodes, want 0 — a 1-day-old failure is still inside its backoff", n)
+	}
+}
+
+// 'blocked' means robots.txt or the blacklist refused the URL deliberately.
+// Reviving those would re-crawl something the operator or the site opted out of.
+func TestReviveFailedNodes_NeverRevivesBlocked(t *testing.T) {
+	db := newTestDB(t)
+	uid := mustUser(t, db, "u@example.com")
+	mustNode(t, db, "http://blocked.onion/", uid, "blocked", 90)
+
+	n, err := db.ReviveFailedNodes(7*24*time.Hour, 100)
+	if err != nil {
+		t.Fatalf("ReviveFailedNodes: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("revived %d blocked nodes, want 0", n)
+	}
+	if status, _ := nodeState(t, db, "http://blocked.onion/"); status != "blocked" {
+		t.Errorf("status = %q, want blocked to be untouched", status)
+	}
+}
+
+// A backlog of thousands arriving at once would hit the per-domain politeness
+// delay across every host simultaneously, so revival is batched.
+func TestReviveFailedNodes_RespectsBatchLimit(t *testing.T) {
+	db := newTestDB(t)
+	uid := mustUser(t, db, "u@example.com")
+	for i := 0; i < 5; i++ {
+		mustNode(t, db, fmt.Sprintf("http://n%d.onion/", i), uid, "failed", 30)
+	}
+	n, err := db.ReviveFailedNodes(7*24*time.Hour, 2)
+	if err != nil {
+		t.Fatalf("ReviveFailedNodes: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("revived %d nodes, want exactly the batch limit of 2", n)
 	}
 }

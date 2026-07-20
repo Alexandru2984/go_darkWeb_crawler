@@ -857,6 +857,50 @@ func (db *DB) LogAuthEvent(event, email, ip string) {
 	}
 }
 
+// ReviveFailedNodes returns long-dead nodes to the queue.
+//
+// A node that exhausts its retries lands in 'failed', and GetNextPendingNode
+// only considers 'pending' and 'completed' — so 'failed' is terminal. That is
+// correct for a single node whose service is gone, but it makes an outage
+// unrecoverable: if Tor or the network is down for longer than the retry
+// budget, every in-flight node burns through its retries and the entire queue
+// dies at once, staying dead after the cause is fixed. This is not theoretical
+// — it is what happened here between May and July, leaving 23,346 nodes failed,
+// nothing pending, and the crawler idle with no way back short of hand-written
+// SQL.
+//
+// `olderThan` is measured from next_crawl_at, which for a failed node is when
+// its last scheduled retry would have fired. Nodes are revived in batches of
+// `limit` so a large backlog trickles back rather than arriving as one burst
+// that would trip the per-domain politeness delay across thousands of hosts.
+//
+// 'blocked' nodes (robots.txt, blacklist) are untouched: those were refused on
+// purpose, not by failure.
+func (db *DB) ReviveFailedNodes(olderThan time.Duration, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+	res, err := db.Conn.Exec(`
+		UPDATE nodes
+		SET processing_status = 'pending',
+		    retry_count       = 0,
+		    next_crawl_at     = CURRENT_TIMESTAMP
+		WHERE (url, user_id) IN (
+			SELECT url, user_id
+			FROM nodes
+			WHERE processing_status = 'failed'
+			  AND next_crawl_at < CURRENT_TIMESTAMP - ($1 || ' seconds')::INTERVAL
+			ORDER BY next_crawl_at ASC
+			LIMIT $2
+		)
+	`, fmt.Sprintf("%d", int64(olderThan.Seconds())), limit)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // CountRecentAuthEvents counts events from auth_audit of type `event` for `email`
 // in the last `window` minutes. Used for:
 //   - login lockout after 5 consecutive failures ('login_fail')
