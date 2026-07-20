@@ -4,8 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Onion Spider Dashboard</title>
-      <script defer src="https://analytics.micutu.com/script.js" data-website-id="b019bc24-e387-4482-a590-77e3793b21ff"></script>
-</head>
+    <meta name="referrer" content="no-referrer" />
+    <meta name="robots" content="noindex, nofollow" />
+    <!-- No analytics. This dashboard shows which .onion services an account is
+         crawling; a page-view beacon on every load is a record of that activity
+         sitting outside the app's own access control, and it is the kind of
+         record the whole design is trying not to create. Self-hosting the
+         collector limits who receives it, but does not stop it existing. -->
+  </head>
   <body>
     <div id="app"></div>
     <script type="module" src="/src/main.js"></script>
