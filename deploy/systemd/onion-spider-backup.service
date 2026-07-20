@@ -1,0 +1,56 @@
+# Daily encrypted PostgreSQL backup for Onion Spider.
+#
+# Install:
+#   sudo cp deploy/systemd/onion-spider-backup.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now onion-spider-backup.timer
+#
+# The passphrase lives in /etc/onion-spider/backup.passphrase (root, 0600) and
+# is handed to the service through LoadCredential: PID 1 reads it as root and
+# exposes it in $CREDENTIALS_DIRECTORY, so the unprivileged service user never
+# needs read access to the file itself.
+
+[Unit]
+Description=Onion Spider PostgreSQL daily backup
+Documentation=https://github.com/Alexandru2984/go_darkWeb_crawler
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=oneshot
+User=micu
+Group=micu
+WorkingDirectory=/home/micu/go
+ExecStart=/home/micu/go/scripts/backup.sh
+
+LoadCredential=backup-passphrase:/etc/onion-spider/backup.passphrase
+
+# Sandboxing. The script needs to read the app's .env and write the backup
+# directory, and nothing else.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/micu/onion-spider-backups
+PrivateTmp=true
+PrivateDevices=true
+ProtectClock=true
+ProtectHostname=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+UMask=0077
+
+# A dump of a growing crawl database should not be able to starve the API that
+# shares this box.
+MemoryMax=512M
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

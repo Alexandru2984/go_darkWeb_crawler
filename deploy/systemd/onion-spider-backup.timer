@@ -1,0 +1,22 @@
+# Schedule for onion-spider-backup.service.
+#
+# 03:10 UTC: after the other database backups on this host (02:00-02:35) so the
+# dumps do not contend for disk and CPU, and well clear of the crawler's busiest
+# window.
+
+[Unit]
+Description=Run the Onion Spider PostgreSQL backup daily
+Documentation=https://github.com/Alexandru2984/go_darkWeb_crawler
+
+[Timer]
+OnCalendar=*-*-* 03:10:00 UTC
+# Jitter so this does not fire at the same instant as every other timer that
+# rounds to the same minute.
+RandomizedDelaySec=600
+# Run on next boot if the machine was down at the scheduled time. A backup
+# skipped silently is the failure mode this whole unit exists to avoid.
+Persistent=true
+Unit=onion-spider-backup.service
+
+[Install]
+WantedBy=timers.target

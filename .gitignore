@@ -75,3 +75,7 @@ Thumbs.db
 # --- Project Specific Logs ---
 *.log
 logs/
+
+# Encrypted database dumps (written outside the repo by default, but never
+# commit one if BACKUP_OUTPUT_DIR is ever pointed in here).
+*.sql.gz.gpg
