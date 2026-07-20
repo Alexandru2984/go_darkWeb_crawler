@@ -29,6 +29,16 @@ type Engine struct {
 	globalErrorCount atomic.Int32
 	transports       []*http.Transport
 	transportsMu     sync.Mutex
+	// domainDelay overrides defaultDomainDelay. Zero means use the default;
+	// only tests set it, so they do not have to spend the real 5s per step.
+	domainDelay time.Duration
+}
+
+func (e *Engine) baseDomainDelay() time.Duration {
+	if e.domainDelay > 0 {
+		return e.domainDelay
+	}
+	return defaultDomainDelay
 }
 
 func NewEngine(db *database.DB, proxyAddr string, workerCount int, maxDepth int) *Engine {
@@ -116,7 +126,7 @@ func (e *Engine) waitForDomain(ctx context.Context, targetUrl string, minDelay t
 	}
 	host := parsed.Host
 
-	delay := defaultDomainDelay
+	delay := e.baseDomainDelay()
 	if minDelay > delay {
 		delay = minDelay
 	}
@@ -130,6 +140,10 @@ func (e *Engine) waitForDomain(ctx context.Context, targetUrl string, minDelay t
 	if exists {
 		elapsed := time.Since(lastAccess)
 		if elapsed < delay {
+			// Reserve this worker's slot before releasing the lock. The stored
+			// value is when WE will hit the host, so a worker arriving during
+			// our sleep sees a timestamp in the future, computes a negative
+			// `elapsed`, and stacks its own slot behind ours.
 			waitTime := delay - elapsed
 			e.domainLastAccess[host] = time.Now().Add(waitTime)
 			e.domainMu.Unlock()
@@ -138,9 +152,17 @@ func (e *Engine) waitForDomain(ctx context.Context, targetUrl string, minDelay t
 				return false
 			case <-time.After(waitTime):
 			}
-			e.domainMu.Lock()
-			e.domainLastAccess[host] = time.Now()
-			e.domainMu.Unlock()
+			// Deliberately no write here. Setting the map to time.Now() after
+			// waking would overwrite a *later* reservation made by another
+			// worker while we slept, collapsing its slot back onto ours:
+			//
+			//   A hits at T,  B reserves T+5,  C sees T+5 and reserves T+10,
+			//   B wakes at T+5 and writes T+5 — C's reservation is gone, so a
+			//   fourth worker computes from T+5, reserves T+10, and hits the
+			//   host at the same instant as C.
+			//
+			// The reservation above already records our access time, so the
+			// map is correct without touching it again.
 			return true
 		}
 	}
