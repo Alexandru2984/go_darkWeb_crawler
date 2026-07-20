@@ -432,10 +432,10 @@ onUnmounted(() => {
           <span class="workers-count">Workers: {{ status.active_workers }}</span>
           
           <span v-if="isLoggedIn" class="divider">|</span>
-          <span v-if="isLoggedIn" style="color: #4da6ff; font-weight: bold;">👤 {{ userEmail }}</span>
+          <span v-if="isLoggedIn" class="user-email">👤 {{ userEmail }}</span>
 
           <span v-if="isLoggedIn" class="divider">|</span>
-          <span v-if="isLoggedIn" style="cursor: pointer; color: #ff3333; font-weight: bold;" @click="logout">Logout</span>
+          <button v-if="isLoggedIn" class="logout-btn" @click="logout">Logout</button>
         </div>
 
       </header>
@@ -447,10 +447,10 @@ onUnmounted(() => {
           <div class="input-group">
             <input v-model="authEmail" type="email" placeholder="Email" @keyup.enter="handleAuth" />
           </div>
-          <div class="input-group" style="margin-top: 15px;">
+          <div class="input-group auth-field">
             <input v-model="authPassword" type="password" placeholder="Password" @keyup.enter="handleAuth" />
           </div>
-          <button @click="handleAuth" style="margin-top: 20px; width: 100%;">{{ authMode === 'login' ? 'Sign In' : 'Create Account' }}</button>
+          <button class="auth-submit" @click="handleAuth">{{ authMode === 'login' ? 'Sign In' : 'Create Account' }}</button>
           <p class="auth-toggle" @click="authMode = authMode === 'login' ? 'register' : 'login'">
             {{ authMode === 'login' ? "Don't have an account? Register" : 'Already have an account? Sign In' }}
           </p>
@@ -462,14 +462,14 @@ onUnmounted(() => {
       <main v-else>
 
         <section class="crawl-form">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-            <h2 style="margin: 0;">Add URL to crawl queue</h2>
-            <div v-if="userRole === 'admin'" style="display: flex; gap: 8px;">
-              <span style="color: #888; font-size: 0.8rem; align-self: center; margin-right: 5px;">EXPORT ADMIN:</span>
-              <button @click="downloadExport('csv')" style="padding: 5px 15px; font-size: 0.8rem; background: #27ae60;">CSV</button>
-              <button @click="downloadExport('xlsx')" style="padding: 5px 15px; font-size: 0.8rem; background: #2980b9;">XLSX</button>
-              <button @click="downloadExport('pdf')" style="padding: 5px 15px; font-size: 0.8rem; background: #e74c3c;">PDF</button>
-              <button @click="downloadExport('graphml')" style="padding: 5px 15px; font-size: 0.8rem; background: #8e44ad;">GraphML</button>
+          <div class="crawl-form-head">
+            <h2>Add URL to crawl queue</h2>
+            <div v-if="userRole === 'admin'" class="export-actions">
+              <span class="export-label">EXPORT ADMIN:</span>
+              <button class="btn-export csv" @click="downloadExport('csv')">CSV</button>
+              <button class="btn-export xlsx" @click="downloadExport('xlsx')">XLSX</button>
+              <button class="btn-export pdf" @click="downloadExport('pdf')">PDF</button>
+              <button class="btn-export graphml" @click="downloadExport('graphml')">GraphML</button>
             </div>
           </div>
           <div class="input-group">
@@ -644,8 +644,29 @@ header { display: flex; justify-content: space-between; align-items: center; bor
 .crawl-form { background: #111; padding: 30px; border-radius: 16px; margin-bottom: 20px; border: 1px solid #1a1a1a; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
 .crawl-form h2 { margin-top: 0; font-size: 1.1rem; margin-bottom: 20px; color: #777; }
 .input-group { display: flex; gap: 12px; }
-input { flex: 1; padding: 16px 20px; border-radius: 10px; border: 1px solid #222; background: #050505; color: #fff; font-size: 1rem; }
-button { padding: 0 35px; background: #ff3333; border: none; color: white; font-weight: 700; border-radius: 10px; cursor: pointer; }
+input { flex: 1; min-width: 0; padding: 16px 20px; border-radius: 10px; border: 1px solid #222; background: #050505; color: #fff; font-size: 1rem; }
+/* Vertical padding rather than relying on the flex row to stretch the button:
+ * inside .auth-box (and in the stacked mobile layout) there is nothing to
+ * stretch against, so a height-less button collapsed to its text box. */
+button { padding: 14px 35px; background: #ff3333; border: none; color: white; font-weight: 700; border-radius: 10px; cursor: pointer; font-size: 1rem; line-height: 1.2; }
+button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.crawl-form-head { display: flex; justify-content: space-between; align-items: center; gap: 15px; margin-bottom: 20px; flex-wrap: wrap; }
+.crawl-form-head h2 { margin: 0; }
+
+.export-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.export-label { color: #888; font-size: 0.8rem; margin-right: 5px; }
+.btn-export { padding: 8px 15px; font-size: 0.8rem; }
+.btn-export.csv { background: #27ae60; }
+.btn-export.xlsx { background: #2980b9; }
+.btn-export.pdf { background: #e74c3c; }
+.btn-export.graphml { background: #8e44ad; }
+
+.user-email { color: #4da6ff; font-weight: bold; }
+/* A real <button> so it is keyboard-reachable; the styling keeps the inline
+ * look it had as a <span>. */
+.logout-btn { background: none; border: none; padding: 0; color: #ff3333; font-weight: bold; cursor: pointer; font-size: inherit; line-height: inherit; }
+.logout-btn:hover { text-decoration: underline; }
 
 .search-group { margin-bottom: 30px; position: relative; }
 .search-icon { position: absolute; left: 15px; top: 18px; font-size: 1.2rem; }
@@ -717,12 +738,62 @@ th { background: #0d0d0d; color: #444; font-weight: 700; font-size: 0.75rem; tex
 /* Tag filtru activ in header sectiune */
 .filter-tag { font-size: 0.8rem; color: #888; font-weight: 400; margin-left: 8px; }
 
+/* Tablet and below. */
+@media (max-width: 1024px) {
+  .container { padding: 20px; }
+  .graph-container { height: 520px; }
+}
+
+/* Phones. The dashboard is information-dense, so the aim here is to let every
+ * row wrap rather than to hide data: the previous rule dropped the ID, server
+ * and category columns entirely, which quietly removed the category badge —
+ * the main way to scan the list. The table now scrolls sideways inside
+ * .table-responsive (see style.css) and keeps all six columns. */
 @media (max-width: 768px) {
   .container { padding: 15px; }
-  header { flex-direction: column; align-items: flex-start; }
+
+  header { flex-direction: column; align-items: stretch; gap: 15px; padding-bottom: 18px; margin-bottom: 25px; }
+  .logo-area h1 { font-size: 1.7rem; }
+  .subtitle { font-size: 0.7rem; letter-spacing: 2px; }
+
+  /* Nine inline items with pipe separators do not fit a phone; wrap them into
+   * a readable cluster and drop the separators, which only make sense on one
+   * line. */
+  .status-bar { flex-wrap: wrap; gap: 8px 14px; padding: 12px 15px; font-size: 0.8rem; justify-content: flex-start; }
+  .status-bar .divider { display: none; }
+
+  .crawl-form { padding: 20px; }
+  .crawl-form-head { flex-direction: column; align-items: stretch; }
+  .export-actions { justify-content: space-between; }
+  .btn-export { flex: 1 1 calc(50% - 4px); }
+  .export-label { width: 100%; margin-bottom: 4px; }
+
   .input-group { flex-direction: column; }
-  .col-server, .col-id, .col-cat { display: none; }
-  .legend { flex-wrap: wrap; }
+
+  .view-controls { gap: 10px; }
+  .toggle-btn { flex: 1; padding: 12px 10px; font-size: 0.85rem; }
+
+  .section-header { flex-wrap: wrap; gap: 10px; }
+  .graph-actions { width: 100%; }
+  .btn-action { flex: 1; }
+  .graph-section { padding: 12px; }
+  .graph-container { height: 420px; }
+  .legend { flex-wrap: wrap; gap: 10px 16px; font-size: 0.8rem; }
+
+  /* Tighter cells so more of the table is visible before it needs scrolling,
+   * and a nowrap URL column so rows stay one line high. */
+  th, td { padding: 12px 14px; }
+  .url { max-width: 180px; white-space: nowrap; }
+
+  .auth-box { padding: 28px 22px; }
+}
+
+/* Small phones. */
+@media (max-width: 420px) {
+  .container { padding: 12px; }
+  .logo-area h1 { font-size: 1.45rem; }
+  .btn-export { flex: 1 1 100%; }
+  .graph-container { height: 340px; }
 }
 
 .auth-container {
@@ -746,6 +817,8 @@ th { background: #0d0d0d; color: #444; font-weight: 700; font-size: 0.75rem; tex
   margin-top: 0;
   margin-bottom: 30px;
 }
+.auth-field { margin-top: 15px; }
+.auth-submit { margin-top: 20px; width: 100%; }
 .auth-toggle {
   color: #888;
   margin-top: 20px;
