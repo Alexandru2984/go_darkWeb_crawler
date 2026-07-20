@@ -55,9 +55,15 @@ from the listed ranges.
 Handled outside this repo by `update-cloudflare-ips.sh` (see the warning above),
 which regenerates the host-wide snippet from <https://www.cloudflare.com/ips/>.
 
-Note that the regeneration is currently **manual** — there is no cron entry
-driving it, so the ranges are only as fresh as the last hand-run. If Cloudflare
-adds a prefix, requests from behind it arrive with `$remote_addr` set to the
-edge IP: per-IP rate limits and login lockout then apply to the edge rather than
-the client, so many unrelated users share one bucket. Worth putting on a
-schedule.
+This now runs weekly via `cloudflare-ips-update.timer` (units in
+`deploy/systemd/`). It used to be hand-run, and by the time that was checked the
+installed list had already drifted stale — which is the failure this schedule
+exists to prevent. When the list is missing a prefix Cloudflare has added,
+clients arriving through it keep the edge IP as `$remote_addr`, so per-IP rate
+limiting and login lockout apply to the edge rather than the client and
+unrelated users share a single bucket.
+
+```bash
+systemctl list-timers cloudflare-ips-update.timer      # when it next runs
+sudo /home/micu/swift+vapor/scripts/update-cloudflare-ips.sh --check   # is it stale now?
+```

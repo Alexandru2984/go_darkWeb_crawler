@@ -1,0 +1,33 @@
+# Refreshes the nginx Cloudflare real-IP trust list and origin guard.
+#
+# HOST-WIDE, SHARED: the files this touches (/etc/nginx/snippets/cloudflare-realip.conf
+# and /etc/nginx/conf.d/cloudflare-origin-guard.conf) are used by every vhost on
+# the box, and the script itself lives outside this repo. The unit is version
+# controlled here because go.micutu.com is the service that breaks when the list
+# goes stale, not because this project owns the script.
+#
+# Why it matters here: the API trusts X-Real-IP for per-IP rate limiting, login
+# lockout and the auth audit log. nginx only rewrites $remote_addr from
+# CF-Connecting-IP for peers inside a trusted range, so when Cloudflare adds a
+# prefix that this list is missing, every client arriving through that prefix
+# keeps the edge IP instead. They then all share one rate-limit bucket and one
+# lockout counter — a handful of strangers can lock each other out, and a single
+# attacker behind that prefix gets everyone else's budget.
+#
+# The script is idempotent: it validates both generated files, reloads nginx only
+# when something changed, and rolls both files back if validation or reload fails.
+
+[Unit]
+Description=Refresh Cloudflare IP ranges for nginx real-IP trust
+Documentation=https://www.cloudflare.com/ips/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/micu/swift+vapor/scripts/update-cloudflare-ips.sh
+# Runs as root: the script installs root-owned files into /etc/nginx and reloads
+# nginx. Its internal sudo calls are no-ops under root.
+User=root
+# Fetching from cloudflare.com can hang; do not let a stuck run block the timer.
+TimeoutStartSec=120
