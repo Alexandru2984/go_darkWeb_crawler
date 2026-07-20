@@ -26,6 +26,14 @@ To protect the server and ensure passive browsing:
 
 - JWT (HS256) authentication with a user/admin role system. The signing
   algorithm is pinned, so forged `alg=none` tokens are rejected.
+- The browser session lives in an `HttpOnly`, `Secure`, `SameSite=Strict`
+  cookie — the dashboard never puts a token in `localStorage`, so an XSS has no
+  long-lived credential to exfiltrate. Cookie-authenticated writes must echo a
+  double-submit CSRF token; `Authorization: Bearer` still works for scripts and
+  is exempt, since a browser cannot attach that header cross-origin.
+- All crawler traffic uses per-destination Tor stream isolation: each onion host
+  gets its own SOCKS credential, so Tor builds a separate circuit per site and no
+  single relay sees one client reading two unrelated services.
 - Authorization reads the role from the database on every request, not from the
   JWT claims — a demoted admin loses access immediately instead of waiting for
   the token to expire.

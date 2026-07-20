@@ -178,8 +178,46 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 	d.cfg.DB.LogAuthEvent("login_ok", req.Email, ip)
 	slog.InfoContext(ctx, "login_ok", "ip", ip, "email", user.Email, "role", user.Role)
 
+	// The browser authenticates from here on via the HttpOnly session cookie;
+	// the frontend never touches the token. The token stays in the response
+	// body for non-browser clients (scripts, the documented Bearer scheme),
+	// which have nowhere to put a cookie and are not exposed to XSS anyway.
+	setSessionCookies(w, r, token, newCSRFToken())
+
 	w.Header().Set("Content-Type", "application/json")
+	// Responses that vary with credentials must never be cached by a shared
+	// cache — this one carries a bearer token.
+	w.Header().Set("Cache-Control", "no-store")
 	json.NewEncoder(w).Encode(map[string]string{"token": token, "role": user.Role, "email": user.Email})
+}
+
+// handleMe reports the current session to the frontend. With the token in an
+// HttpOnly cookie the page can no longer read its own claims, so identity has
+// to come from the server. The role returned here is the live one from the DB
+// (via LoadDBRole), not the possibly-stale value in the token.
+func (d *deps) handleMe(w http.ResponseWriter, r *http.Request) {
+	claims, ok := r.Context().Value(userContextKey).(*auth.Claims)
+	if !ok || claims == nil {
+		WriteJSONError(w, http.StatusUnauthorized, "Authentication required")
+		return
+	}
+	role := "user"
+	if IsAdmin(r) {
+		role = "admin"
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	json.NewEncoder(w).Encode(map[string]string{"email": claims.Email, "role": role})
+}
+
+// handleLogout clears this browser's session. It does not bump token_version —
+// that is logout-all's job. Signing out on a shared machine should not kill the
+// user's other sessions.
+func (d *deps) handleLogout(w http.ResponseWriter, r *http.Request) {
+	clearSessionCookies(w, r)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Signed out."})
 }
 
 // handleVerifyGET shows a confirmation page with a POST button — it does NOT
@@ -364,6 +402,11 @@ func (d *deps) handleLogoutAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.InfoContext(r.Context(), "logout_all", "uid", uid)
+	// This browser's session is one of the ones just revoked; drop its cookies
+	// too rather than leaving it to replay a token that now fails on every
+	// request.
+	clearSessionCookies(w, r)
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	json.NewEncoder(w).Encode(map[string]string{"message": "All sessions have been logged out."})
 }

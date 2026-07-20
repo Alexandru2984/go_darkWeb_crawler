@@ -43,37 +43,70 @@ let statusInterval = null
 
 const API_BASE = '/api'
 
-const userToken = ref(localStorage.getItem('token') || '')
-const userRole = ref(localStorage.getItem('role') || '')
-const userEmail = ref(localStorage.getItem('email') || '')
+// The session lives in an HttpOnly cookie the browser attaches automatically —
+// this code cannot read the token, by design, so an XSS on this page has no
+// long-lived credential to steal. Identity comes from the server via
+// /api/auth/me instead of from anything kept in localStorage.
+const userRole = ref('')
+const userEmail = ref('')
+const sessionChecked = ref(false)
 const authEmail = ref('')
 const authPassword = ref('')
 const authMode = ref('login') // 'login' or 'register'
-const isLoggedIn = computed(() => !!userToken.value)
+const isLoggedIn = computed(() => !!userEmail.value)
 
 const authMessage = ref('')
 
-const getAuthHeaders = () => {
-  const headers = {}
-  if (userToken.value) {
-    headers['Authorization'] = `Bearer ${userToken.value}`
-  }
-  return headers
+// The CSRF cookie is deliberately readable (unlike the session cookie): the
+// backend requires it echoed back in a header on state-changing requests. A
+// cross-site attacker can make the browser send the session cookie but cannot
+// read this value to reproduce the header.
+const readCookie = (name) => {
+  const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'))
+  return match ? decodeURIComponent(match[1]) : ''
 }
 
-// apiFetch is a wrapper around fetch that auto-logouts if the backend returns 401
-// (token expired or invalidated via JWT_SECRET rotation). Prevents inconsistent states
-// where the UI thinks you're logged in but every call silently fails.
+const csrfHeaders = (method) => {
+  if (!method || method.toUpperCase() === 'GET') return {}
+  const token = readCookie('os_csrf')
+  return token ? { 'X-CSRF-Token': token } : {}
+}
+
+// apiFetch wraps fetch so a 401 drops the UI back to the login form instead of
+// leaving it believing there is a session while every call fails.
 const apiFetch = async (url, opts = {}) => {
   const res = await fetch(url, {
     ...opts,
-    headers: { ...(opts.headers || {}), ...getAuthHeaders() }
+    credentials: 'same-origin',
+    headers: { ...(opts.headers || {}), ...csrfHeaders(opts.method) }
   })
-  if (res.status === 401 && userToken.value) {
-    logout()
+  if (res.status === 401 && isLoggedIn.value) {
+    clearSession()
     authMessage.value = 'Session expired. Please log in again.'
   }
   return res
+}
+
+// Reads the session back from the server. The cookie is invisible to this code,
+// so this is the only way to tell whether the browser still holds a valid one —
+// it is what makes a session survive a page reload.
+const loadSession = async () => {
+  try {
+    const res = await fetch('/api/auth/me', { credentials: 'same-origin' })
+    if (res.ok) {
+      const data = await res.json()
+      userEmail.value = data.email || ''
+      userRole.value = data.role || ''
+    } else {
+      userEmail.value = ''
+      userRole.value = ''
+    }
+  } catch {
+    userEmail.value = ''
+    userRole.value = ''
+  } finally {
+    sessionChecked.value = true
+  }
 }
 
 const handleAuth = async () => {
@@ -81,27 +114,27 @@ const handleAuth = async () => {
   const endpoint = authMode.value === 'login' ? '/api/auth/login' : '/api/auth/register'
   
   try {
-    const res = await fetch(`${API_BASE.replace('/api', '')}${endpoint}`, {
+    const res = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: authEmail.value, password: authPassword.value })
     })
     const data = await res.json()
-    
+
     if (res.ok) {
       if (authMode.value === 'login') {
-        userToken.value = data.token
+        // The response still carries a token for non-browser clients; this page
+        // ignores it and relies on the cookies the same response set.
         userRole.value = data.role
         userEmail.value = data.email
-        localStorage.setItem('token', data.token)
-        localStorage.setItem('role', data.role)
-        localStorage.setItem('email', data.email)
+        authPassword.value = ''
         authMessage.value = 'Login successful!'
         setTimeout(() => { authMessage.value = '' }, 2000)
         fetchStatus()
         fetchNodes()
       } else {
-        authMessage.value = data.message || 'Cont creat. Verifica email-ul!'
+        authMessage.value = data.message || 'Account created. Check your email.'
       }
     } else {
       authMessage.value = data.error || 'Authentication error.'
@@ -131,20 +164,28 @@ const handleForgot = async () => {
   }
 }
 
-const logout = () => {
-  userToken.value = ''
+// Resets local UI state only. The cookie is HttpOnly, so it can only be cleared
+// by the server — see logout().
+const clearSession = () => {
   userRole.value = ''
   userEmail.value = ''
-  localStorage.removeItem('token')
-  localStorage.removeItem('role')
-  localStorage.removeItem('email')
   status.value = { status: 'offline', nodes_crawled: 0, pending_nodes: 0, db_connected: false, active_workers: 0 }
   nodes.value = []
   edges.value = []
 }
 
+const logout = async () => {
+  try {
+    await apiFetch('/api/auth/logout', { method: 'POST' })
+  } catch {
+    // Even if the request fails, drop the local state: leaving the dashboard
+    // on screen would imply a session the user asked to end.
+  }
+  clearSession()
+}
+
 const downloadExport = (format) => {
-  if (!userToken.value) return
+  if (!isLoggedIn.value) return
 
   apiFetch(`${API_BASE}/export?format=${format}`)
   .then(res => {
@@ -202,7 +243,7 @@ const fetchStatus = async () => {
 
 const fetchNodes = async () => {
   if (isSearching.value) return
-  if (!userToken.value) return
+  if (!isLoggedIn.value) return
   try {
     const res = await apiFetch(`${API_BASE}/nodes`)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -215,7 +256,7 @@ const fetchNodes = async () => {
 }
 
 const fetchEdges = async () => {
-  if (!userToken.value) return
+  if (!isLoggedIn.value) return
   try {
     const res = await apiFetch(`${API_BASE}/edges`)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -395,7 +436,11 @@ watch(isGraphView, async (newVal) => {
   }
 })
 
-onMounted(() => {
+onMounted(async () => {
+  // Resolve the session before fetching anything: the token is no longer
+  // readable from this side, so whether we are logged in is only knowable
+  // after the server answers.
+  await loadSession()
   fetchStatus()
   fetchNodes()
   statusInterval = setInterval(() => {
@@ -441,7 +486,11 @@ onUnmounted(() => {
       </header>
 
       
-      <div v-if="!isLoggedIn" class="auth-container">
+      <!-- Nothing until the session check returns: rendering the login form
+           first would flash it at users who are in fact still signed in. -->
+      <div v-if="!sessionChecked" class="session-loading">Loading…</div>
+
+      <div v-else-if="!isLoggedIn" class="auth-container">
         <div class="auth-box">
           <h2>{{ authMode === 'login' ? 'Login' : 'Register' }}</h2>
           <div class="input-group">
@@ -796,6 +845,13 @@ th { background: #0d0d0d; color: #444; font-weight: 700; font-size: 0.75rem; tex
   .graph-container { height: 340px; }
 }
 
+.session-loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 50vh;
+  color: #555;
+}
 .auth-container {
   display: flex;
   justify-content: center;

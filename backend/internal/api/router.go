@@ -36,10 +36,13 @@ func New(cfg Config) http.Handler {
 	r.Use(SafeLogger("/api/auth/verify"))
 	r.Use(middleware.Recoverer)
 	r.Use(JWTMiddleware)
+	// Must sit after JWTMiddleware: it decides whether to enforce based on
+	// whether the credentials came from a cookie.
+	r.Use(CSRFProtect)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: cfg.CORSOrigins,
 		AllowedMethods: []string{"GET", "POST", "DELETE", "OPTIONS"},
-		AllowedHeaders: []string{"Accept", "Content-Type", "Authorization"},
+		AllowedHeaders: []string{"Accept", "Content-Type", "Authorization", csrfHeader},
 		MaxAge:         300,
 	}))
 
@@ -60,6 +63,8 @@ func New(cfg Config) http.Handler {
 		r.Use(RequireAuth)
 		r.Use(LoadDBRole(cfg.DB))
 
+		r.Get("/api/auth/me", d.handleMe)
+		r.Post("/api/auth/logout", d.handleLogout)
 		r.Post("/api/auth/logout-all", d.handleLogoutAll)
 
 		r.Get("/api/nodes", d.handleNodes)

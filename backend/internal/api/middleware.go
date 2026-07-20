@@ -13,29 +13,62 @@ import (
 type contextKey string
 
 const (
-	userContextKey   contextKey = "user"
-	dbRoleContextKey contextKey = "db_role"
+	userContextKey       contextKey = "user"
+	dbRoleContextKey     contextKey = "db_role"
+	authSourceContextKey contextKey = "auth_source"
 )
 
-// JWTMiddleware extracts claims from the Authorization header if present and valid.
-// No header: pass-through (public endpoints work).
-// Header present but invalid: 401 (do not allow forged tokens to pass as unauthenticated).
+// How a request proved its identity. CSRFProtect keys off this: only
+// cookie-borne credentials can be attached by the browser automatically, so
+// only they need the double-submit check.
+const (
+	authSourceHeader = "header"
+	authSourceCookie = "cookie"
+)
+
+// JWTMiddleware extracts claims from the Authorization header, or failing that
+// from the session cookie.
+// Neither present: pass-through (public endpoints work).
+// Present but invalid: 401 (do not allow forged tokens to pass as unauthenticated).
 func JWTMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+		// The explicit header wins over the cookie. A caller who bothered to
+		// set Authorization means it, and honouring the ambient cookie instead
+		// would silently run the request as whoever the browser is logged in
+		// as rather than as the presented token.
+		tokenStr, source := "", ""
+		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+			tokenStr, source = strings.TrimPrefix(authHeader, "Bearer "), authSourceHeader
+		} else if c, err := r.Cookie(sessionCookie); err == nil && c.Value != "" {
+			tokenStr, source = c.Value, authSourceCookie
+		}
+		if tokenStr == "" {
 			next.ServeHTTP(w, r)
 			return
 		}
-		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+
 		claims, err := auth.ValidateToken(tokenStr)
 		if err != nil {
+			// A stale cookie is the ordinary end of a session, not an attack:
+			// clear it so the browser stops replaying a token that will keep
+			// failing, and the user lands back on the login form.
+			if source == authSourceCookie {
+				clearSessionCookies(w, r)
+			}
 			WriteJSONError(w, http.StatusUnauthorized, "Invalid or expired token")
 			return
 		}
 		ctx := context.WithValue(r.Context(), userContextKey, claims)
+		ctx = context.WithValue(ctx, authSourceContextKey, source)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// AuthSource reports whether credentials arrived in a header or a cookie.
+// Empty when the request is unauthenticated.
+func AuthSource(r *http.Request) string {
+	s, _ := r.Context().Value(authSourceContextKey).(string)
+	return s
 }
 
 // RequireAuth refuses requests without a valid JWT in context.
