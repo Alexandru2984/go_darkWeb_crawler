@@ -21,6 +21,11 @@ backend/onion-spider-api
 backend/onion-spider-crawler
 backend/*.prev
 backend/tmp/
+# Rollback copies kept next to the live binary during a deploy.
+backend/*.old
+backend/*.bak-*
+# `make build` output — staging area before the binary is swapped into place.
+tmp/
 
 # --- Node/Frontend Specific ---
 node_modules/

@@ -1,0 +1,74 @@
+# Production systemd unit for the Onion Spider API (go.micutu.com).
+#
+# This file is the source of truth; the live copy lives at
+# /etc/systemd/system/onion-spider.service. Apply with:
+#
+#   sudo cp deploy/systemd/onion-spider.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl restart onion-spider
+#
+# Sandboxing rationale: the API parses attacker-influenced input (HTML scraped
+# from onion services, JSON request bodies). If it is ever compromised, the
+# blast radius must stop at this service — it must NOT be able to read the rest
+# of the operator's home directory (~/.ssh, other projects' .env files) or write
+# anywhere on the host. The app itself needs no write access at all: it writes
+# only to Postgres and to stdout/journald.
+
+[Unit]
+Description=Onion Spider - Recursive Dark Web Crawler API
+After=network.target postgresql.service tor.service
+Wants=postgresql.service tor.service
+
+[Service]
+Type=simple
+User=micu
+Group=micu
+WorkingDirectory=/home/micu/go/backend
+ExecStart=/home/micu/go/backend/onion-spider-api
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+EnvironmentFile=/home/micu/go/backend/.env
+
+# --- Filesystem isolation ---------------------------------------------------
+# ProtectHome=tmpfs replaces /home with an empty tmpfs inside the service's
+# mount namespace, then BindReadOnlyPaths mounts back ONLY this app's directory.
+# Net effect: the process can execute its own binary but cannot see ~/.ssh,
+# ~/.aws, or any sibling project's secrets. EnvironmentFile is read by PID 1
+# before the namespace exists, so .env still loads.
+ProtectHome=tmpfs
+BindReadOnlyPaths=/home/micu/go/backend
+ProtectSystem=strict
+PrivateTmp=true
+ReadWritePaths=
+
+# --- Privilege and kernel isolation -----------------------------------------
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# Outbound traffic is HTTP to Postgres (TCP) and SOCKS5 to Tor (TCP loopback).
+# No raw sockets, no netlink, no bluetooth.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Secrets in .env must not be world-readable if the process ever creates files.
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
