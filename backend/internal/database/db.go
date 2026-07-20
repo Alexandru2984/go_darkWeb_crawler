@@ -870,9 +870,21 @@ func (db *DB) LogAuthEvent(event, email, ip string) {
 // SQL.
 //
 // `olderThan` is measured from next_crawl_at, which for a failed node is when
-// its last scheduled retry would have fired. Nodes are revived in batches of
-// `limit` so a large backlog trickles back rather than arriving as one burst
-// that would trip the per-domain politeness delay across thousands of hosts.
+// its last scheduled retry would have fired.
+//
+// Revival is batched to `limit` per pass. Note that this does NOT pace the
+// crawler: the per-domain politeness delay is applied when a node is claimed,
+// not when it is queued, so reviving everything at once would not make the
+// crawl any less polite — it would just produce a very long pending queue. The
+// batch exists to keep the UPDATE from locking tens of thousands of rows in one
+// transaction, and to make recovery gradual and observable, so a sweep that is
+// reviving the wrong thing can be caught and stopped before it has touched the
+// entire table.
+//
+// Because of that, `limit` per hour is unrelated to crawl throughput and the
+// pending queue may well grow faster than workers drain it. That is fine — it
+// is a work queue — but it means the backlog size is not a sign of trouble on
+// its own.
 //
 // 'blocked' nodes (robots.txt, blacklist) are untouched: those were refused on
 // purpose, not by failure.
