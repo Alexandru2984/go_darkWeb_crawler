@@ -86,7 +86,7 @@ func TestGetNextPendingNode_FairAcrossUsers(t *testing.T) {
 		}
 		claims = append(claims, uid)
 	}
-	if !(contains(claims, a) && contains(claims, b)) {
+	if !contains(claims, a) || !contains(claims, b) {
 		t.Errorf("first two claims should service both users (fairness), got user ids %v", claims)
 	}
 

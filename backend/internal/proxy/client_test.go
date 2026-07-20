@@ -13,8 +13,13 @@ func TestIsolationCredentialSeparatesHosts(t *testing.T) {
 	}
 
 	// Stability: the same host must reuse its credential, otherwise every
-	// request would open a fresh circuit and crawling would crawl.
-	if isolationCredential(a) != isolationCredential(a) {
+	// request would open a fresh circuit and crawling would crawl. Compare a
+	// value captured earlier against one derived after other inputs have been
+	// through the function, so this is a real determinism check rather than
+	// two identical calls the compiler could fold away.
+	first := isolationCredential(a)
+	isolationCredential(b)
+	if isolationCredential(a) != first {
 		t.Fatal("credential is not stable for a repeated host")
 	}
 
@@ -38,7 +43,7 @@ func TestIsolationCredentialIsSOCKS5Safe(t *testing.T) {
 		t.Fatalf("credential length = %d, want 32", len(got))
 	}
 	for _, r := range got {
-		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
 			t.Fatalf("credential contains non-hex byte %q", r)
 		}
 	}
