@@ -6,21 +6,39 @@ is `/etc/nginx/sites-enabled/onion_spider`.
 ## Files
 
 - `onion_spider.conf` — the site config (TLS, security headers, API proxy).
+  This repo **owns** this file; the live copy is a deploy target.
 - `snippets/cloudflare-realip.conf` — restores the real client IP when traffic
   is proxied through Cloudflare. **Why it matters:** the Go backend trusts
   `X-Real-IP` for per-IP rate limiting, login lockout and the audit log. Behind
   Cloudflare without this, every request is attributed to a Cloudflare edge IP,
   which both enables rate-limit bypass/sharing and causes false lockouts.
 
+  ⚠️ This repo does **not** own the snippet. `/etc/nginx/snippets/cloudflare-realip.conf`
+  is host-wide (shared with other vhosts) and is regenerated from Cloudflare's
+  published ranges by `update-cloudflare-ips.sh`, which lives outside this
+  project. The copy here is a **read-only mirror for reference**. Copying it
+  over the live file would freeze the ranges at whatever this repo last
+  recorded, so a Cloudflare prefix added later would stop being trusted — and
+  clients behind it would all collapse into one rate-limit bucket. Never
+  `cp` this one outward; diff it instead.
+
 ## Apply
 
 ```bash
-sudo cp deploy/nginx/snippets/cloudflare-realip.conf /etc/nginx/snippets/
-sudo cp deploy/nginx/onion_spider.conf /etc/nginx/sites-available/onion_spider
-# (sites-enabled/onion_spider is typically a symlink to sites-available)
+# Site config only — the repo owns this file.
+sudo cp deploy/nginx/onion_spider.conf /etc/nginx/sites-enabled/onion_spider
 
 sudo nginx -t          # validate before reloading
 sudo systemctl reload nginx
+```
+
+To check whether the externally-managed snippet has drifted from the mirror
+(comments and `real_ip_recursive` are expected to differ; the
+`set_real_ip_from` set is what matters):
+
+```bash
+diff <(grep -oE 'set_real_ip_from [^;]+' /etc/nginx/snippets/cloudflare-realip.conf | sort) \
+     <(grep -oE 'set_real_ip_from [^;]+' deploy/nginx/snippets/cloudflare-realip.conf | sort)
 ```
 
 ## Verify the real IP fix
@@ -34,6 +52,12 @@ from the listed ranges.
 
 ## Refreshing Cloudflare ranges
 
-Cloudflare adds prefixes over time. Refresh from <https://www.cloudflare.com/ips/>
-(a monthly cron that regenerates `cloudflare-realip.conf` and reloads nginx is
-ideal).
+Handled outside this repo by `update-cloudflare-ips.sh` (see the warning above),
+which regenerates the host-wide snippet from <https://www.cloudflare.com/ips/>.
+
+Note that the regeneration is currently **manual** — there is no cron entry
+driving it, so the ranges are only as fresh as the last hand-run. If Cloudflare
+adds a prefix, requests from behind it arrive with `$remote_addr` set to the
+edge IP: per-IP rate limits and login lockout then apply to the edge rather than
+the client, so many unrelated users share one bucket. Worth putting on a
+schedule.
