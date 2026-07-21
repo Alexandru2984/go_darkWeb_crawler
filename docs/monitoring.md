@@ -46,16 +46,11 @@ was `onionspider_queue_nodes{status="pending"}` sitting at zero.
 
 Two things address it. The engine now revives long-failed nodes on an hourly
 sweep (see `REVIVE_FAILED_AFTER_DAYS`), so a transient outage no longer
-permanently kills the queue. And the metric above is worth an alert:
-
-```yaml
-- alert: OnionSpiderQueueStalled
-  expr: onionspider_queue_nodes{status="pending"} == 0
-        and onionspider_queue_nodes{status="failed"} > 100
-  for: 2h
-  annotations:
-    summary: "Crawl queue is empty while failures are piling up — crawler is idle"
-```
+permanently kills the queue. And `OnionSpiderQueueStalled` now alerts on exactly
+this signature — nothing pending while failures accumulate — so if it recurs it
+is reported instead of discovered months later. The rule lives in
+`deploy/prometheus/onion-spider-rules.yml`; the notification path (Alertmanager
+to email, and how to test it) is in `deploy/prometheus/README.md`.
 
 A liveness check cannot catch this. `/healthz` reports that the process is
 running and `/readyz` that the database answers; neither has any opinion about
