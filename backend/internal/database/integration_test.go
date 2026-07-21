@@ -1,12 +1,18 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
 	"testing"
 	"time"
 )
+
+// testDBAdvisoryLock is an arbitrary constant shared with internal/api. Both
+// packages take this same Postgres advisory lock so their test runs cannot
+// overlap on a shared TEST_DATABASE_URL. Keep the two values identical.
+const testDBAdvisoryLock = 0x0170_9105
 
 // newTestDB returns a *DB backed by a throwaway Postgres at $TEST_DATABASE_URL,
 // freshly migrated and truncated. Skips when the env var is unset so the
@@ -27,6 +33,24 @@ func newTestDB(t *testing.T) *DB {
 	if err := runMigrations(conn); err != nil {
 		t.Fatalf("runMigrations: %v", err)
 	}
+	// `go test ./...` runs this package and internal/api concurrently against
+	// the same TEST_DATABASE_URL, and both TRUNCATE — so each was wiping the
+	// other's fixtures mid-test. The advisory lock makes them take turns. See
+	// the longer note on lockTestDB in internal/api/integration_test.go for why
+	// it is held on a dedicated connection and released explicitly.
+	lockCtx := context.Background()
+	lockConn, err := conn.Conn(lockCtx)
+	if err != nil {
+		t.Fatalf("checkout lock connection: %v", err)
+	}
+	if _, err := lockConn.ExecContext(lockCtx, `SELECT pg_advisory_lock($1)`, testDBAdvisoryLock); err != nil {
+		lockConn.Close()
+		t.Fatalf("acquire test-db advisory lock: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = lockConn.ExecContext(lockCtx, `SELECT pg_advisory_unlock($1)`, testDBAdvisoryLock)
+		lockConn.Close()
+	})
 	if _, err := conn.Exec(`TRUNCATE nodes, edges, auth_audit, blacklist, users RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}

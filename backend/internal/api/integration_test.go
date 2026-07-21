@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,6 +24,45 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// testDBAdvisoryLock is an arbitrary constant shared with internal/database.
+// Both packages take this same Postgres advisory lock so their test runs cannot
+// overlap on a shared TEST_DATABASE_URL. Keep the two values identical.
+const testDBAdvisoryLock = 0x0170_9105
+
+// lockTestDB serialises this test against the other package's test binary.
+//
+// `go test ./...` runs packages as concurrent processes, and internal/api and
+// internal/database both TRUNCATE the same TEST_DATABASE_URL — so each was
+// wiping the other's fixtures mid-test, failing whichever lost the race, a
+// different one each run. CI was passing on luck.
+//
+// The lock is taken on a dedicated connection pulled out of the pool, not on
+// the pool itself. Advisory locks are session-scoped, and a pooled connection
+// can be handed to unrelated queries or recycled, which would drop the lock
+// early. It must also be released explicitly: returning the connection to the
+// pool leaves the session — and therefore the lock — alive.
+//
+// Do NOT implement this by pinning SetMaxOpenConns(1) instead. Any code path
+// that needs a second connection while holding the first (streaming rows while
+// issuing another query, as the export handlers do) then deadlocks against
+// itself, which is exactly what the first attempt at this did.
+func lockTestDB(t *testing.T, db *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("checkout lock connection: %v", err)
+	}
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, testDBAdvisoryLock); err != nil {
+		conn.Close()
+		t.Fatalf("acquire test-db advisory lock: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = conn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, testDBAdvisoryLock)
+		conn.Close()
+	})
+}
+
 // newAPI spins up the full router against a fresh, migrated, truncated Postgres
 // at $TEST_DATABASE_URL. Skips when the env var is unset.
 func newAPI(t *testing.T) (http.Handler, *database.DB) {
@@ -34,6 +75,7 @@ func newAPI(t *testing.T) (http.Handler, *database.DB) {
 	if err != nil {
 		t.Fatalf("InitDB: %v", err)
 	}
+	lockTestDB(t, db.Conn)
 	if _, err := db.Conn.Exec(`TRUNCATE nodes, edges, auth_audit, blacklist, users RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
