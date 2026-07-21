@@ -6,6 +6,8 @@ endpoint is reachable on `127.0.0.1:8900` and never publicly.
 
 ## Scrape config
 
+Rules and the notification path are documented in `deploy/prometheus/README.md`.
+
 Prometheus runs on this host. `/etc/prometheus/prometheus.yml` is host-wide and
 shared with the other services on the box, so it is not deployable from this
 repo — the job below has to be added there by hand:
