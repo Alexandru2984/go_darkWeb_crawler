@@ -10,9 +10,15 @@ package logging
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -46,7 +52,10 @@ func RequestIDFromContext(ctx context.Context) string {
 // (InfoContext, ErrorContext, ...) so the ID flows automatically.
 func New(out io.Writer) *slog.Logger {
 	level := parseLevel(os.Getenv("LOG_LEVEL"))
-	opts := &slog.HandlerOptions{Level: level}
+	opts := &slog.HandlerOptions{
+		Level:       level,
+		ReplaceAttr: newPrivacyFilter(),
+	}
 
 	var base slog.Handler
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("LOG_FORMAT"))) {
@@ -58,6 +67,64 @@ func New(out io.Writer) *slog.Logger {
 	}
 
 	return slog.New(&contextHandler{Handler: base})
+}
+
+// sensitiveLogKeys are values that can identify a user or reveal which onion
+// service they are investigating. They are replaced with an ephemeral,
+// process-local HMAC reference before they reach stderr/journald. The reference
+// remains stable for the lifetime of one process (useful for correlating an
+// incident) but cannot be dictionary-guessed from old logs after a restart.
+var sensitiveLogKeys = map[string]struct{}{
+	"domain": {},
+	"email":  {},
+	"ip":     {},
+	"q":      {},
+	"query":  {},
+	"to":     {},
+	"url":    {},
+}
+
+var (
+	uriPattern              = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>]+`)
+	emailPattern            = regexp.MustCompile(`(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b`)
+	onionPattern            = regexp.MustCompile(`(?i)\b[a-z2-7]{56}\.onion(?::[0-9]{1,5})?\b`)
+	secretAssignmentPattern = regexp.MustCompile(`(?i)\b(password|passwd|pwd|secret|token)=([^\s,;]+)`)
+)
+
+// newPrivacyFilter returns a slog ReplaceAttr hook with a fresh, in-memory key.
+// Refusing to start if crypto/rand fails is safer than silently writing raw PII.
+func newPrivacyFilter() func([]string, slog.Attr) slog.Attr {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		panic("crypto/rand unavailable for log privacy filter: " + err.Error())
+	}
+
+	return func(_ []string, a slog.Attr) slog.Attr {
+		if _, sensitive := sensitiveLogKeys[strings.ToLower(a.Key)]; sensitive {
+			mac := hmac.New(sha256.New, key)
+			_, _ = mac.Write([]byte(strings.ToLower(a.Key)))
+			_, _ = mac.Write([]byte{0})
+			_, _ = mac.Write([]byte(fmt.Sprint(a.Value.Any())))
+			return slog.String(a.Key, "ref:"+hex.EncodeToString(mac.Sum(nil)[:12]))
+		}
+
+		// Errors frequently embed the request URL (net/url.Error), a PostgreSQL
+		// connection URI, or a constraint value. Preserve the diagnostic class and
+		// message while stripping values that should never become durable logs.
+		if strings.EqualFold(a.Key, "err") {
+			if err, ok := a.Value.Any().(error); ok {
+				return slog.String(a.Key, redactSensitiveText(err.Error()))
+			}
+		}
+		return a
+	}
+}
+
+func redactSensitiveText(s string) string {
+	s = uriPattern.ReplaceAllString(s, "[uri-redacted]")
+	s = onionPattern.ReplaceAllString(s, "[onion-redacted]")
+	s = emailPattern.ReplaceAllString(s, "[email-redacted]")
+	return secretAssignmentPattern.ReplaceAllString(s, "$1=[redacted]")
 }
 
 // NewDefault constructs the standard application logger writing to stderr and

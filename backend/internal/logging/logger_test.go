@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"strings"
@@ -102,5 +103,59 @@ func TestTextFormatRespected(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "k=v") {
 		t.Errorf("text output missing k=v, got: %s", buf.String())
+	}
+}
+
+func TestPrivacyFilterPseudonymizesSensitiveAttributes(t *testing.T) {
+	var buf bytes.Buffer
+	t.Setenv("LOG_FORMAT", "json")
+
+	logger := New(&buf)
+	onionURL := "http://abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwxyz2345.onion/private?q=secret"
+	logger.Info("privacy_test",
+		"url", onionURL,
+		"email", "person@example.com",
+		"ip", "203.0.113.42",
+		"q", "sensitive search",
+	)
+
+	line := buf.String()
+	for _, forbidden := range []string{onionURL, "person@example.com", "203.0.113.42", "sensitive search"} {
+		if strings.Contains(line, forbidden) {
+			t.Fatalf("sensitive value %q reached the log: %s", forbidden, line)
+		}
+	}
+
+	var rec map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &rec); err != nil {
+		t.Fatalf("log line is not valid JSON: %v", err)
+	}
+	for _, key := range []string{"url", "email", "ip", "q"} {
+		got, _ := rec[key].(string)
+		if !strings.HasPrefix(got, "ref:") {
+			t.Errorf("%s = %q, want an ephemeral reference", key, got)
+		}
+	}
+}
+
+func TestPrivacyFilterRedactsSecretsEmbeddedInErrors(t *testing.T) {
+	var buf bytes.Buffer
+	t.Setenv("LOG_FORMAT", "json")
+
+	logger := New(&buf)
+	logger.Error("request_failed", "err", errors.New(
+		`GET http://abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwxyz2345.onion/private?token=abc for person@example.com: password=hunter2`,
+	))
+
+	line := buf.String()
+	for _, forbidden := range []string{"abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwxyz2345.onion", "person@example.com", "abc", "hunter2"} {
+		if strings.Contains(line, forbidden) {
+			t.Fatalf("secret %q reached the log: %s", forbidden, line)
+		}
+	}
+	for _, marker := range []string{"[uri-redacted]", "[email-redacted]", "password=[redacted]"} {
+		if !strings.Contains(line, marker) {
+			t.Errorf("redaction marker %q missing from: %s", marker, line)
+		}
 	}
 }

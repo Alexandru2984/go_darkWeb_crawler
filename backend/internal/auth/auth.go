@@ -1,7 +1,9 @@
 package auth
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -121,6 +123,25 @@ func GenerateVerificationToken() string {
 		panic("crypto/rand unavailable: " + err.Error())
 	}
 	return hex.EncodeToString(bytes)
+}
+
+// AuditReference creates a stable, non-reversible reference for a value that an
+// auth rate-limit needs to correlate (currently email addresses and IPs). Raw
+// identifiers must not be copied into auth_audit: that table is included in
+// backups and survives far longer than an in-memory limiter.
+//
+// The JWT secret is used as the HMAC key with a domain separator. A database or
+// backup compromise alone therefore cannot dictionary-guess low-entropy values
+// such as an email address or IPv4 address. Rotating JWT_SECRET intentionally
+// changes these references (and resets the short auth windows) alongside
+// revoking every session.
+func AuditReference(kind, value string) string {
+	mac := hmac.New(sha256.New, getJWTSecret())
+	_, _ = mac.Write([]byte("onion-spider/auth-audit/v1\x00"))
+	_, _ = mac.Write([]byte(kind))
+	_, _ = mac.Write([]byte{0})
+	_, _ = mac.Write([]byte(value))
+	return "hmac-sha256:v1:" + hex.EncodeToString(mac.Sum(nil))
 }
 
 // ValidateToken parses and validates a JWT, rejecting any algorithm other than HS256.

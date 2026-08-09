@@ -58,7 +58,7 @@ func (d *deps) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	// Rate-limit per recipient address — protects Gmail quota from abuse.
 	// Max 3 register attempts per email per hour.
-	if n, err := d.cfg.DB.CountRecentAuthEvents("register_ok", req.Email, 60); err == nil && n >= 3 {
+	if n, err := d.countRecentAuthEvents("register_ok", req.Email, 60); err == nil && n >= 3 {
 		slog.InfoContext(ctx, "register_blocked", "ip", ip, "email", req.Email, "count", n)
 		WriteJSONError(w, http.StatusTooManyRequests, "This email has already received too many verification emails. Try again in an hour.")
 		return
@@ -84,12 +84,12 @@ func (d *deps) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	if err := d.cfg.DB.CreateUser(req.Email, hash, role, token); err != nil {
 		slog.InfoContext(ctx, "register_fail", "ip", ip, "email", req.Email, "err", err)
-		d.cfg.DB.LogAuthEvent("register_fail", req.Email, ip)
+		d.logAuthEvent("register_fail", req.Email, ip)
 		WriteJSONError(w, http.StatusBadRequest, "Error: email already in use or invalid data")
 		return
 	}
 
-	d.cfg.DB.LogAuthEvent("register_ok", req.Email, ip)
+	d.logAuthEvent("register_ok", req.Email, ip)
 	slog.InfoContext(ctx, "register_ok", "ip", ip, "email", req.Email, "role", role)
 
 	go func() {
@@ -129,10 +129,10 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	// Account lockout: after 5 login_fail in 15min for the same email → 15min
 	// timeout. Protects against distributed brute-force across multiple IPs.
-	if n, err := d.cfg.DB.CountRecentAuthEvents("login_fail", req.Email, 15); err == nil && n >= 5 {
+	if n, err := d.countRecentAuthEvents("login_fail", req.Email, 15); err == nil && n >= 5 {
 		// Run bcrypt anyway to keep timing constant (do not leak lockout state).
 		auth.CheckAgainstDummy(req.Password)
-		d.cfg.DB.LogAuthEvent("login_locked", req.Email, ip)
+		d.logAuthEvent("login_locked", req.Email, ip)
 		slog.InfoContext(ctx, "login_locked", "ip", ip, "email", req.Email, "count", n)
 		WriteJSONError(w, http.StatusTooManyRequests, "Account temporarily locked due to too many failed attempts. Wait 15 minutes.")
 		return
@@ -151,20 +151,20 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// enumerate registered emails.
 	if user == nil {
 		auth.CheckAgainstDummy(req.Password)
-		d.cfg.DB.LogAuthEvent("login_fail", req.Email, ip)
+		d.logAuthEvent("login_fail", req.Email, ip)
 		slog.InfoContext(ctx, "login_fail", "ip", ip, "email", req.Email, "reason", "unknown_user")
 		WriteJSONError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 	if !auth.CheckPasswordHash(req.Password, user.PasswordHash) {
-		d.cfg.DB.LogAuthEvent("login_fail", req.Email, ip)
+		d.logAuthEvent("login_fail", req.Email, ip)
 		slog.InfoContext(ctx, "login_fail", "ip", ip, "email", req.Email, "reason", "bad_password")
 		WriteJSONError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 
 	if !user.IsVerified {
-		d.cfg.DB.LogAuthEvent("login_unverified", req.Email, ip)
+		d.logAuthEvent("login_unverified", req.Email, ip)
 		WriteJSONError(w, http.StatusForbidden, "Account is not yet verified")
 		return
 	}
@@ -175,7 +175,7 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
-	d.cfg.DB.LogAuthEvent("login_ok", req.Email, ip)
+	d.logAuthEvent("login_ok", req.Email, ip)
 	slog.InfoContext(ctx, "login_ok", "ip", ip, "email", user.Email, "role", user.Role)
 
 	// The browser authenticates from here on via the HttpOnly session cookie;
@@ -326,7 +326,7 @@ func (d *deps) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 	// message for invalid ones so the response is indistinguishable.
 	if EmailRegex.MatchString(req.Email) && len(req.Email) <= 254 {
 		// Per-recipient cap: at most 3 reset emails per hour.
-		if n, err := d.cfg.DB.CountRecentAuthEvents("reset_request", req.Email, 60); err == nil && n >= 3 {
+		if n, err := d.countRecentAuthEvents("reset_request", req.Email, 60); err == nil && n >= 3 {
 			slog.InfoContext(ctx, "reset_blocked", "ip", ip, "email", req.Email, "count", n)
 		} else {
 			token := auth.GenerateVerificationToken()
@@ -334,7 +334,7 @@ func (d *deps) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				slog.ErrorContext(ctx, "set_reset_token_failed", "err", err)
 			} else if found {
-				d.cfg.DB.LogAuthEvent("reset_request", req.Email, ip)
+				d.logAuthEvent("reset_request", req.Email, ip)
 				slog.InfoContext(ctx, "reset_request", "ip", ip, "email", req.Email)
 				go func() {
 					if err := email.SendPasswordResetEmail(req.Email, token); err != nil {

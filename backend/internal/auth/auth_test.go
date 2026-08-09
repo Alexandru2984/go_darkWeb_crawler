@@ -2,6 +2,7 @@ package auth
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,6 +147,26 @@ func TestGenerateVerificationToken(t *testing.T) {
 	}
 	if a == b {
 		t.Error("two verification tokens collided — randomness broken")
+	}
+}
+
+func TestAuditReferenceIsStableScopedAndOpaque(t *testing.T) {
+	email := "person@example.com"
+	first := AuditReference("email", email)
+	second := AuditReference("email", email)
+	ipScoped := AuditReference("ip", email)
+
+	if first != second {
+		t.Fatal("same audit subject should produce a stable reference")
+	}
+	if first == ipScoped {
+		t.Fatal("audit reference must be domain-separated by identifier kind")
+	}
+	if strings.Contains(first, email) {
+		t.Fatal("audit reference exposed the raw identifier")
+	}
+	if !strings.HasPrefix(first, "hmac-sha256:v1:") {
+		t.Fatalf("unexpected audit reference format: %q", first)
 	}
 }
 

@@ -33,7 +33,7 @@ func New(cfg Config) http.Handler {
 	r.Use(middleware.RequestID)
 	r.Use(TrustedRealIP)
 	r.Use(MetricsMiddleware)
-	r.Use(SafeLogger("/api/auth/verify"))
+	r.Use(SafeLogger())
 	r.Use(middleware.Recoverer)
 	r.Use(JWTMiddleware)
 	// Must sit after JWTMiddleware: it decides whether to enforce based on

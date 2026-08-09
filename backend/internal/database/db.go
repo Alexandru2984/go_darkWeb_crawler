@@ -846,14 +846,17 @@ func (db *DB) HasAnyAdmin() (bool, error) {
 	return count > 0, err
 }
 
-// LogAuthEvent inserts a record into auth_audit. Does not block the flow if it fails.
-func (db *DB) LogAuthEvent(event, email, ip string) {
+// LogAuthEvent inserts privacy-preserving references into auth_audit. Callers
+// must HMAC raw email/IP identifiers before invoking this method; the legacy
+// column names remain for migration compatibility. The write is best-effort and
+// does not block the auth flow if auditing is temporarily unavailable.
+func (db *DB) LogAuthEvent(event, emailRef, ipRef string) {
 	_, err := db.Conn.Exec(
 		`INSERT INTO auth_audit (event, email, ip) VALUES ($1, $2, $3)`,
-		event, NormalizeEmail(email), ip,
+		event, emailRef, ipRef,
 	)
 	if err != nil {
-		slog.Error("auth_audit_write_failed", "event", event, "email", email, "err", err)
+		slog.Error("auth_audit_write_failed", "event", event, "err", err)
 	}
 }
 
@@ -913,17 +916,17 @@ func (db *DB) ReviveFailedNodes(olderThan time.Duration, limit int) (int64, erro
 	return n, nil
 }
 
-// CountRecentAuthEvents counts events from auth_audit of type `event` for `email`
+// CountRecentAuthEvents counts events for an already-HMACed subject reference.
 // in the last `window` minutes. Used for:
 //   - login lockout after 5 consecutive failures ('login_fail')
 //   - register rate-limit per recipient email ('register_ok')
-func (db *DB) CountRecentAuthEvents(event, email string, windowMinutes int) (int, error) {
+func (db *DB) CountRecentAuthEvents(event, emailRef string, windowMinutes int) (int, error) {
 	var count int
 	err := db.Conn.QueryRow(`
 		SELECT COUNT(*) FROM auth_audit
 		WHERE event = $1 AND email = $2
 		  AND created_at > CURRENT_TIMESTAMP - ($3 || ' minutes')::INTERVAL
-	`, event, NormalizeEmail(email), fmt.Sprintf("%d", windowMinutes)).Scan(&count)
+	`, event, emailRef, fmt.Sprintf("%d", windowMinutes)).Scan(&count)
 	return count, err
 }
 
