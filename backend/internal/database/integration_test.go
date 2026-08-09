@@ -14,6 +14,23 @@ import (
 // overlap on a shared TEST_DATABASE_URL. Keep the two values identical.
 const testDBAdvisoryLock = 0x0170_9105
 
+func lockSharedTestDatabase(t *testing.T, conn *sql.DB) {
+	t.Helper()
+	lockCtx := context.Background()
+	lockConn, err := conn.Conn(lockCtx)
+	if err != nil {
+		t.Fatalf("checkout lock connection: %v", err)
+	}
+	if _, err := lockConn.ExecContext(lockCtx, `SELECT pg_advisory_lock($1)`, testDBAdvisoryLock); err != nil {
+		lockConn.Close()
+		t.Fatalf("acquire test-db advisory lock: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = lockConn.ExecContext(lockCtx, `SELECT pg_advisory_unlock($1)`, testDBAdvisoryLock)
+		lockConn.Close()
+	})
+}
+
 // newTestDB returns a *DB backed by a throwaway Postgres at $TEST_DATABASE_URL,
 // freshly migrated and truncated. Skips when the env var is unset so the
 // default `go test ./...` stays hermetic. CI provides a postgres service.
@@ -38,19 +55,7 @@ func newTestDB(t *testing.T) *DB {
 	// other's fixtures mid-test. The advisory lock makes them take turns. See
 	// the longer note on lockTestDB in internal/api/integration_test.go for why
 	// it is held on a dedicated connection and released explicitly.
-	lockCtx := context.Background()
-	lockConn, err := conn.Conn(lockCtx)
-	if err != nil {
-		t.Fatalf("checkout lock connection: %v", err)
-	}
-	if _, err := lockConn.ExecContext(lockCtx, `SELECT pg_advisory_lock($1)`, testDBAdvisoryLock); err != nil {
-		lockConn.Close()
-		t.Fatalf("acquire test-db advisory lock: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = lockConn.ExecContext(lockCtx, `SELECT pg_advisory_unlock($1)`, testDBAdvisoryLock)
-		lockConn.Close()
-	})
+	lockSharedTestDatabase(t, conn)
 	if _, err := conn.Exec(`TRUNCATE nodes, edges, auth_audit, blacklist, users RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -209,7 +214,7 @@ func TestPasswordReset_Flow(t *testing.T) {
 	db := newTestDB(t)
 	uid := mustUser(t, db, "u@example.com")
 
-	_, v0, found, err := db.GetUserAuthInfo(uid)
+	_, _, v0, found, err := db.GetUserAuthInfo(uid)
 	if err != nil || !found {
 		t.Fatalf("GetUserAuthInfo: found=%v err=%v", found, err)
 	}
@@ -219,13 +224,20 @@ func TestPasswordReset_Flow(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("SetResetToken: ok=%v err=%v", ok, err)
 	}
+	var stored string
+	if err := db.Conn.QueryRow(`SELECT reset_token FROM users WHERE id=$1`, uid).Scan(&stored); err != nil {
+		t.Fatalf("read stored reset credential: %v", err)
+	}
+	if stored == tok || stored != opaqueTokenHash(tok) {
+		t.Fatal("reset credential was not persisted exclusively as its digest")
+	}
 
 	if err := db.ResetPassword(tok, "newhash"); err != nil {
 		t.Fatalf("ResetPassword (valid token): %v", err)
 	}
 
 	// token_version must be bumped (all sessions revoked).
-	_, v1, _, _ := db.GetUserAuthInfo(uid)
+	_, _, v1, _, _ := db.GetUserAuthInfo(uid)
 	if v1 != v0+1 {
 		t.Errorf("token_version not bumped: %d -> %d", v0, v1)
 	}
@@ -242,6 +254,75 @@ func TestPasswordReset_Flow(t *testing.T) {
 	}
 }
 
+func TestEmailVerificationTokenIsStoredHashed(t *testing.T) {
+	db := newTestDB(t)
+	const (
+		emailAddress = "verify@example.com"
+		token        = "verifytoken1234567890abcdef"
+	)
+	if err := db.CreateUser(emailAddress, "hash", "user", token); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	var stored string
+	if err := db.Conn.QueryRow(`SELECT verification_token FROM users WHERE email=$1`, emailAddress).Scan(&stored); err != nil {
+		t.Fatalf("read stored verification credential: %v", err)
+	}
+	if stored == token || stored != opaqueTokenHash(token) {
+		t.Fatal("verification credential was not persisted exclusively as its digest")
+	}
+	if err := db.VerifyUser(token); err != nil {
+		t.Fatalf("VerifyUser with original token: %v", err)
+	}
+	if err := db.VerifyUser(token); err == nil {
+		t.Fatal("single-use verification token was accepted twice")
+	}
+}
+
+func TestOpaqueTokenDataMigration(t *testing.T) {
+	db := newTestDB(t)
+	const (
+		emailAddress = "legacy@example.com"
+		verifyToken  = "legacy-plaintext-verification-token"
+		resetToken   = "legacy-plaintext-reset-token"
+	)
+	if _, err := db.Conn.Exec(`DELETE FROM security_data_migrations WHERE name=$1`, opaqueTokenMigration); err != nil {
+		t.Fatalf("reset data-migration marker: %v", err)
+	}
+	if _, err := db.Conn.Exec(`
+		INSERT INTO users (email, password_hash, verification_token, reset_token, reset_expires_at)
+		VALUES ($1, 'hash', $2, $3, CURRENT_TIMESTAMP + INTERVAL '1 hour')
+	`, emailAddress, verifyToken, resetToken); err != nil {
+		t.Fatalf("insert legacy credentials: %v", err)
+	}
+
+	if err := migrateOpaqueTokens(db.Conn); err != nil {
+		t.Fatalf("migrateOpaqueTokens: %v", err)
+	}
+	var storedVerify, storedReset string
+	if err := db.Conn.QueryRow(`
+		SELECT verification_token, reset_token FROM users WHERE email=$1
+	`, emailAddress).Scan(&storedVerify, &storedReset); err != nil {
+		t.Fatalf("read migrated credentials: %v", err)
+	}
+	if storedVerify != opaqueTokenHash(verifyToken) || storedReset != opaqueTokenHash(resetToken) {
+		t.Fatal("legacy credentials were not replaced with their SHA-256 digests")
+	}
+
+	// The marker makes subsequent startups idempotent; hashing the digest a
+	// second time would invalidate every outstanding link.
+	if err := migrateOpaqueTokens(db.Conn); err != nil {
+		t.Fatalf("second migrateOpaqueTokens: %v", err)
+	}
+	var afterSecondRun string
+	if err := db.Conn.QueryRow(`SELECT verification_token FROM users WHERE email=$1`, emailAddress).Scan(&afterSecondRun); err != nil {
+		t.Fatalf("read credential after second run: %v", err)
+	}
+	if afterSecondRun != storedVerify {
+		t.Fatal("idempotent data migration hashed an existing digest again")
+	}
+}
+
 func TestPasswordReset_Expired(t *testing.T) {
 	db := newTestDB(t)
 	mustUser(t, db, "u@example.com")
@@ -252,7 +333,7 @@ func TestPasswordReset_Expired(t *testing.T) {
 	}
 	// Force the token into the past.
 	if _, err := db.Conn.Exec(
-		`UPDATE users SET reset_expires_at = CURRENT_TIMESTAMP - INTERVAL '1 hour' WHERE reset_token=$1`, tok,
+		`UPDATE users SET reset_expires_at = CURRENT_TIMESTAMP - INTERVAL '1 hour' WHERE reset_token=$1`, opaqueTokenHash(tok),
 	); err != nil {
 		t.Fatalf("expire token: %v", err)
 	}

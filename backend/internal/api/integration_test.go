@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -100,7 +101,7 @@ func mkUser(t *testing.T, db *database.DB, email, role string) (int, string) {
 	if err != nil || u == nil {
 		t.Fatalf("GetUserByEmail(%s): %v", email, err)
 	}
-	tok, err := auth.GenerateToken(u.ID, u.Email, u.Role, u.TokenVersion)
+	tok, err := auth.GenerateToken(u.ID, u.TokenVersion)
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
@@ -191,6 +192,72 @@ func TestAuthz_Unauthenticated(t *testing.T) {
 	h, _ := newAPI(t)
 	if rr := do(t, h, "GET", "/api/nodes", ""); rr.Code != http.StatusUnauthorized {
 		t.Errorf("no token: got %d, want 401", rr.Code)
+	}
+}
+
+func TestLoginCredentialModes(t *testing.T) {
+	h, db := newAPI(t)
+	const (
+		emailAddress = "login@example.com"
+		password     = "Correct-Horse-9!"
+	)
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	if err := db.CreateUser(emailAddress, hash, "user", "verification-token"); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if _, err := db.Conn.Exec(`UPDATE users SET is_verified=TRUE WHERE email=$1`, emailAddress); err != nil {
+		t.Fatalf("verify fixture: %v", err)
+	}
+
+	login := func(body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Forwarded-Proto", "https")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+
+	cookieResponse := login(`{"email":"` + emailAddress + `","password":"` + password + `"}`)
+	if cookieResponse.Code != http.StatusOK {
+		t.Fatalf("default cookie login: got %d, body=%s", cookieResponse.Code, cookieResponse.Body.String())
+	}
+	var cookieBody map[string]string
+	if err := json.Unmarshal(cookieResponse.Body.Bytes(), &cookieBody); err != nil {
+		t.Fatalf("decode cookie login: %v", err)
+	}
+	if _, exposed := cookieBody["token"]; exposed {
+		t.Fatal("default browser login exposed its bearer credential in the JSON body")
+	}
+	if len(cookieResponse.Result().Cookies()) != 2 {
+		t.Fatalf("default browser login set %d cookies, want session and CSRF", len(cookieResponse.Result().Cookies()))
+	}
+
+	bearerResponse := login(`{"email":"` + emailAddress + `","password":"` + password + `","mode":"bearer"}`)
+	if bearerResponse.Code != http.StatusOK {
+		t.Fatalf("bearer login: got %d, body=%s", bearerResponse.Code, bearerResponse.Body.String())
+	}
+	var bearerBody map[string]string
+	if err := json.Unmarshal(bearerResponse.Body.Bytes(), &bearerBody); err != nil {
+		t.Fatalf("decode bearer login: %v", err)
+	}
+	if bearerBody["token"] == "" {
+		t.Fatal("explicit bearer mode did not return a token")
+	}
+	if len(bearerResponse.Result().Cookies()) != 0 {
+		t.Fatal("explicit bearer mode also set ambient session cookies")
+	}
+	if _, err := auth.ValidateToken(bearerBody["token"]); err != nil {
+		t.Fatalf("bearer mode returned an invalid token: %v", err)
+	}
+
+	invalidMode := login(`{"email":"` + emailAddress + `","password":"` + password + `","mode":"both"}`)
+	if invalidMode.Code != http.StatusBadRequest {
+		t.Fatalf("invalid login mode: got %d, want 400", invalidMode.Code)
 	}
 }
 

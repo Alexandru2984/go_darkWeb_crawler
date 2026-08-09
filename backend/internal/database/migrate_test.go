@@ -50,7 +50,7 @@ func TestMigrationsEmbeddedSource(t *testing.T) {
 // What it proves:
 //  1. The initial migration runs cleanly against an empty database.
 //  2. Running runMigrations a second time is a no-op (idempotent).
-//  3. schema_migrations records version 1, dirty=false.
+//  3. schema_migrations records the latest version, dirty=false.
 //  4. The Down migration tears everything back down without errors.
 func TestMigrationsApplyAndIdempotent(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -66,6 +66,10 @@ func TestMigrationsApplyAndIdempotent(t *testing.T) {
 	if err := db.Ping(); err != nil {
 		t.Fatalf("db.Ping: %v", err)
 	}
+	// This test tears the schema down. Hold the same cross-package lock as the
+	// API/database integration fixtures so `go test ./...` cannot destroy a
+	// schema another package is actively using.
+	lockSharedTestDatabase(t, db)
 
 	// First apply — empty DB, should create everything.
 	if err := runMigrations(db); err != nil {
@@ -78,7 +82,7 @@ func TestMigrationsApplyAndIdempotent(t *testing.T) {
 	}
 
 	// schema_migrations should record the latest version, not dirty.
-	const latestVersion = 2
+	const latestVersion = 3
 	var v int
 	var dirty bool
 	if err := db.QueryRow(`SELECT version, dirty FROM schema_migrations`).Scan(&v, &dirty); err != nil {

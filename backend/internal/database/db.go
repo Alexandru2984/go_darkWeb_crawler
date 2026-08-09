@@ -87,12 +87,101 @@ func runMigrations(db *sql.DB) error {
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("apply migrations: %w", err)
 	}
+	if err := migrateOpaqueTokens(db); err != nil {
+		return fmt.Errorf("migrate opaque credentials: %w", err)
+	}
 
 	v, dirty, err := m.Version()
 	if err != nil && !errors.Is(err, migrate.ErrNilVersion) {
 		return fmt.Errorf("read migration version: %w", err)
 	}
 	slog.Info("migrate_complete", "version", v, "dirty", dirty)
+	return nil
+}
+
+const opaqueTokenMigration = "hash-opaque-tokens-v1"
+
+// migrateOpaqueTokens converts verification and password-reset credentials
+// created by older releases from plaintext to SHA-256 digests. A transaction
+// and advisory lock make the data migration crash-safe and serialize startup
+// if multiple application instances are launched at once.
+func migrateOpaqueTokens(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	const migrationLock int64 = 0x4f535049444552 // "OSPIDER"
+	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock($1)`, migrationLock); err != nil {
+		return err
+	}
+
+	var applied bool
+	if err := tx.QueryRow(`
+		SELECT EXISTS (
+			SELECT 1 FROM security_data_migrations WHERE name = $1
+		)
+	`, opaqueTokenMigration).Scan(&applied); err != nil {
+		return err
+	}
+	if applied {
+		return tx.Commit()
+	}
+
+	type legacyTokens struct {
+		id           int
+		verification sql.NullString
+		reset        sql.NullString
+	}
+	rows, err := tx.Query(`
+		SELECT id, verification_token, reset_token
+		FROM users
+		WHERE verification_token IS NOT NULL OR reset_token IS NOT NULL
+		FOR UPDATE
+	`)
+	if err != nil {
+		return err
+	}
+	var users []legacyTokens
+	for rows.Next() {
+		var u legacyTokens
+		if err := rows.Scan(&u.id, &u.verification, &u.reset); err != nil {
+			rows.Close()
+			return err
+		}
+		users = append(users, u)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	for _, u := range users {
+		var verification, reset any
+		if u.verification.Valid {
+			verification = opaqueTokenHash(u.verification.String)
+		}
+		if u.reset.Valid {
+			reset = opaqueTokenHash(u.reset.String)
+		}
+		if _, err := tx.Exec(`
+			UPDATE users SET verification_token = $2, reset_token = $3 WHERE id = $1
+		`, u.id, verification, reset); err != nil {
+			return err
+		}
+	}
+
+	if _, err := tx.Exec(`INSERT INTO security_data_migrations (name) VALUES ($1)`, opaqueTokenMigration); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	slog.Info("opaque_token_migration_complete", "accounts", len(users))
 	return nil
 }
 
@@ -126,6 +215,15 @@ type Edge struct {
 // ContentHash computes sha256(title + "|" + content) for change detection
 func ContentHash(title, content string) string {
 	h := sha256.Sum256([]byte(title + "|" + content))
+	return fmt.Sprintf("%x", h)
+}
+
+// opaqueTokenHash is the only representation of verification/reset tokens that
+// may be persisted. Tokens carry 256 bits of crypto/rand entropy, so SHA-256 is
+// sufficient here: a database or backup compromise cannot recover a usable
+// single-use credential from its digest.
+func opaqueTokenHash(token string) string {
+	h := sha256.Sum256([]byte(token))
 	return fmt.Sprintf("%x", h)
 }
 
@@ -728,14 +826,13 @@ func (db *DB) GetTimelineStats(userID int, isAdmin bool) ([]TimelineStat, error)
 
 // User model
 type User struct {
-	ID                int    `json:"id"`
-	Email             string `json:"email"`
-	PasswordHash      string `json:"-"`
-	Role              string `json:"role"`
-	IsVerified        bool   `json:"is_verified"`
-	VerificationToken string `json:"-"`
-	TokenVersion      int    `json:"-"`
-	CreatedAt         string `json:"created_at"`
+	ID           int    `json:"id"`
+	Email        string `json:"email"`
+	PasswordHash string `json:"-"`
+	Role         string `json:"role"`
+	IsVerified   bool   `json:"is_verified"`
+	TokenVersion int    `json:"-"`
+	CreatedAt    string `json:"created_at"`
 }
 
 // NormalizeEmail returns the email in lowercase and without spaces.
@@ -749,7 +846,7 @@ func (db *DB) CreateUser(email, passwordHash, role, token string) error {
 	_, err := db.Conn.Exec(`
 		INSERT INTO users (email, password_hash, role, verification_token, verification_expires_at)
 		VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP + INTERVAL '24 hours')
-	`, NormalizeEmail(email), passwordHash, role, token)
+	`, NormalizeEmail(email), passwordHash, role, opaqueTokenHash(token))
 	return err
 }
 
@@ -757,9 +854,9 @@ func (db *DB) CreateUser(email, passwordHash, role, token string) error {
 func (db *DB) GetUserByEmail(email string) (*User, error) {
 	var u User
 	err := db.Conn.QueryRow(`
-		SELECT id, email, password_hash, role, is_verified, COALESCE(verification_token, ''), token_version, to_char(created_at, 'YYYY-MM-DD HH24:MI:SS')
+		SELECT id, email, password_hash, role, is_verified, token_version, to_char(created_at, 'YYYY-MM-DD HH24:MI:SS')
 		FROM users WHERE email = $1
-	`, NormalizeEmail(email)).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.IsVerified, &u.VerificationToken, &u.TokenVersion, &u.CreatedAt)
+	`, NormalizeEmail(email)).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.IsVerified, &u.TokenVersion, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -774,7 +871,7 @@ func (db *DB) SetResetToken(email, token string) (bool, error) {
 		UPDATE users
 		SET reset_token = $2, reset_expires_at = CURRENT_TIMESTAMP + INTERVAL '1 hour'
 		WHERE email = $1
-	`, NormalizeEmail(email), token)
+	`, NormalizeEmail(email), opaqueTokenHash(token))
 	if err != nil {
 		return false, err
 	}
@@ -798,7 +895,7 @@ func (db *DB) ResetPassword(token, newHash string) error {
 		WHERE reset_token = $1
 		  AND reset_expires_at IS NOT NULL
 		  AND reset_expires_at > CURRENT_TIMESTAMP
-	`, token, newHash)
+	`, opaqueTokenHash(token), newHash)
 	if err != nil {
 		return err
 	}
@@ -827,7 +924,7 @@ func (db *DB) VerifyUser(token string) error {
 		WHERE verification_token = $1
 		  AND is_verified = FALSE
 		  AND (verification_expires_at IS NULL OR verification_expires_at > CURRENT_TIMESTAMP)
-	`, token)
+	`, opaqueTokenHash(token))
 	if err != nil {
 		return err
 	}
@@ -965,17 +1062,17 @@ func (db *DB) GlobalStatusCounts() (map[string]int, error) {
 	return counts, rows.Err()
 }
 
-// GetUserAuthInfo returns the user's current role and token_version from the DB
+// GetUserAuthInfo returns identity and current authorization state from the DB
 // (bypassing JWT claims), plus whether the user still exists. Used by the auth
 // middleware to (a) invalidate role demotions immediately and (b) reject tokens
 // whose version is stale (revoked via reset/logout-all) or whose user is gone.
-func (db *DB) GetUserAuthInfo(userID int) (role string, tokenVersion int, found bool, err error) {
-	err = db.Conn.QueryRow(`SELECT role, token_version FROM users WHERE id = $1`, userID).Scan(&role, &tokenVersion)
+func (db *DB) GetUserAuthInfo(userID int) (email, role string, tokenVersion int, found bool, err error) {
+	err = db.Conn.QueryRow(`SELECT email, role, token_version FROM users WHERE id = $1`, userID).Scan(&email, &role, &tokenVersion)
 	if err == sql.ErrNoRows {
-		return "", 0, false, nil
+		return "", "", 0, false, nil
 	}
 	if err != nil {
-		return "", 0, false, err
+		return "", "", 0, false, err
 	}
-	return role, tokenVersion, true, nil
+	return email, role, tokenVersion, true, nil
 }

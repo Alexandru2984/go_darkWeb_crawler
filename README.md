@@ -28,9 +28,11 @@ To protect the server and ensure passive browsing:
   algorithm is pinned, so forged `alg=none` tokens are rejected.
 - The browser session lives in an `HttpOnly`, `Secure`, `SameSite=Strict`
   cookie — the dashboard never puts a token in `localStorage`, so an XSS has no
-  long-lived credential to exfiltrate. Cookie-authenticated writes must echo a
-  double-submit CSRF token; `Authorization: Bearer` still works for scripts and
-  is exempt, since a browser cannot attach that header cross-origin.
+  long-lived credential to exfiltrate. Login returns a JWT only when a client
+  explicitly requests bearer mode, which does not set ambient cookies.
+  Cookie-authenticated writes must echo a double-submit CSRF token;
+  `Authorization: Bearer` still works for scripts and is exempt, since a browser
+  cannot attach that header cross-origin.
 - All crawler traffic uses per-destination Tor stream isolation: each onion host
   gets its own SOCKS credential, so Tor builds a separate circuit per site and no
   single relay sees one client reading two unrelated services.

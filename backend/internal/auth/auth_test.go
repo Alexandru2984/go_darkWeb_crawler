@@ -59,7 +59,7 @@ func TestCheckPasswordHash_RejectsOver72Bytes(t *testing.T) {
 }
 
 func TestGenerateAndValidateToken_RoundTrip(t *testing.T) {
-	tok, err := GenerateToken(42, "user@example.com", "admin", 7)
+	tok, err := GenerateToken(42, 7)
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestGenerateAndValidateToken_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValidateToken: %v", err)
 	}
-	if claims.UserID != 42 || claims.Email != "user@example.com" || claims.Role != "admin" {
+	if claims.UserID != 42 || claims.Issuer != tokenIssuer || len(claims.Audience) != 1 || claims.Audience[0] != tokenAudience {
 		t.Errorf("claims not preserved: %+v", claims)
 	}
 	if claims.TokenVersion != 7 {
@@ -80,10 +80,11 @@ func TestGenerateAndValidateToken_RoundTrip(t *testing.T) {
 func TestValidateToken_RejectsAlgNone(t *testing.T) {
 	claims := &Claims{
 		UserID: 1,
-		Email:  "attacker@evil.com",
-		Role:   "admin",
 		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    tokenIssuer,
+			Audience:  jwt.ClaimStrings{tokenAudience},
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodNone, claims)
@@ -96,11 +97,95 @@ func TestValidateToken_RejectsAlgNone(t *testing.T) {
 	}
 }
 
+func TestValidateToken_RejectsDifferentHMACAlgorithm(t *testing.T) {
+	claims := &Claims{
+		UserID: 1,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    tokenIssuer,
+			Audience:  jwt.ClaimStrings{tokenAudience},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+		},
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodHS384, claims)
+	signed, err := tok.SignedString([]byte(testSecret))
+	if err != nil {
+		t.Fatalf("sign HS384: %v", err)
+	}
+	if _, err := ValidateToken(signed); err == nil {
+		t.Fatal("HS384 token was accepted even though only HS256 is permitted")
+	}
+}
+
+func TestValidateToken_RejectsMissingOrInvalidRequiredClaims(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name   string
+		claims *Claims
+	}{
+		{
+			name: "missing issuer",
+			claims: &Claims{UserID: 1, RegisteredClaims: jwt.RegisteredClaims{
+				Audience: jwt.ClaimStrings{tokenAudience}, ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
+				IssuedAt: jwt.NewNumericDate(now), NotBefore: jwt.NewNumericDate(now),
+			}},
+		},
+		{
+			name: "missing audience",
+			claims: &Claims{UserID: 1, RegisteredClaims: jwt.RegisteredClaims{
+				Issuer: tokenIssuer, ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
+				IssuedAt: jwt.NewNumericDate(now), NotBefore: jwt.NewNumericDate(now),
+			}},
+		},
+		{
+			name: "missing issued at",
+			claims: &Claims{UserID: 1, RegisteredClaims: jwt.RegisteredClaims{
+				Issuer: tokenIssuer, Audience: jwt.ClaimStrings{tokenAudience},
+				ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)), NotBefore: jwt.NewNumericDate(now),
+			}},
+		},
+		{
+			name: "non-positive user id",
+			claims: &Claims{RegisteredClaims: jwt.RegisteredClaims{
+				Issuer: tokenIssuer, Audience: jwt.ClaimStrings{tokenAudience},
+				ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)), IssuedAt: jwt.NewNumericDate(now),
+				NotBefore: jwt.NewNumericDate(now),
+			}},
+		},
+		{
+			name: "overlong lifetime",
+			claims: &Claims{UserID: 1, RegisteredClaims: jwt.RegisteredClaims{
+				Issuer: tokenIssuer, Audience: jwt.ClaimStrings{tokenAudience},
+				ExpiresAt: jwt.NewNumericDate(now.Add(TokenTTL + time.Minute)), IssuedAt: jwt.NewNumericDate(now),
+				NotBefore: jwt.NewNumericDate(now),
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tok := jwt.NewWithClaims(jwt.SigningMethodHS256, tt.claims)
+			signed, err := tok.SignedString([]byte(testSecret))
+			if err != nil {
+				t.Fatalf("sign: %v", err)
+			}
+			if _, err := ValidateToken(signed); err == nil {
+				t.Fatal("token with invalid required claims was accepted")
+			}
+		})
+	}
+}
+
 func TestValidateToken_RejectsWrongSecret(t *testing.T) {
 	claims := &Claims{
-		UserID:           1,
-		Role:             "admin",
-		RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour))},
+		UserID: 1,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    tokenIssuer,
+			Audience:  jwt.ClaimStrings{tokenAudience},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := tok.SignedString([]byte("a-totally-different-secret-32chars!!"))
@@ -115,8 +200,9 @@ func TestValidateToken_RejectsWrongSecret(t *testing.T) {
 func TestValidateToken_RejectsExpired(t *testing.T) {
 	claims := &Claims{
 		UserID: 1,
-		Role:   "user",
 		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    tokenIssuer,
+			Audience:  jwt.ClaimStrings{tokenAudience},
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(-time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now().Add(-2 * time.Hour)),
 		},

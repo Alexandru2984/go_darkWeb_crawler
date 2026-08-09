@@ -5,15 +5,17 @@ info:
   description: |
     REST API for the Onion Spider dark-web crawler.
 
-    Authentication is via a JWT obtained from `POST /api/auth/login`, presented
-    one of two ways:
+    Authentication is established by `POST /api/auth/login` in one of two
+    explicit modes:
 
     - **`Authorization: Bearer <token>`** — for scripts and non-browser clients.
-      The token is in the login response body.
-    - **Session cookie** — the same login response also sets `os_session`
+      Send `"mode": "bearer"`; the token is then returned in the response body
+      and no session cookie is set.
+    - **Session cookie (default)** — omit `mode` (or send `"mode": "cookie"`).
+      The response sets `os_session`
       (HttpOnly, Secure, SameSite=Strict), which browsers send automatically.
       This is what the web dashboard uses, so no token is ever stored in
-      JavaScript-reachable storage.
+      JavaScript-reachable response data or storage.
 
     The header wins when both are present.
 
@@ -47,7 +49,8 @@ components:
       in: cookie
       name: os_session
       description: >
-        Set by POST /api/auth/login. HttpOnly, Secure, SameSite=Strict.
+        Set by POST /api/auth/login in the default cookie mode. HttpOnly,
+        Secure, SameSite=Strict.
         Unsafe methods additionally require the X-CSRF-Token header (see the
         API description).
   schemas:
@@ -152,7 +155,7 @@ paths:
 
   /api/auth/login:
     post:
-      summary: Log in and obtain a JWT
+      summary: Log in with a browser session or explicitly obtain a bearer JWT
       requestBody:
         required: true
         content:
@@ -163,6 +166,11 @@ paths:
               properties:
                 email: { type: string }
                 password: { type: string }
+                mode:
+                  type: string
+                  enum: [cookie, bearer]
+                  default: cookie
+                  description: Bearer mode returns a token and does not set session cookies.
       responses:
         '200':
           description: OK
@@ -171,7 +179,9 @@ paths:
               schema:
                 type: object
                 properties:
-                  token: { type: string }
+                  token:
+                    type: string
+                    description: Present only when mode is bearer.
                   role: { type: string }
                   email: { type: string }
         '400': { description: Bad request }

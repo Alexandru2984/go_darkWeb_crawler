@@ -20,7 +20,9 @@ const (
 	// MinSecretLen is the minimum accepted length for JWT_SECRET (32 hex characters = 128 bits of entropy).
 	MinSecretLen = 32
 	// TokenTTL is the lifetime of a JWT issued at login.
-	TokenTTL = 4 * time.Hour
+	TokenTTL      = 4 * time.Hour
+	tokenIssuer   = "onion-spider"
+	tokenAudience = "onion-spider-api"
 )
 
 var (
@@ -71,14 +73,31 @@ func CheckAgainstDummy(password string) {
 }
 
 type Claims struct {
-	UserID int    `json:"user_id"`
-	Email  string `json:"email"`
-	Role   string `json:"role"`
+	UserID int `json:"user_id"`
 	// TokenVersion is compared against the user's current token_version in the
 	// DB on each authenticated request. A mismatch (because the version was
 	// bumped on password reset / logout-all) invalidates the token immediately.
 	TokenVersion int `json:"tv"`
 	jwt.RegisteredClaims
+}
+
+// Validate adds application invariants to the standard JWT checks. Requiring
+// both temporal claims and bounding the issued lifetime prevents malformed or
+// accidentally overlong credentials from becoming accepted sessions.
+func (c Claims) Validate() error {
+	if c.UserID <= 0 {
+		return errors.New("invalid user id")
+	}
+	if c.TokenVersion < 0 {
+		return errors.New("invalid token version")
+	}
+	if c.IssuedAt == nil || c.NotBefore == nil {
+		return errors.New("missing required temporal claims")
+	}
+	if c.ExpiresAt != nil && c.ExpiresAt.Time.Sub(c.IssuedAt.Time) > TokenTTL {
+		return errors.New("token lifetime exceeds maximum")
+	}
+	return nil
 }
 
 // HashPassword hashes the password with bcrypt cost 12 (security/DoS balance).
@@ -99,14 +118,14 @@ func CheckPasswordHash(password, hash string) bool {
 	return err == nil
 }
 
-func GenerateToken(userID int, email, role string, tokenVersion int) (string, error) {
+func GenerateToken(userID, tokenVersion int) (string, error) {
 	now := time.Now()
 	claims := &Claims{
 		UserID:       userID,
-		Email:        email,
-		Role:         role,
 		TokenVersion: tokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    tokenIssuer,
+			Audience:  jwt.ClaimStrings{tokenAudience},
 			ExpiresAt: jwt.NewNumericDate(now.Add(TokenTTL)),
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
@@ -149,11 +168,18 @@ func AuditReference(kind, value string) string {
 func ValidateToken(tokenString string) (*Claims, error) {
 	claims := &Claims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+		if t.Method != jwt.SigningMethodHS256 {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
 		return getJWTSecret(), nil
-	})
+	},
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+		jwt.WithExpirationRequired(),
+		jwt.WithIssuedAt(),
+		jwt.WithIssuer(tokenIssuer),
+		jwt.WithAudience(tokenAudience),
+		jwt.WithLeeway(30*time.Second),
+	)
 	if err != nil {
 		return nil, err
 	}

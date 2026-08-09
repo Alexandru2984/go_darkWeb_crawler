@@ -113,6 +113,7 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
+		Mode     string `json:"mode,omitempty"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1024)
 	dec := json.NewDecoder(r.Body)
@@ -124,6 +125,13 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 	req.Email = database.NormalizeEmail(req.Email)
 	if req.Email == "" || req.Password == "" {
 		WriteJSONError(w, http.StatusBadRequest, "Email and password are required")
+		return
+	}
+	if req.Mode == "" {
+		req.Mode = "cookie"
+	}
+	if req.Mode != "cookie" && req.Mode != "bearer" {
+		WriteJSONError(w, http.StatusBadRequest, "Mode must be 'cookie' or 'bearer'")
 		return
 	}
 
@@ -169,7 +177,7 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := auth.GenerateToken(user.ID, user.Email, user.Role, user.TokenVersion)
+	token, err := auth.GenerateToken(user.ID, user.TokenVersion)
 	if err != nil {
 		slog.ErrorContext(ctx, "jwt_generate_failed", "email", user.Email, "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
@@ -178,17 +186,17 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 	d.logAuthEvent("login_ok", req.Email, ip)
 	slog.InfoContext(ctx, "login_ok", "ip", ip, "email", user.Email, "role", user.Role)
 
-	// The browser authenticates from here on via the HttpOnly session cookie;
-	// the frontend never touches the token. The token stays in the response
-	// body for non-browser clients (scripts, the documented Bearer scheme),
-	// which have nowhere to put a cookie and are not exposed to XSS anyway.
-	setSessionCookies(w, r, token, newCSRFToken())
-
 	w.Header().Set("Content-Type", "application/json")
-	// Responses that vary with credentials must never be cached by a shared
-	// cache — this one carries a bearer token.
-	w.Header().Set("Cache-Control", "no-store")
-	json.NewEncoder(w).Encode(map[string]string{"token": token, "role": user.Role, "email": user.Email})
+	response := map[string]string{"role": user.Role, "email": user.Email}
+	if req.Mode == "bearer" {
+		// Explicit API-client mode returns the credential but deliberately does not
+		// set ambient cookies. The browser uses the default cookie mode, where the
+		// bearer token never enters script-readable response data.
+		response["token"] = token
+	} else {
+		setSessionCookies(w, r, token, newCSRFToken())
+	}
+	json.NewEncoder(w).Encode(response)
 }
 
 // handleMe reports the current session to the frontend. With the token in an
@@ -196,8 +204,7 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 // to come from the server. The role returned here is the live one from the DB
 // (via LoadDBRole), not the possibly-stale value in the token.
 func (d *deps) handleMe(w http.ResponseWriter, r *http.Request) {
-	claims, ok := r.Context().Value(userContextKey).(*auth.Claims)
-	if !ok || claims == nil {
+	if GetUserID(r) == 0 {
 		WriteJSONError(w, http.StatusUnauthorized, "Authentication required")
 		return
 	}
@@ -207,7 +214,7 @@ func (d *deps) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	json.NewEncoder(w).Encode(map[string]string{"email": claims.Email, "role": role})
+	json.NewEncoder(w).Encode(map[string]string{"email": GetDBEmail(r), "role": role})
 }
 
 // handleLogout clears this browser's session. It does not bump token_version —

@@ -124,8 +124,8 @@ const handleAuth = async () => {
 
     if (res.ok) {
       if (authMode.value === 'login') {
-        // The response still carries a token for non-browser clients; this page
-        // ignores it and relies on the cookies the same response set.
+        // Browser login uses the default cookie mode, so no bearer credential
+        // ever enters script-readable response data.
         userRole.value = data.role
         userEmail.value = data.email
         authPassword.value = ''

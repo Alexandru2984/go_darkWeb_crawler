@@ -15,6 +15,7 @@ type contextKey string
 const (
 	userContextKey       contextKey = "user"
 	dbRoleContextKey     contextKey = "db_role"
+	dbEmailContextKey    contextKey = "db_email"
 	authSourceContextKey contextKey = "auth_source"
 )
 
@@ -99,7 +100,7 @@ func LoadDBRole(db *database.DB) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			role, tokenVersion, found, err := db.GetUserAuthInfo(uid)
+			email, role, tokenVersion, found, err := db.GetUserAuthInfo(uid)
 			if err != nil {
 				slog.ErrorContext(r.Context(), "load_db_role_failed", "uid", uid, "err", err)
 				WriteJSONError(w, http.StatusInternalServerError, "Internal error")
@@ -114,6 +115,7 @@ func LoadDBRole(db *database.DB) func(http.Handler) http.Handler {
 				return
 			}
 			ctx := context.WithValue(r.Context(), dbRoleContextKey, role)
+			ctx = context.WithValue(ctx, dbEmailContextKey, email)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -150,4 +152,11 @@ func GetUserID(r *http.Request) int {
 func IsAdmin(r *http.Request) bool {
 	role, ok := r.Context().Value(dbRoleContextKey).(string)
 	return ok && role == "admin"
+}
+
+// GetDBEmail returns the live account email loaded alongside authorization
+// state. Email is intentionally absent from the portable JWT credential.
+func GetDBEmail(r *http.Request) string {
+	email, _ := r.Context().Value(dbEmailContextKey).(string)
+	return email
 }

@@ -83,6 +83,25 @@ func TestContentHash(t *testing.T) {
 	})
 }
 
+func TestOpaqueTokenHashIsStableAndOneWay(t *testing.T) {
+	const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	first := opaqueTokenHash(token)
+	second := opaqueTokenHash(token)
+	if first != second {
+		t.Fatal("the same opaque token must produce the same lookup digest")
+	}
+	if first == token || strings.Contains(first, token) {
+		t.Fatal("the stored token digest exposed the original credential")
+	}
+	if len(first) != 64 {
+		t.Fatalf("SHA-256 digest length = %d, want 64 hexadecimal characters", len(first))
+	}
+	if first == opaqueTokenHash(token+"x") {
+		t.Fatal("different opaque tokens produced the same digest")
+	}
+}
+
 func TestNodeDetailContainsAllFields(t *testing.T) {
 	nd := NodeDetail{
 		Node: Node{
