@@ -58,7 +58,7 @@ Trust boundaries:
 
 | Class | Examples | Sensitivity | Current protection |
 |---|---|---:|---|
-| Authentication | password hashes, JWT signing key, session JWTs, reset/verification credentials | Critical | bcrypt cost 12; HS256 pinned; short-lived JWT; opaque tokens hashed; secrets mode 0600 |
+| Authentication | password hashes, JWT signing key, session JWTs, reset/verification credentials | Critical | Argon2id t=3/64 MiB/p=4 with transparent upgrade from bcrypt; HS256 pinned; short-lived JWT; opaque tokens hashed; secrets mode 0600 |
 | Identity | account email and role | High | tenant-scoped DB access; removed from JWT; email/IP pseudonymized in audit events |
 | User intent | submitted onion URLs, paths, query strings, searches, graph edges | Critical | authenticated access; no application/nginx request-value logging after current fixes; `no-store` |
 | Crawled material | titles, page text, metadata, extracted emails/keys/crypto addresses | High | DB access control and export limits; not yet encrypted at application layer or automatically expired |
@@ -80,7 +80,7 @@ browsing intent.
 
 | ID | STRIDE | Threat / abuse case | Likelihood | Impact | Implemented controls | Residual work |
 |---|---|---|---:|---:|---|---|
-| S1 | Spoofing | Credential stuffing or password reuse takes over an account | M | H | bcrypt, constant-time unknown-user path, lockout, per-source limits, verified email | Passkeys/TOTP, breached-password screening, session inventory and anomaly alerting |
+| S1 | Spoofing | Credential stuffing or password reuse takes over an account | M | H | Argon2id (memory-hard, so GPU cracking of a stolen hash is far costlier than bcrypt), constant-time unknown-user path, lockout, per-source limits, verified email | Passkeys/TOTP, breached-password screening, session inventory and anomaly alerting |
 | S2 | Spoofing | Forged or confused JWT (`none`, another HMAC algorithm, wrong issuer/audience, overlong token) | L | H | exact HS256, required `iss/aud/exp/iat/nbf`, max lifetime, DB token version, tests | Planned signing-key rotation procedure and per-session revocation |
 | S3 | Spoofing | Fake `CF-Connecting-IP` or direct-origin request bypasses WAF/rate limits | M | H | trusted CIDRs only; clearnet vhost returns 444 outside Cloudflare ranges | Deploy repo nginx config; enable authenticated origin pulls or mTLS; alert on rejected origin attempts |
 | T1 | Tampering | Malicious onion HTML, XML or compression input exploits parsers | M | H | no JS execution, MIME gate, decompressed read limits, content truncation, parser dependency scanning, hardened systemd | Fuzz targets, worker process isolation, seccomp/AppArmor profile, parser CPU/memory budgets |

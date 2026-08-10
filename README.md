@@ -39,7 +39,11 @@ To protect the server and ensure passive browsing:
 - Authorization reads the role from the database on every request, not from the
   JWT claims — a demoted admin loses access immediately instead of waiting for
   the token to expire.
-- Passwords hashed with bcrypt (cost 12). Login runs a constant-time comparison
+- Passwords hashed with Argon2id (t=3, 64 MiB, p=4, RFC 9106's second
+  recommended configuration), stored as PHC strings that carry their own
+  parameters. Accounts predating the migration keep their bcrypt hash and are
+  upgraded in place on their next successful login, without a reset email and
+  without signing their other sessions out. Login runs a constant-time comparison
   (and a dummy hash for unknown emails) to prevent account enumeration via timing.
 - Account lockout after repeated failed logins, plus per-recipient rate limiting
   — all auth events are written to an audit log. Authenticated requests are

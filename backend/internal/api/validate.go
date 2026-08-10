@@ -27,12 +27,18 @@ func NormalizeOnionURL(rawURL string) string {
 	return onion.NormalizeURL(rawURL)
 }
 
-// ValidatePassword enforces 10..72 chars (72 = bcrypt limit) and at least 3
-// of {lowercase, uppercase, digit, symbol}. Blocks trivial passwords like
+// MaxPasswordChars is the accepted upper bound. The old limit of 72 came from
+// bcrypt, which truncates there; Argon2id does not, so passphrases — the thing
+// users are told to prefer — are no longer silently cut short. The bound that
+// remains exists to keep hashing work bounded, not because of the algorithm.
+const MaxPasswordChars = 256
+
+// ValidatePassword enforces 10..MaxPasswordChars characters and at least 3 of
+// {lowercase, uppercase, digit, symbol}. Blocks trivial passwords like
 // "passwordaa" or "aaaaaaaaaa".
 func ValidatePassword(p string) error {
-	if len(p) < 10 || len(p) > 72 {
-		return errors.New("password must be between 10 and 72 characters")
+	if len(p) < 10 || len(p) > MaxPasswordChars {
+		return errors.New("password must be between 10 and 256 characters")
 	}
 	var hasLower, hasUpper, hasDigit, hasSymbol bool
 	for _, r := range p {

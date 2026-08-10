@@ -134,7 +134,8 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Account lockout: after 5 login_fail in 15min for the same email → 15min
 	// timeout. Protects against distributed brute-force across multiple IPs.
 	if n, err := d.countRecentAuthEvents("login_fail", req.Email, 15); err == nil && n >= 5 {
-		// Run bcrypt anyway to keep timing constant (do not leak lockout state).
+		// Verify against the dummy anyway to keep timing constant (do not leak
+		// lockout state).
 		auth.CheckAgainstDummy(req.Password)
 		d.logAuthEvent("login_locked", req.Email, ip)
 		slog.InfoContext(ctx, "login_locked", "ip", ip, "email", req.Email, "count", n)
@@ -145,14 +146,14 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 	user, err := d.cfg.DB.GetUserByEmail(req.Email)
 	if err != nil {
 		slog.ErrorContext(ctx, "get_user_by_email_failed", "err", err)
-		// Run bcrypt to keep timing constant even on DB error.
+		// Verify against the dummy to keep timing constant even on DB error.
 		auth.CheckAgainstDummy(req.Password)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
-	// TIMING ATTACK MITIGATION: even on missing user, run bcrypt against a
-	// dummy hash. Without this, the ~600ms time difference would let an attacker
-	// enumerate registered emails.
+	// TIMING ATTACK MITIGATION: even on a missing user, run a full password
+	// verification against a dummy hash. Without it the hundreds of milliseconds
+	// a real check costs would let an attacker enumerate registered emails.
 	if user == nil {
 		auth.CheckAgainstDummy(req.Password)
 		d.logAuthEvent("login_fail", req.Email, ip)
@@ -171,6 +172,22 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 		d.logAuthEvent("login_unverified", req.Email, ip)
 		WriteJSONError(w, http.StatusForbidden, "Account is not yet verified")
 		return
+	}
+
+	// The password was just proved correct, which is the only moment the
+	// plaintext is available to re-hash. Accounts predating the Argon2id
+	// migration upgrade here, one login at a time, with no reset email and no
+	// forced sign-out. A failure is logged and ignored: the user authenticated
+	// successfully and refusing the session over a storage detail would be a
+	// worse outcome than keeping the old hash a while longer.
+	if auth.NeedsRehash(user.PasswordHash) {
+		if newHash, err := auth.HashPassword(req.Password); err != nil {
+			slog.ErrorContext(ctx, "password_rehash_failed", "uid", user.ID, "err", err)
+		} else if err := d.cfg.DB.UpgradePasswordHash(user.ID, user.PasswordHash, newHash); err != nil {
+			slog.ErrorContext(ctx, "password_rehash_store_failed", "uid", user.ID, "err", err)
+		} else {
+			slog.InfoContext(ctx, "password_hash_upgraded", "uid", user.ID)
+		}
 	}
 
 	token, err := auth.GenerateToken(user.ID, user.TokenVersion)

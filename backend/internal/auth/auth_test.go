@@ -36,25 +36,31 @@ func TestHashAndCheckPassword(t *testing.T) {
 	}
 }
 
-func TestHashPassword_RejectsOver72Bytes(t *testing.T) {
-	// bcrypt silently truncates at 72 bytes; we reject to stay predictable.
+func TestHashPassword_AcceptsPassphrasesPastBcryptsLimit(t *testing.T) {
+	// The old 73-byte rejection existed because bcrypt truncates at 72. Argon2id
+	// does not, so a passphrase is now hashed in full rather than refused; the
+	// remaining bound is MaxPasswordLen and exists only to keep work finite.
 	long := make([]byte, 73)
 	for i := range long {
 		long[i] = 'a'
 	}
-	if _, err := HashPassword(string(long)); err == nil {
-		t.Error("expected error for password > 72 bytes")
+	hash, err := HashPassword(string(long))
+	if err != nil {
+		t.Fatalf("a 73-byte passphrase should hash: %v", err)
+	}
+	if !CheckPasswordHash(string(long), hash) {
+		t.Error("a 73-byte passphrase should verify against its own hash")
 	}
 }
 
-func TestCheckPasswordHash_RejectsOver72Bytes(t *testing.T) {
+func TestCheckPasswordHash_RejectsWrongLongPassword(t *testing.T) {
 	hash, _ := HashPassword("Valid-Pass-12!")
 	long := make([]byte, 100)
 	for i := range long {
 		long[i] = 'b'
 	}
 	if CheckPasswordHash(string(long), hash) {
-		t.Error("over-length password must not match")
+		t.Error("a different long password must not match")
 	}
 }
 

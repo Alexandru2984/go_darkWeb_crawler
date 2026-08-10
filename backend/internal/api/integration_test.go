@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"onion-spider/internal/auth"
 	"onion-spider/internal/crawler"
 	"onion-spider/internal/database"
@@ -299,5 +301,66 @@ func TestAuthz_RevokedTokenRejected(t *testing.T) {
 	}
 	if rr := do(t, h, "GET", "/api/nodes", tok); rr.Code != http.StatusUnauthorized {
 		t.Errorf("revoked token: got %d, want 401", rr.Code)
+	}
+}
+
+// TestLoginUpgradesLegacyBcryptHash proves the migration path: a user whose
+// password predates Argon2id logs in normally, has their stored hash rewritten
+// in place, and keeps the session they just obtained.
+func TestLoginUpgradesLegacyBcryptHash(t *testing.T) {
+	h, db := newAPI(t)
+	const (
+		emailAddress = "legacy@example.com"
+		password     = "Correct-Horse-9!"
+	)
+	legacy, err := bcrypt.GenerateFromPassword([]byte(password), 10)
+	if err != nil {
+		t.Fatalf("bcrypt fixture: %v", err)
+	}
+	if err := db.CreateUser(emailAddress, string(legacy), "user", "verification-token"); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if _, err := db.Conn.Exec(`UPDATE users SET is_verified=TRUE WHERE email=$1`, emailAddress); err != nil {
+		t.Fatalf("verify fixture: %v", err)
+	}
+	before, err := db.GetUserByEmail(emailAddress)
+	if err != nil || before == nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	tokenVersionBefore := before.TokenVersion
+
+	login := func() *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/login",
+			strings.NewReader(`{"email":"`+emailAddress+`","password":"`+password+`"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Forwarded-Proto", "https")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+
+	if rr := login(); rr.Code != http.StatusOK {
+		t.Fatalf("legacy login: got %d, body=%s", rr.Code, rr.Body.String())
+	}
+
+	after, err := db.GetUserByEmail(emailAddress)
+	if err != nil || after == nil {
+		t.Fatalf("re-read user: %v", err)
+	}
+	if !strings.HasPrefix(after.PasswordHash, "$argon2id$") {
+		t.Fatalf("hash was not upgraded, still %.10q", after.PasswordHash)
+	}
+	if auth.NeedsRehash(after.PasswordHash) {
+		t.Fatal("upgraded hash still reports as needing a rehash")
+	}
+	// Re-hashing is not a credential change: other sessions must survive it.
+	if after.TokenVersion != tokenVersionBefore {
+		t.Fatalf("token_version moved from %d to %d — the upgrade signed other sessions out",
+			tokenVersionBefore, after.TokenVersion)
+	}
+	// The password itself is unchanged, so it must still work against the new hash.
+	if rr := login(); rr.Code != http.StatusOK {
+		t.Fatalf("login after upgrade: got %d, body=%s", rr.Code, rr.Body.String())
 	}
 }

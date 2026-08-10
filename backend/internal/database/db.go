@@ -1115,6 +1115,22 @@ func (db *DB) BumpTokenVersion(userID int) error {
 	return err
 }
 
+// UpgradePasswordHash replaces a stored hash with a stronger one after the user
+// has already proved the password. It deliberately leaves token_version alone:
+// the credential did not change, only its storage, so re-hashing must not sign
+// the user out of their other sessions.
+//
+// The guard on the previous hash makes the write idempotent under concurrent
+// logins — two sessions racing to upgrade the same account cannot produce a
+// lost update, and the loser simply finds nothing to change.
+func (db *DB) UpgradePasswordHash(userID int, oldHash, newHash string) error {
+	_, err := db.Conn.Exec(
+		`UPDATE users SET password_hash = $1 WHERE id = $2 AND password_hash = $3`,
+		newHash, userID, oldHash,
+	)
+	return err
+}
+
 // VerifyUser sets the user as verified, only if the token has not expired.
 func (db *DB) VerifyUser(token string) error {
 	if len(token) < 16 {
