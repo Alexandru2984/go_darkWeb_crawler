@@ -166,3 +166,46 @@ func TestAnonLimiterStillSeparatesClearnetAddresses(t *testing.T) {
 		t.Fatal("a different clearnet address should have its own budget")
 	}
 }
+
+func TestAllowNIsAllOrNothing(t *testing.T) {
+	// A batch that does not fit must consume nothing. Charging partially would
+	// leave the caller rejected *and* poorer, and would let a rejected batch
+	// still starve the caller's own later single requests.
+	lim := NewCrawlLimiter(10, time.Minute)
+	if !lim.AllowN("user:1", 8) {
+		t.Fatal("batch of 8 should fit in a budget of 10")
+	}
+	if lim.AllowN("user:1", 5) {
+		t.Fatal("batch of 5 should not fit in the remaining 2")
+	}
+	if !lim.AllowN("user:1", 2) {
+		t.Fatal("rejected batch consumed budget: 2 should still fit")
+	}
+}
+
+func TestAllowNRejectsBatchesLargerThanTheWholeBudget(t *testing.T) {
+	lim := NewCrawlLimiter(10, time.Minute)
+	if lim.AllowN("user:1", 11) {
+		t.Fatal("a batch larger than the entire window budget should be rejected")
+	}
+	if !lim.AllowN("user:1", 10) {
+		t.Fatal("the rejected oversized batch should not have reserved anything")
+	}
+}
+
+func TestBulkSubmissionCannotOutrunTheSingleURLLimit(t *testing.T) {
+	// The regression: bulk used to cost one unit regardless of size, so twenty
+	// requests of twenty URLs bought 400 enqueues against a limit of 20.
+	const perMinute = 20
+	lim := NewCrawlLimiter(perMinute, time.Minute)
+
+	enqueued := 0
+	for i := 0; i < 20; i++ {
+		if lim.AllowN("user:7", 20) {
+			enqueued += 20
+		}
+	}
+	if enqueued > perMinute {
+		t.Fatalf("bulk submissions enqueued %d URLs against a limit of %d", enqueued, perMinute)
+	}
+}

@@ -71,6 +71,14 @@ func main() {
 
 	engine := crawler.NewEngine(dbConn, torProxy, workers, maxDepth)
 
+	// Back-pressure on submissions. Without it one account can queue faster
+	// than the workers drain, and the queue is shared storage: the cost lands
+	// on every other tenant as unbounded table growth and crawl latency.
+	engine.MaxPendingPerUser = 500
+	if q, err := strconv.Atoi(os.Getenv("MAX_PENDING_PER_USER")); err == nil && q >= 0 {
+		engine.MaxPendingPerUser = q
+	}
+
 	torCtrlAddr := os.Getenv("TOR_CONTROL_ADDR")
 	if torCtrlAddr == "" {
 		torCtrlAddr = "127.0.0.1:9051"

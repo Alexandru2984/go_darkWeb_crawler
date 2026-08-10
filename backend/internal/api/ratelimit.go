@@ -50,11 +50,28 @@ func NewCrawlLimiter(limit int, window time.Duration) *CrawlLimiter {
 // Allow records a request against `key` and returns true if it is within the
 // limit. The key is an identity, not necessarily an address — see RequestKey.
 func (l *CrawlLimiter) Allow(key string) bool {
+	return l.AllowN(key, 1)
+}
+
+// AllowN charges `n` units to `key` and reports whether they all fit inside the
+// current window. It is all-or-nothing: a batch that does not fit consumes
+// nothing, so a rejected caller is not left having partly spent its budget.
+//
+// Endpoints that do more work per request must charge for it. A bulk submission
+// that costs one unit while enqueueing twenty URLs prices twenty units of work
+// at one, which is exactly the discount an abuser optimizes for.
+func (l *CrawlLimiter) AllowN(key string, n int) bool {
+	if n <= 0 {
+		return true
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
 	b, ok := l.buckets[key]
 	if !ok || now.After(b.resetAt) {
+		if n > l.limit {
+			return false
+		}
 		if !ok && len(l.buckets) >= l.maxBuckets {
 			for k, v := range l.buckets {
 				if now.After(v.resetAt) {
@@ -65,13 +82,13 @@ func (l *CrawlLimiter) Allow(key string) bool {
 				return false
 			}
 		}
-		l.buckets[key] = &limitBucket{count: 1, resetAt: now.Add(l.window)}
+		l.buckets[key] = &limitBucket{count: n, resetAt: now.Add(l.window)}
 		return true
 	}
-	if b.count >= l.limit {
+	if b.count+n > l.limit {
 		return false
 	}
-	b.count++
+	b.count += n
 	return true
 }
 

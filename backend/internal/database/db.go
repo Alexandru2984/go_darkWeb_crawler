@@ -38,6 +38,12 @@ var ErrInvalidOnionURL = errors.New("invalid onion URL")
 // from a database outage without exposing constraint or account details.
 var ErrEmailInUse = errors.New("email already in use")
 
+// ErrQueueQuotaExceeded is returned by EnqueueURL when the account already has
+// its full allowance of URLs waiting to be crawled. It is a back-pressure
+// signal, not a failure: the caller should tell the user to wait for the queue
+// to drain rather than retry.
+var ErrQueueQuotaExceeded = errors.New("crawl queue quota exceeded")
+
 type DB struct {
 	Conn *sql.DB
 }
@@ -314,7 +320,15 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 
 // EnqueueURL adds a URL to the crawling queue without overwriting existing data.
 // Returns ErrBlacklisted if the domain is on the blacklist.
-func (db *DB) EnqueueURL(rawURL string, depth int, userID int) error {
+//
+// maxPending caps how much unprocessed work one account may have waiting at
+// once; zero or less disables the cap. The count is taken inside the same
+// transaction as the insert, and behind the same per-domain advisory lock, so
+// concurrent submissions cannot each observe room that only one of them has.
+// Only user-submitted URLs pass through here — links discovered mid-crawl are
+// inserted by SaveEdge and are bounded by MaxDepth instead, so raising this cap
+// does not change how deep an individual crawl goes.
+func (db *DB) EnqueueURL(rawURL string, depth int, userID int, maxPending int) error {
 	canonical, host, err := canonicalCrawlURL(rawURL)
 	if err != nil {
 		return err
@@ -334,6 +348,18 @@ func (db *DB) EnqueueURL(rawURL string, depth int, userID int) error {
 	if blocked {
 		return ErrBlacklisted
 	}
+	if maxPending > 0 {
+		var pending int
+		if err := tx.QueryRow(
+			`SELECT COUNT(*) FROM nodes WHERE user_id = $1 AND processing_status = 'pending'`,
+			userID,
+		).Scan(&pending); err != nil {
+			return fmt.Errorf("count pending: %w", err)
+		}
+		if pending >= maxPending {
+			return ErrQueueQuotaExceeded
+		}
+	}
 	_, err = tx.Exec(
 		`INSERT INTO nodes (url, host, processing_status, depth, user_id) VALUES ($1, $2, 'pending', $3, $4) ON CONFLICT (url, user_id) DO NOTHING`,
 		canonical, host, depth, userID,
@@ -342,6 +368,16 @@ func (db *DB) EnqueueURL(rawURL string, depth int, userID int) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// CountPendingNodes reports how many URLs an account has waiting to be crawled.
+func (db *DB) CountPendingNodes(userID int) (int, error) {
+	var n int
+	err := db.Conn.QueryRow(
+		`SELECT COUNT(*) FROM nodes WHERE user_id = $1 AND processing_status = 'pending'`,
+		userID,
+	).Scan(&n)
+	return n, err
 }
 
 // SearchNodes performs a Full-Text search on title and content using the GIN index.

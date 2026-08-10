@@ -52,6 +52,7 @@ services:
       TOR_PROXY: "tor:9050"
       WORKERS: "${WORKERS:-3}"
       MAX_DEPTH: "${MAX_DEPTH:-2}"
+      MAX_PENDING_PER_USER: "${MAX_PENDING_PER_USER:-500}"
       JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is required (>=32 chars, openssl rand -hex 32)}"
       CORS_ORIGIN: "${CORS_ORIGIN:-http://localhost:8080}"
       VERIFY_URL_BASE: "${VERIFY_URL_BASE:-http://localhost:8080}"

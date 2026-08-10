@@ -15,15 +15,19 @@ import (
 )
 
 type Engine struct {
-	DB               *database.DB
-	Proxy            string
-	Workers          int
-	MaxDepth         int
-	TorCtrl          *proxy.TorController // nil if Tor control is not configured
-	domainLastAccess map[string]time.Time
-	domainMu         sync.Mutex
-	wg               sync.WaitGroup
-	cancel           context.CancelFunc
+	DB       *database.DB
+	Proxy    string
+	Workers  int
+	MaxDepth int
+	// MaxPendingPerUser caps how many URLs one account may have queued and not
+	// yet crawled. It applies only to URLs a user submits directly; links found
+	// mid-crawl are bounded by MaxDepth. Zero disables the cap.
+	MaxPendingPerUser int
+	TorCtrl           *proxy.TorController // nil if Tor control is not configured
+	domainLastAccess  map[string]time.Time
+	domainMu          sync.Mutex
+	wg                sync.WaitGroup
+	cancel            context.CancelFunc
 	// globalErrorCount counts consecutive network errors across all workers.
 	// When it exceeds the threshold, a Tor circuit renewal is requested.
 	globalErrorCount atomic.Int32
@@ -325,5 +329,5 @@ func (e *Engine) onNetworkError() {
 
 // AddToQueue manually adds a URL to the queue without overwriting existing data
 func (e *Engine) AddToQueue(rawURL string, userID int) error {
-	return e.DB.EnqueueURL(rawURL, 0, userID)
+	return e.DB.EnqueueURL(rawURL, 0, userID, e.MaxPendingPerUser)
 }

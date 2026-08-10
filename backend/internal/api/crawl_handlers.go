@@ -37,6 +37,10 @@ func (d *deps) handleCrawl(w http.ResponseWriter, r *http.Request) {
 			WriteJSONError(w, http.StatusForbidden, "Domain blocked")
 			return
 		}
+		if errors.Is(err, database.ErrQueueQuotaExceeded) {
+			WriteJSONError(w, http.StatusTooManyRequests, "Crawl queue is full for this account. Wait for pending URLs to be crawled.")
+			return
+		}
 		slog.ErrorContext(ctx, "crawl_enqueue_failed", "user", GetUserID(r), "url", req.URL, "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
@@ -109,7 +113,15 @@ func (d *deps) handleCrawlBulk(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusBadRequest, "Send 1-20 URLs in the 'urls' field")
 		return
 	}
+	// Charge the batch for every URL it carries. Charging it as a single
+	// request let one caller submit twenty URLs for the price of one, turning
+	// the twenty-per-minute limit into four hundred.
+	if !IsAdmin(r) && !d.crawlLim.AllowN(RequestKey(r), len(req.URLs)) {
+		WriteJSONError(w, http.StatusTooManyRequests, "Too many URLs submitted. Please try again in a few minutes.")
+		return
+	}
 	var added, skipped int
+	var quotaHit bool
 	for _, u := range req.URLs {
 		u = NormalizeOnionURL(u)
 		if !IsValidOnionURL(u) {
@@ -117,13 +129,29 @@ func (d *deps) handleCrawlBulk(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		slog.InfoContext(ctx, "crawl_bulk_item", "ip", ip, "user", GetUserID(r), "url", u)
-		if err := d.cfg.Engine.AddToQueue(u, GetUserID(r)); err != nil {
+		err := d.cfg.Engine.AddToQueue(u, GetUserID(r))
+		if errors.Is(err, database.ErrQueueQuotaExceeded) {
+			// The rest of the batch cannot fit either; stop rather than
+			// reporting a pile of identical failures as "skipped".
+			quotaHit = true
+			skipped += len(req.URLs) - added - skipped
+			break
+		}
+		if err != nil {
 			skipped++
 		} else {
 			added++
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
+	if quotaHit {
+		w.WriteHeader(http.StatusTooManyRequests)
+		json.NewEncoder(w).Encode(map[string]any{
+			"added": added, "skipped": skipped,
+			"error": "Crawl queue is full for this account. Wait for pending URLs to be crawled.",
+		})
+		return
+	}
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]int{"added": added, "skipped": skipped})
 }

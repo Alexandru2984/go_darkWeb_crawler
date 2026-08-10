@@ -424,6 +424,20 @@ paths:
                 properties: { added: { type: integer }, skipped: { type: integer } }
         '400': { description: Invalid body }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '429':
+          description: >-
+            Rate limit exceeded, or the account's crawl queue is full. The batch
+            is charged one unit per URL it carries, so a full batch costs the
+            same as twenty single submissions. A partially applied batch reports
+            how many URLs were accepted before the quota was reached.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  added: { type: integer }
+                  skipped: { type: integer }
+                  error: { type: string }
 
   /api/queue:
     get:

@@ -106,11 +106,11 @@ func TestGetNextPendingNode_FairAcrossUsers(t *testing.T) {
 
 	for i := 0; i < 4; i++ {
 		url := testURLA + string(rune('a'+i))
-		if err := db.EnqueueURL(url, 0, a); err != nil {
+		if err := db.EnqueueURL(url, 0, a, 0); err != nil {
 			t.Fatalf("enqueue A: %v", err)
 		}
 	}
-	if err := db.EnqueueURL(testURLB, 0, b); err != nil {
+	if err := db.EnqueueURL(testURLB, 0, b, 0); err != nil {
 		t.Fatalf("enqueue B: %v", err)
 	}
 
@@ -157,10 +157,10 @@ func TestGetNextPendingNode_PerTenantClaim(t *testing.T) {
 	b := mustUser(t, db, "b@example.com")
 
 	const shared = testURLC
-	if err := db.EnqueueURL(shared, 0, a); err != nil {
+	if err := db.EnqueueURL(shared, 0, a, 0); err != nil {
 		t.Fatalf("enqueue A: %v", err)
 	}
-	if err := db.EnqueueURL(shared, 0, b); err != nil {
+	if err := db.EnqueueURL(shared, 0, b, 0); err != nil {
 		t.Fatalf("enqueue B: %v", err)
 	}
 
@@ -194,7 +194,7 @@ func TestRootURLWithoutSlashDoesNotDuplicateAfterSave(t *testing.T) {
 	db := newTestDB(t)
 	uid := mustUser(t, db, "root-form@example.com")
 	rootWithoutSlash := strings.TrimSuffix(testURLA, "/")
-	if err := db.EnqueueURL(rootWithoutSlash, 0, uid); err != nil {
+	if err := db.EnqueueURL(rootWithoutSlash, 0, uid, 0); err != nil {
 		t.Fatalf("EnqueueURL: %v", err)
 	}
 	claimed, _, claimedUID, err := db.GetNextPendingNode()
@@ -218,10 +218,10 @@ func TestGetStats_AdminSeesAllPendingNodes(t *testing.T) {
 	admin := mustUser(t, db, "admin@example.com")
 	user := mustUser(t, db, "user@example.com")
 
-	if err := db.EnqueueURL(testURLA, 0, admin); err != nil {
+	if err := db.EnqueueURL(testURLA, 0, admin, 0); err != nil {
 		t.Fatalf("enqueue admin: %v", err)
 	}
-	if err := db.EnqueueURL(testURLB, 0, user); err != nil {
+	if err := db.EnqueueURL(testURLB, 0, user, 0); err != nil {
 		t.Fatalf("enqueue user: %v", err)
 	}
 
@@ -307,10 +307,10 @@ func TestOnionValidationAndDomainWideBlacklist(t *testing.T) {
 	uid := mustUser(t, db, "queue@example.com")
 
 	badChecksum := "http://ag6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion/"
-	if err := db.EnqueueURL(badChecksum, 0, uid); !errors.Is(err, ErrInvalidOnionURL) {
+	if err := db.EnqueueURL(badChecksum, 0, uid, 0); !errors.Is(err, ErrInvalidOnionURL) {
 		t.Fatalf("bad checksum enqueue error = %v, want ErrInvalidOnionURL", err)
 	}
-	if err := db.EnqueueURL("http://user:secret@"+strings.TrimPrefix(testURLA, "http://"), 0, uid); !errors.Is(err, ErrInvalidOnionURL) {
+	if err := db.EnqueueURL("http://user:secret@"+strings.TrimPrefix(testURLA, "http://"), 0, uid, 0); !errors.Is(err, ErrInvalidOnionURL) {
 		t.Fatalf("userinfo enqueue error = %v, want ErrInvalidOnionURL", err)
 	}
 
@@ -322,7 +322,7 @@ func TestOnionValidationAndDomainWideBlacklist(t *testing.T) {
 	if err != nil || !blocked {
 		t.Fatalf("domain-wide blacklist lookup: blocked=%v err=%v", blocked, err)
 	}
-	if err := db.EnqueueURL(testURLA+"private", 0, uid); !errors.Is(err, ErrBlacklisted) {
+	if err := db.EnqueueURL(testURLA+"private", 0, uid, 0); !errors.Is(err, ErrBlacklisted) {
 		t.Fatalf("blacklisted enqueue error = %v, want ErrBlacklisted", err)
 	}
 
@@ -333,7 +333,7 @@ func TestOnionValidationAndDomainWideBlacklist(t *testing.T) {
 	results := make(chan error, 2)
 	go func() {
 		<-start
-		results <- db.EnqueueURL(testURLC, 0, uid)
+		results <- db.EnqueueURL(testURLC, 0, uid, 0)
 	}()
 	go func() {
 		<-start
@@ -634,5 +634,104 @@ func TestReviveFailedNodes_RespectsBatchLimit(t *testing.T) {
 	}
 	if n != 2 {
 		t.Fatalf("revived %d nodes, want exactly the batch limit of 2", n)
+	}
+}
+
+func TestEnqueueURLEnforcesThePerUserQueueQuota(t *testing.T) {
+	db := newTestDB(t)
+	uid := mustUser(t, db, "quota@example.com")
+
+	if err := db.EnqueueURL(testURLA, 0, uid, 2); err != nil {
+		t.Fatalf("first enqueue: %v", err)
+	}
+	if err := db.EnqueueURL(testURLB, 0, uid, 2); err != nil {
+		t.Fatalf("second enqueue: %v", err)
+	}
+	if err := db.EnqueueURL(testURLC, 0, uid, 2); !errors.Is(err, ErrQueueQuotaExceeded) {
+		t.Fatalf("third enqueue past the quota: got %v, want ErrQueueQuotaExceeded", err)
+	}
+
+	pending, err := db.CountPendingNodes(uid)
+	if err != nil {
+		t.Fatalf("CountPendingNodes: %v", err)
+	}
+	if pending != 2 {
+		t.Fatalf("quota let %d URLs through, want 2", pending)
+	}
+}
+
+func TestQueueQuotaIsPerAccount(t *testing.T) {
+	// One tenant filling its queue must not stop another from crawling at all.
+	db := newTestDB(t)
+	full := mustUser(t, db, "full@example.com")
+	other := mustUser(t, db, "other@example.com")
+
+	if err := db.EnqueueURL(testURLA, 0, full, 1); err != nil {
+		t.Fatalf("filling first account: %v", err)
+	}
+	if err := db.EnqueueURL(testURLB, 0, full, 1); !errors.Is(err, ErrQueueQuotaExceeded) {
+		t.Fatalf("first account should be at quota: %v", err)
+	}
+	if err := db.EnqueueURL(testURLB, 0, other, 1); err != nil {
+		t.Fatalf("second account was blocked by the first account's queue: %v", err)
+	}
+}
+
+func TestQueueQuotaHoldsUnderConcurrentSubmissions(t *testing.T) {
+	// The count and the insert share one transaction, so parallel submissions
+	// cannot each see the same free slot and both take it.
+	db := newTestDB(t)
+	uid := mustUser(t, db, "race@example.com")
+
+	urls := []string{testURLA, testURLB, testURLC}
+	const quota = 2
+
+	var wg sync.WaitGroup
+	errs := make(chan error, len(urls))
+	for _, u := range urls {
+		wg.Add(1)
+		go func(u string) {
+			defer wg.Done()
+			errs <- db.EnqueueURL(u, 0, uid, quota)
+		}(u)
+	}
+	wg.Wait()
+	close(errs)
+
+	var accepted, rejected int
+	for err := range errs {
+		switch {
+		case err == nil:
+			accepted++
+		case errors.Is(err, ErrQueueQuotaExceeded):
+			rejected++
+		default:
+			t.Fatalf("unexpected enqueue error: %v", err)
+		}
+	}
+	if accepted > quota {
+		t.Fatalf("concurrent submissions overran the quota: %d accepted, quota %d", accepted, quota)
+	}
+	pending, err := db.CountPendingNodes(uid)
+	if err != nil {
+		t.Fatalf("CountPendingNodes: %v", err)
+	}
+	if pending > quota {
+		t.Fatalf("queue holds %d pending URLs, quota %d", pending, quota)
+	}
+	if accepted+rejected != len(urls) {
+		t.Fatalf("accounted for %d of %d submissions", accepted+rejected, len(urls))
+	}
+}
+
+func TestEnqueueURLWithoutAQuotaIsUnbounded(t *testing.T) {
+	// The crawler's own discovery path passes zero; it must stay uncapped so
+	// MaxDepth remains the only bound on how far a single crawl reaches.
+	db := newTestDB(t)
+	uid := mustUser(t, db, "nolimit@example.com")
+	for _, u := range []string{testURLA, testURLB, testURLC} {
+		if err := db.EnqueueURL(u, 0, uid, 0); err != nil {
+			t.Fatalf("enqueue %s with quota disabled: %v", u, err)
+		}
 	}
 }
