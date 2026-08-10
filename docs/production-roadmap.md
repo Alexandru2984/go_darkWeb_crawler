@@ -34,18 +34,37 @@ Completed in the current hardening series:
 - [x] Make first-admin bootstrap atomic and fail closed.
 - [x] Create threat model and incident-response runbook.
 
+- [x] Deploy the binary and nginx config with an explicit rollback artifact.
+- [x] Verify Cloudflare path, onion path, direct-origin rejection, cookies,
+  headers, migrations, metrics and redacted logs externally.
+- [x] Narrow the systemd bind mount to the release artifact.
+- [x] Rotate the signing secret and destroy redundant `.env` copies. The three
+  `.env.bak*` files held a `DATABASE_URL` and `SMTP_PASS` still valid in
+  production; `JWT_SECRET` was rotated first so the copies were already dead
+  credentials when they were shredded. Stale build artifacts (`api`, `api_bin`,
+  `onion-spider-api.prev`, `onion-spider-api.bak-*`, `onion-spider-crawler`)
+  were removed from the working tree: they were unpatched builds of this
+  service sitting next to the live one.
+
 Remaining production gate:
 
-- [ ] Deploy the binary and nginx config with an explicit rollback artifact.
-- [ ] Verify Cloudflare path, onion path, direct-origin rejection, cookies,
-  headers, migrations, metrics and redacted logs externally.
-- [ ] Disable Cloudflare Browser Insights/analytics and NEL reporting for this
-  hostname; verify the response contains no third-party telemetry endpoint.
 - [ ] Purge or tightly retain historical logs containing raw URLs/searches only
   after preserving any incident evidence that is actually required.
-- [ ] Remove redundant `.env` copies after identifying and rotating any still
-  valid old credentials; narrow the systemd bind mount to the release artifact.
 - [ ] Test Alertmanager delivery, backup failure notification and the runbook.
+
+Operator action, not reachable from this repository:
+
+- [ ] Disable Cloudflare Browser Insights/analytics and NEL reporting for this
+  hostname. The edge currently injects `NEL` and `Report-To`, which instruct the
+  browser to send network-error reports to a third-party collector for seven
+  days — telemetry this product otherwise refuses to ship. Neither nginx nor the
+  application can strip a header the edge adds after the origin responds, so
+  this is a zone-level change: Cloudflare dashboard → Analytics → Web Analytics
+  (disable), and Network Error Logging under the zone's network settings. Verify
+  afterwards with `curl -sI https://go.micutu.com/ | grep -iE 'nel|report-to'`
+  returning nothing.
+- [ ] Consider rotating `SMTP_PASS` on the mail server: it was present in
+  plaintext in the destroyed backups and is unchanged in production.
 
 ## Stage 1 — privacy lifecycle
 
