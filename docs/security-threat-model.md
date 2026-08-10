@@ -97,7 +97,7 @@ browsing intent.
 | D2 | Denial of service | Account lockout is weaponized against a known email | M | M | bounded lockout and generic responses | Progressive backoff, MFA-aware recovery, alerting; avoid permanent administrative lock |
 | D3 | Denial of service | Tor/Postgres/disk outage stalls crawler while health endpoint stays green | H (observed) | H | queue sweeper, work-based Prometheus alerts, readiness check, encrypted backups | Alert delivery test, offsite restore drill, database/disk SLOs |
 | E1 | Elevation | Two instances race during first-admin registration or DB error fails open | L | H | serialized advisory-lock bootstrap, fail-closed DB handling, role validation | Replace public bootstrap with one-time offline admin command before reopening registration |
-| E2 | Elevation | Compromised crawler process reaches SSH keys, other apps or host kernel | M | Critical | loopback bind; systemd score 1.5; no capabilities; protected home/system/kernel/devices; syscall filtering | Bind only the release artifact, hide old `.env` copies, separate Unix users/Tor instances, AppArmor/SELinux |
+| E2 | Elevation | Compromised crawler process reaches SSH keys, other apps or host kernel | M | Critical | loopback bind; repository systemd unit scores 1.1; dynamic UID; static artifact-only mount; whole-filesystem noexec; no capabilities; protected home/system/kernel/devices; syscall filtering | Deploy and verify the new unit, move releases to a root-owned tree, isolate Tor, add AppArmor/SELinux |
 
 ## Blast radius and rough loss model
 

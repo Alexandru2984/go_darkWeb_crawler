@@ -20,9 +20,10 @@ Wants=postgresql.service tor.service
 
 [Service]
 Type=simple
-User=micu
-Group=micu
-WorkingDirectory=/home/micu/go/backend
+# Allocate a private, short-lived UID on every start. The API needs network
+# access only; it must not share the deploy user's identity or home access.
+DynamicUser=true
+WorkingDirectory=/
 ExecStart=/home/micu/go/backend/onion-spider-api
 Restart=always
 RestartSec=5
@@ -31,20 +32,28 @@ EnvironmentFile=/home/micu/go/backend/.env
 
 # --- Filesystem isolation ---------------------------------------------------
 # ProtectHome=tmpfs replaces /home with an empty tmpfs inside the service's
-# mount namespace, then BindReadOnlyPaths mounts back ONLY this app's directory.
-# Net effect: the process can execute its own binary but cannot see ~/.ssh,
-# ~/.aws, or any sibling project's secrets. EnvironmentFile is read by PID 1
-# before the namespace exists, so .env still loads.
+# mount namespace, then mounts back only the statically linked executable. The
+# API cannot read source, .env, historical .env backups, deploy credentials,
+# ~/.ssh or sibling projects. PID 1 reads EnvironmentFile before isolation.
+# Deploy the CGO_ENABLED=0 artifact produced by `make build` before this unit.
 ProtectHome=tmpfs
-BindReadOnlyPaths=/home/micu/go/backend
+BindReadOnlyPaths=/home/micu/go/backend/onion-spider-api
 ProtectSystem=strict
 PrivateTmp=true
-ReadWritePaths=
+
+# The service never launches child programs. A whole-filesystem noexec policy,
+# with one exception for its static binary, prevents an injected shell/tool
+# from being executed after an application compromise.
+NoExecPaths=/
+ExecPaths=/home/micu/go/backend/onion-spider-api
 
 # --- Privilege and kernel isolation -----------------------------------------
 NoNewPrivileges=true
 CapabilityBoundingSet=
 AmbientCapabilities=
+PrivateUsers=true
+PrivateIPC=true
+RemoveIPC=true
 PrivateDevices=true
 ProtectClock=true
 ProtectHostname=true
@@ -61,11 +70,14 @@ LockPersonality=true
 MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
 SystemCallErrorNumber=EPERM
 
-# Outbound traffic is HTTP to Postgres (TCP) and SOCKS5 to Tor (TCP loopback).
-# No raw sockets, no netlink, no bluetooth.
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# Outbound traffic is TCP to Postgres/Tor/SMTP. No Unix, raw, netlink or
+# Bluetooth sockets; the only listener the process may bind is its loopback API.
+RestrictAddressFamilies=AF_INET AF_INET6
+SocketBindDeny=any
+SocketBindAllow=tcp:8900
 
 # Secrets in .env must not be world-readable if the process ever creates files.
 UMask=0077

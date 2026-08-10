@@ -11,6 +11,7 @@ FRONTEND_DIR   := frontend
 API_PKG        := ./cmd/api
 CRAWLER_PKG    := ./cmd/crawler
 GO_BUILD_FLAGS := -ldflags="-s -w" -trimpath
+GO_BUILD_ENV   := CGO_ENABLED=0
 COVER_FILE     := coverage.out
 
 .DEFAULT_GOAL := help
@@ -27,13 +28,15 @@ help: ## Show this help.
 .PHONY: build
 build: ## Build the API binary to ./tmp/onion-spider-api (does NOT touch the live binary).
 	@mkdir -p tmp
-	cd $(BACKEND_DIR) && go build $(GO_BUILD_FLAGS) -o ../tmp/onion-spider-api $(API_PKG)
+	cd $(BACKEND_DIR) && $(GO_BUILD_ENV) go build $(GO_BUILD_FLAGS) -o ../tmp/onion-spider-api $(API_PKG)
+	@file tmp/onion-spider-api | grep -q 'statically linked'
 	@echo "→ built tmp/onion-spider-api"
 
 .PHONY: build-crawler
 build-crawler: ## Build the standalone crawler binary to ./tmp/onion-spider-crawler.
 	@mkdir -p tmp
-	cd $(BACKEND_DIR) && go build $(GO_BUILD_FLAGS) -o ../tmp/onion-spider-crawler $(CRAWLER_PKG)
+	cd $(BACKEND_DIR) && $(GO_BUILD_ENV) go build $(GO_BUILD_FLAGS) -o ../tmp/onion-spider-crawler $(CRAWLER_PKG)
+	@file tmp/onion-spider-crawler | grep -q 'statically linked'
 
 .PHONY: test
 test: ## Run all Go tests.

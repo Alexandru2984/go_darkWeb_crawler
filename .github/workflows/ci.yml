@@ -93,7 +93,12 @@ jobs:
         run: go test -race -timeout 5m ./...
 
       - name: go build
+        env:
+          CGO_ENABLED: 0
         run: go build -ldflags="-s -w" -trimpath -o /tmp/onion-spider-api ./cmd/api
+
+      - name: Verify production artifact is static
+        run: file /tmp/onion-spider-api | grep -q 'statically linked'
 
   lint:
     name: golangci-lint
