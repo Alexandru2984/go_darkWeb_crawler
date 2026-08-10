@@ -124,15 +124,16 @@ privacy notice/data inventory.
 
 ## Stage 2 — account and authorization security
 
-- Passkeys/WebAuthn as the preferred login, with TOTP and recovery codes as a
-  fallback; phishing-resistant MFA mandatory for admins.
-- Replace coarse JWT-only sessions with server-tracked, rotating sessions:
-  session list, last-used time, device label, one-session revoke and revoke-all.
-- Short access credential plus rotated HttpOnly refresh credential, with replay
+- [x] TOTP with single-use recovery codes; enforced for administrative
+  endpoints. Passkeys/WebAuthn remain the preferred long-term factor.
+- [x] Server-tracked sessions: session list, last-used time, device label,
+  one-session revoke and revoke-all.
+- [x] Argon2id password hashing with transparent bcrypt upgrade on successful
+  login, and passphrases accepted up to 256 characters.
+- [ ] Screen against breached passwords without sending the full password to a
+  third party.
+- [ ] Short access credential plus rotated refresh credential, with replay
   detection and key rotation (`kid`) support.
-- Argon2id password hashing with transparent bcrypt upgrade on successful login;
-  accept long passphrases and screen against breached passwords without sending
-  the full password to a third party.
 - Offline, one-use admin bootstrap command; remove public registration’s ability
   to assign an admin role.
 - PostgreSQL row-level security and separate least-privilege DB roles for API,
@@ -200,6 +201,34 @@ Do not add engagement analytics, ad SDKs, social trackers, remote fonts, remote
 CAPTCHAs or a service worker that caches authenticated API responses.
 
 ## Stage 5 — responsive UI, accessibility and performance
+
+Delivered on 2026-08-10 (release `f1b5af6`):
+
+- [x] Split the public/auth shell from the authenticated dashboard; every route
+  is lazily imported and the graph code loads only when the map is opened.
+- [x] Replace the single large component with routed views and a design system:
+  tokens for colour/spacing/type/touch-target, reusable field, button, card,
+  chip and pill primitives, and consistent empty/error/loading states.
+- [x] Mobile first at 320 px: navigation drawer, stacked controls, 44 px touch
+  targets, cards instead of the dense table below 900 px, no page-level
+  horizontal overflow.
+- [x] Accessible forms with real labels and autocomplete, `role="alert"` on
+  feedback, a polite live region for crawler status, skip link, landmarks,
+  reduced-motion support and a stated text equivalent for the graph canvas.
+- [x] Cancel stale searches, debounce input, and keep search terms in POST
+  bodies rather than URLs.
+
+Measured against the acceptance budget: the login route now transfers **41.9 kB
+gzip** (verified against production), against roughly 187 kB before. The graph
+chunk is 151.7 kB gzip and is fetched only on demand; the entry chunk contains
+no `vis-network` symbols at all.
+
+Still open in this stage:
+
+- [ ] Virtualize long lists and move to cursor pagination.
+- [ ] Automated accessibility suite and cross-browser tests in CI.
+
+## Stage 5 detail — original plan
 
 - Split the public landing/docs shell from the authenticated dashboard. Load
   graphing and export code only after login and only on the relevant route.
