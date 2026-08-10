@@ -18,12 +18,17 @@ func New(cfg Config) http.Handler {
 	d := &deps{
 		cfg: cfg,
 
-		crawlLim:    NewCrawlLimiter(20, time.Minute),
-		searchLim:   NewCrawlLimiter(60, time.Minute),
-		loginLim:    NewCrawlLimiter(5, time.Minute),
-		registerLim: NewCrawlLimiter(3, time.Hour),
-		verifyLim:   NewCrawlLimiter(10, time.Minute),
-		resetLim:    NewCrawlLimiter(5, time.Hour),
+		crawlLim:  NewCrawlLimiter(20, time.Minute),
+		searchLim: NewCrawlLimiter(60, time.Minute),
+
+		// Onion limits are aggregates over the whole front door, not per
+		// visitor, so they are sized well above the clearnet per-address limit.
+		// Registration is disabled on the onion vhost (it returns 404 there), so
+		// its onion budget only has to cover a misrouted request.
+		loginLim:    NewAnonLimiter(5, 100, time.Minute),
+		registerLim: NewAnonLimiter(3, 3, time.Hour),
+		verifyLim:   NewAnonLimiter(10, 120, time.Minute),
+		resetLim:    NewAnonLimiter(5, 60, time.Hour),
 
 		exportGlobalSem: make(chan struct{}, 4),
 		exportPerUser:   &sync.Map{},

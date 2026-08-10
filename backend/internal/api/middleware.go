@@ -17,6 +17,7 @@ const (
 	dbRoleContextKey     contextKey = "db_role"
 	dbEmailContextKey    contextKey = "db_email"
 	authSourceContextKey contextKey = "auth_source"
+	networkContextKey    contextKey = "client_network"
 )
 
 // How a request proved its identity. CSRFProtect keys off this: only

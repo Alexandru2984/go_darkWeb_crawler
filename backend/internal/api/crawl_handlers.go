@@ -12,7 +12,7 @@ import (
 func (d *deps) handleCrawl(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	ip := ClientIP(r)
-	if !IsAdmin(r) && !d.crawlLim.Allow(ip) {
+	if !IsAdmin(r) && !d.crawlLim.Allow(RequestKey(r)) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Too many requests. Please try again in a few minutes.")
 		return
 	}
@@ -49,7 +49,7 @@ func (d *deps) handleCrawl(w http.ResponseWriter, r *http.Request) {
 func (d *deps) handleRecrawl(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	ip := ClientIP(r)
-	if !IsAdmin(r) && !d.crawlLim.Allow(ip) {
+	if !IsAdmin(r) && !d.crawlLim.Allow(RequestKey(r)) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Too many requests. Please try again in a few minutes.")
 		return
 	}
@@ -91,7 +91,7 @@ func (d *deps) handleRecrawl(w http.ResponseWriter, r *http.Request) {
 func (d *deps) handleCrawlBulk(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	ip := ClientIP(r)
-	if !IsAdmin(r) && !d.crawlLim.Allow(ip) {
+	if !IsAdmin(r) && !d.crawlLim.Allow(RequestKey(r)) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Too many requests. Please try again in a few minutes.")
 		return
 	}

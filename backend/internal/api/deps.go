@@ -22,12 +22,16 @@ type Config struct {
 type deps struct {
 	cfg Config
 
-	crawlLim    *CrawlLimiter
-	searchLim   *CrawlLimiter
-	loginLim    *CrawlLimiter
-	registerLim *CrawlLimiter
-	verifyLim   *CrawlLimiter
-	resetLim    *CrawlLimiter
+	// Authenticated endpoints are charged to the account (see RequestKey).
+	crawlLim  *CrawlLimiter
+	searchLim *CrawlLimiter
+
+	// Pre-authentication endpoints have no account to charge, so they are
+	// limited per address on clearnet and in aggregate on the onion path.
+	loginLim    *AnonLimiter
+	registerLim *AnonLimiter
+	verifyLim   *AnonLimiter
+	resetLim    *AnonLimiter
 
 	// Export concurrency control: max 1 export per user (per-user semaphore in
 	// the sync.Map) AND a global cap (exportGlobalSem) so we never OOM.

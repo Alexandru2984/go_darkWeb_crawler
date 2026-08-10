@@ -32,7 +32,7 @@ func (d *deps) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	ip := ClientIP(r)
-	if !d.registerLim.Allow(ip) {
+	if !d.registerLim.Allow(r) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Too many registrations from this IP. Please try again later.")
 		return
 	}
@@ -102,7 +102,7 @@ func (d *deps) handleRegister(w http.ResponseWriter, r *http.Request) {
 func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	ip := ClientIP(r)
-	if !d.loginLim.Allow(ip) {
+	if !d.loginLim.Allow(r) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Too many login attempts. Please try again in 1 minute.")
 		return
 	}
@@ -227,8 +227,7 @@ func (d *deps) handleLogout(w http.ResponseWriter, r *http.Request) {
 // consume the token. Protects against link-preview bots (Outlook/Gmail/Slack)
 // that GET the URL and would auto-verify the account in the user's absence.
 func (d *deps) handleVerifyGET(w http.ResponseWriter, r *http.Request) {
-	ip := ClientIP(r)
-	if !d.verifyLim.Allow(ip) {
+	if !d.verifyLim.Allow(r) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Too many attempts. Please try again in 1 minute.")
 		return
 	}
@@ -261,7 +260,7 @@ func (d *deps) handleVerifyGET(w http.ResponseWriter, r *http.Request) {
 func (d *deps) handleVerifyPOST(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	ip := ClientIP(r)
-	if !d.verifyLim.Allow(ip) {
+	if !d.verifyLim.Allow(r) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Too many attempts. Please try again in 1 minute.")
 		return
 	}
@@ -312,7 +311,7 @@ func (d *deps) handleVerifyPOST(w http.ResponseWriter, r *http.Request) {
 func (d *deps) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	ip := ClientIP(r)
-	if !d.resetLim.Allow(ip) {
+	if !d.resetLim.Allow(r) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Too many reset requests. Please try again later.")
 		return
 	}
@@ -362,7 +361,7 @@ func (d *deps) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 func (d *deps) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	ip := ClientIP(r)
-	if !d.resetLim.Allow(ip) {
+	if !d.resetLim.Allow(r) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Too many attempts. Please try again later.")
 		return
 	}

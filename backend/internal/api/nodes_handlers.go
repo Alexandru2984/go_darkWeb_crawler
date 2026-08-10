@@ -63,8 +63,7 @@ func (d *deps) handleEdges(w http.ResponseWriter, r *http.Request) {
 
 func (d *deps) handleSearch(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	ip := ClientIP(r)
-	if !d.searchLim.Allow(ip) {
+	if !d.searchLim.Allow(RequestKey(r)) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Rate limit exceeded — max 60 searches/minute")
 		return
 	}

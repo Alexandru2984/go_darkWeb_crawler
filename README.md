@@ -41,8 +41,12 @@ To protect the server and ensure passive browsing:
   the token to expire.
 - Passwords hashed with bcrypt (cost 12). Login runs a constant-time comparison
   (and a dummy hash for unknown emails) to prevent account enumeration via timing.
-- Account lockout after repeated failed logins, plus per-IP and per-recipient
-  rate limiting — all auth events are written to an audit log.
+- Account lockout after repeated failed logins, plus per-recipient rate limiting
+  — all auth events are written to an audit log. Authenticated requests are
+  rate-limited per account rather than per address, because the onion vhost has
+  no client address to report and every Tor visitor would otherwise share one
+  budget; pre-authentication limits fall back to the address, namespaced by
+  front door.
 - Email verification uses a POST-confirmation page so link-preview bots can't
   silently activate accounts; recipient addresses are parsed with
   `net/mail.ParseAddress` and CRLF-stripped to block header injection. SMTP has
