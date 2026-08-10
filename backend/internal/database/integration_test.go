@@ -678,8 +678,12 @@ func TestQueueQuotaIsPerAccount(t *testing.T) {
 }
 
 func TestQueueQuotaHoldsUnderConcurrentSubmissions(t *testing.T) {
-	// The count and the insert share one transaction, so parallel submissions
-	// cannot each see the same free slot and both take it.
+	// The count and the insert share one transaction behind a per-account lock,
+	// so parallel submissions cannot each see the same free slot and both take
+	// it. The URLs deliberately span three different hosts: the per-domain lock
+	// does not serialize those, so this test fails if the account lock is
+	// missing. A release barrier makes the submissions actually overlap rather
+	// than relying on goroutine scheduling to collide.
 	db := newTestDB(t)
 	uid := mustUser(t, db, "race@example.com")
 
@@ -687,14 +691,17 @@ func TestQueueQuotaHoldsUnderConcurrentSubmissions(t *testing.T) {
 	const quota = 2
 
 	var wg sync.WaitGroup
+	start := make(chan struct{})
 	errs := make(chan error, len(urls))
 	for _, u := range urls {
 		wg.Add(1)
 		go func(u string) {
 			defer wg.Done()
+			<-start
 			errs <- db.EnqueueURL(u, 0, uid, quota)
 		}(u)
 	}
+	close(start)
 	wg.Wait()
 	close(errs)
 

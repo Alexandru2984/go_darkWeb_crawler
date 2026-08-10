@@ -260,6 +260,23 @@ func lockOnionDomain(tx *sql.Tx, hostname string) error {
 	return err
 }
 
+// quotaLockNamespace keeps the per-account quota locks in their own advisory
+// lock space, so a user ID can never collide with the hashed hostname used by
+// lockOnionDomain.
+const quotaLockNamespace = 0x0170_9106
+
+// lockUserQuota serializes an account's quota checks against each other.
+//
+// The domain lock is not enough: it is keyed on the hostname, so two
+// submissions for different domains run concurrently, both count the same
+// number of pending rows, and both conclude there is room. Taken after the
+// domain lock, never before, so the two locks are always acquired in the same
+// order and cannot deadlock.
+func lockUserQuota(tx *sql.Tx, userID int) error {
+	_, err := tx.Exec(`SELECT pg_advisory_xact_lock($1, $2)`, quotaLockNamespace, userID)
+	return err
+}
+
 func domainBlacklistedTx(tx *sql.Tx, hostname string) (bool, error) {
 	var blocked bool
 	err := tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM blacklist WHERE domain = $1)`, hostname).Scan(&blocked)
@@ -323,8 +340,10 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 //
 // maxPending caps how much unprocessed work one account may have waiting at
 // once; zero or less disables the cap. The count is taken inside the same
-// transaction as the insert, and behind the same per-domain advisory lock, so
+// transaction as the insert and behind a per-account advisory lock, so
 // concurrent submissions cannot each observe room that only one of them has.
+// The per-domain lock alone does not give that guarantee — submissions for
+// different domains do not contend on it at all.
 // Only user-submitted URLs pass through here — links discovered mid-crawl are
 // inserted by SaveEdge and are bounded by MaxDepth instead, so raising this cap
 // does not change how deep an individual crawl goes.
@@ -349,6 +368,9 @@ func (db *DB) EnqueueURL(rawURL string, depth int, userID int, maxPending int) e
 		return ErrBlacklisted
 	}
 	if maxPending > 0 {
+		if err := lockUserQuota(tx, userID); err != nil {
+			return fmt.Errorf("lock user quota: %w", err)
+		}
 		var pending int
 		if err := tx.QueryRow(
 			`SELECT COUNT(*) FROM nodes WHERE user_id = $1 AND processing_status = 'pending'`,
