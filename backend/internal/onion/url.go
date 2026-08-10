@@ -91,8 +91,10 @@ func IsV3URL(rawURL string) bool {
 }
 
 // NormalizeURL canonicalizes and validates a Tor web URL. It strips fragments
-// (which are never sent over HTTP), rejects embedded userinfo, adds the root
-// path when omitted, and preserves the path/query exactly.
+// (which are never sent over HTTP), rejects embedded userinfo, and preserves
+// the path/query exactly. In particular, it does not rewrite an absent path to
+// "/": historical rows use both equivalent root forms and changing one during
+// a crawl would create a second row instead of updating the claimed one.
 func NormalizeURL(rawURL string) string {
 	if rawURL == "" || len(rawURL) > 2048 {
 		return ""
@@ -105,9 +107,6 @@ func NormalizeURL(rawURL string) string {
 	parsed.Host = strings.ToLower(parsed.Host)
 	parsed.Fragment = ""
 	parsed.RawFragment = ""
-	if parsed.Path == "" {
-		parsed.Path = "/"
-	}
 	if !IsV3URL(parsed.String()) {
 		return ""
 	}

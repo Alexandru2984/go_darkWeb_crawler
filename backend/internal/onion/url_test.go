@@ -75,4 +75,8 @@ func TestNormalizeURL(t *testing.T) {
 	if got := NormalizeHostname(strings.ToUpper(validHost) + ":443"); got != validHost {
 		t.Fatalf("NormalizeHostname = %q, want %q", got, validHost)
 	}
+	rootWithoutSlash := "https://" + validHost
+	if got := NormalizeURL(rootWithoutSlash); got != rootWithoutSlash {
+		t.Fatalf("NormalizeURL changed historical root form: got %q, want %q", got, rootWithoutSlash)
+	}
 }

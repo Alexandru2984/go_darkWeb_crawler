@@ -190,6 +190,29 @@ func TestGetNextPendingNode_PerTenantClaim(t *testing.T) {
 	}
 }
 
+func TestRootURLWithoutSlashDoesNotDuplicateAfterSave(t *testing.T) {
+	db := newTestDB(t)
+	uid := mustUser(t, db, "root-form@example.com")
+	rootWithoutSlash := strings.TrimSuffix(testURLA, "/")
+	if err := db.EnqueueURL(rootWithoutSlash, 0, uid); err != nil {
+		t.Fatalf("EnqueueURL: %v", err)
+	}
+	claimed, _, claimedUID, err := db.GetNextPendingNode()
+	if err != nil || claimed != rootWithoutSlash || claimedUID != uid {
+		t.Fatalf("claim = (%q,%d,%v), want (%q,%d,nil)", claimed, claimedUID, err, rootWithoutSlash, uid)
+	}
+	if _, err := db.SaveNode(claimed, "root", "", 200, "completed", "{}", "content", "wiki", uid); err != nil {
+		t.Fatalf("SaveNode: %v", err)
+	}
+	var rows int
+	if err := db.Conn.QueryRow(`SELECT COUNT(*) FROM nodes WHERE user_id=$1`, uid).Scan(&rows); err != nil {
+		t.Fatalf("count nodes: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("root URL changed identity during save: got %d rows, want 1", rows)
+	}
+}
+
 func TestGetStats_AdminSeesAllPendingNodes(t *testing.T) {
 	db := newTestDB(t)
 	admin := mustUser(t, db, "admin@example.com")
