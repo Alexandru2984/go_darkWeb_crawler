@@ -111,11 +111,11 @@ func NewTorClientWithTransport(socksProxyAddress string) (*http.Transport, *http
 				return fmt.Errorf("too many redirects")
 			}
 			// Only allow redirects within the .onion space — clearnet is forbidden
-			if !onion.IsV3Hostname(req.URL.Hostname()) {
+			if !onion.IsV3URL(req.URL.String()) {
 				return fmt.Errorf("redirect to clearnet blocked: %s", req.URL.Host)
 			}
 			// Do not follow redirects to another onion domain (prevents cross-site tracking)
-			if req.URL.Hostname() != via[0].URL.Hostname() {
+			if !strings.EqualFold(req.URL.Hostname(), via[0].URL.Hostname()) {
 				return fmt.Errorf("redirect to another onion domain blocked: %s -> %s", via[0].URL.Host, req.URL.Host)
 			}
 			return nil

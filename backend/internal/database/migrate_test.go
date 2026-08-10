@@ -82,7 +82,7 @@ func TestMigrationsApplyAndIdempotent(t *testing.T) {
 	}
 
 	// schema_migrations should record the latest version, not dirty.
-	const latestVersion = 3
+	const latestVersion = 4
 	var v int
 	var dirty bool
 	if err := db.QueryRow(`SELECT version, dirty FROM schema_migrations`).Scan(&v, &dirty); err != nil {

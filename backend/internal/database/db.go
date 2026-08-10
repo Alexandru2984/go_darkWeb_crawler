@@ -12,10 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"onion-spider/internal/onion"
+
 	"github.com/golang-migrate/migrate/v4"
 	pgdriver "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
 
 // migrationsFS embeds the SQL migration files so the binary is self-contained
@@ -27,6 +29,14 @@ var migrationsFS embed.FS
 
 // ErrBlacklisted is returned by EnqueueURL when the domain is on the blacklist.
 var ErrBlacklisted = errors.New("domain blocked")
+
+// ErrInvalidOnionURL is returned when an internal caller attempts to put a
+// non-canonical or cryptographically invalid onion address into the queue.
+var ErrInvalidOnionURL = errors.New("invalid onion URL")
+
+// ErrEmailInUse lets the API distinguish an expected registration conflict
+// from a database outage without exposing constraint or account details.
+var ErrEmailInUse = errors.New("email already in use")
 
 type DB struct {
 	Conn *sql.DB
@@ -227,10 +237,38 @@ func opaqueTokenHash(token string) string {
 	return fmt.Sprintf("%x", h)
 }
 
+func canonicalCrawlURL(rawURL string) (canonical, hostname string, err error) {
+	canonical = onion.NormalizeURL(rawURL)
+	if canonical == "" {
+		return "", "", ErrInvalidOnionURL
+	}
+	parsed, parseErr := url.Parse(canonical)
+	if parseErr != nil || parsed.Hostname() == "" {
+		return "", "", ErrInvalidOnionURL
+	}
+	return canonical, strings.ToLower(parsed.Hostname()), nil
+}
+
+func lockOnionDomain(tx *sql.Tx, hostname string) error {
+	_, err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext($1))`, hostname)
+	return err
+}
+
+func domainBlacklistedTx(tx *sql.Tx, hostname string) (bool, error) {
+	var blocked bool
+	err := tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM blacklist WHERE domain = $1)`, hostname).Scan(&blocked)
+	return blocked, err
+}
+
 // SaveNode saves or updates information about an onion site after crawling.
 // Returns (contentChanged bool, error). If the content hash hasn't changed,
 // performs a minimal update (without touching content or tsvector).
 func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status string, metadata string, content string, category string, userID int) (bool, error) {
+	canonical, _, err := canonicalCrawlURL(nodeURL)
+	if err != nil {
+		return false, err
+	}
+	nodeURL = canonical
 	if metadata == "" {
 		metadata = "{}"
 	}
@@ -262,7 +300,7 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 	}
 
 	// Unchanged content: minimal update — don't touch content/tsvector/category
-	_, err := db.Conn.Exec(`
+	_, err = db.Conn.Exec(`
 	UPDATE nodes SET
 		status_code       = $3,
 		server_header     = $4,
@@ -277,27 +315,33 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 // EnqueueURL adds a URL to the crawling queue without overwriting existing data.
 // Returns ErrBlacklisted if the domain is on the blacklist.
 func (db *DB) EnqueueURL(rawURL string, depth int, userID int) error {
-	if len(rawURL) > 2048 {
-		return fmt.Errorf("url too long (max 2048 characters)")
+	canonical, host, err := canonicalCrawlURL(rawURL)
+	if err != nil {
+		return err
 	}
-	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.Host == "" {
-		return fmt.Errorf("invalid url: %s", rawURL)
+	tx, err := db.Conn.Begin()
+	if err != nil {
+		return err
 	}
-	host := strings.ToLower(parsed.Host)
-	var count int
-	// Best-effort blacklist check: on Scan error count stays 0 (fail-open) so a
-	// transient DB hiccup never blocks legitimate enqueues. A persistent error
-	// would surface on the subsequent INSERT anyway.
-	_ = db.Conn.QueryRow(`SELECT COUNT(*) FROM blacklist WHERE domain = $1`, host).Scan(&count)
-	if count > 0 {
+	defer tx.Rollback()
+	if err := lockOnionDomain(tx, host); err != nil {
+		return fmt.Errorf("lock onion domain: %w", err)
+	}
+	blocked, err := domainBlacklistedTx(tx, host)
+	if err != nil {
+		return fmt.Errorf("check blacklist: %w", err)
+	}
+	if blocked {
 		return ErrBlacklisted
 	}
-	_, err = db.Conn.Exec(
+	_, err = tx.Exec(
 		`INSERT INTO nodes (url, host, processing_status, depth, user_id) VALUES ($1, $2, 'pending', $3, $4) ON CONFLICT (url, user_id) DO NOTHING`,
-		rawURL, host, depth, userID,
+		canonical, host, depth, userID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // SearchNodes performs a Full-Text search on title and content using the GIN index.
@@ -338,31 +382,48 @@ func (db *DB) SearchNodes(searchQuery, category string, userID int, isAdmin bool
 // If the URL already exists at a greater depth, updates the depth (more efficient crawl).
 // Domains on the blacklist are skipped (not added to the queue).
 func (db *DB) SaveEdge(source, target string, targetDepth int, userID int) error {
-	targetHost := ""
-	if parsed, err := url.Parse(target); err == nil {
-		targetHost = strings.ToLower(parsed.Host)
+	canonicalSource, _, err := canonicalCrawlURL(source)
+	if err != nil {
+		return fmt.Errorf("invalid edge source: %w", err)
+	}
+	canonicalTarget, targetHost, err := canonicalCrawlURL(target)
+	if err != nil {
+		return fmt.Errorf("invalid edge target: %w", err)
+	}
+	source, target = canonicalSource, canonicalTarget
+
+	tx, err := db.Conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := lockOnionDomain(tx, targetHost); err != nil {
+		return fmt.Errorf("lock target onion domain: %w", err)
 	}
 
 	// Check the blacklist before adding the target node to the queue
-	if targetHost != "" {
-		var count int
-		// Same fail-open rationale as in EnqueueURL: a Scan error leaves count
-		// at 0 so blacklist DB hiccups don't drop edge discoveries silently.
-		_ = db.Conn.QueryRow(`SELECT COUNT(*) FROM blacklist WHERE domain = $1`, targetHost).Scan(&count)
-		if count == 0 {
-			_, _ = db.Conn.Exec(
-				`INSERT INTO nodes (url, host, processing_status, depth, user_id) VALUES ($1, $2, 'pending', $3, $4) ON CONFLICT (url, user_id) DO UPDATE
+	blocked, err := domainBlacklistedTx(tx, targetHost)
+	if err != nil {
+		return fmt.Errorf("check target blacklist: %w", err)
+	}
+	if !blocked {
+		if _, err := tx.Exec(
+			`INSERT INTO nodes (url, host, processing_status, depth, user_id) VALUES ($1, $2, 'pending', $3, $4) ON CONFLICT (url, user_id) DO UPDATE
 				   SET depth = EXCLUDED.depth
 				   WHERE nodes.depth > EXCLUDED.depth AND nodes.processing_status = 'pending'`,
-				target, targetHost, targetDepth, userID,
-			)
+			target, targetHost, targetDepth, userID,
+		); err != nil {
+			return fmt.Errorf("enqueue edge target: %w", err)
 		}
 	}
 
-	_, err := db.Conn.Exec(`
+	_, err = tx.Exec(`
 	INSERT INTO edges (source_url, target_url, user_id) VALUES ($1, $2, $3) ON CONFLICT (source_url, target_url, user_id) DO NOTHING
 	`, source, target, userID)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // GetNextPendingNode atomically claims the next URL to crawl, with fair
@@ -671,19 +732,33 @@ func (db *DB) GetQueueSummary(userID int, isAdmin bool) (*QueueSummary, error) {
 // AddBlacklist adds a domain to the blacklist (sets processing_status='blocked' on all nodes with that domain)
 // and prevents future addition of URLs from that domain.
 func (db *DB) AddBlacklist(domain string) error {
-	domain = strings.ToLower(strings.TrimSpace(domain))
-	_, err := db.Conn.Exec(`
+	domain = onion.NormalizeHostname(domain)
+	if domain == "" {
+		return ErrInvalidOnionURL
+	}
+	tx, err := db.Conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := lockOnionDomain(tx, domain); err != nil {
+		return err
+	}
+	_, err = tx.Exec(`
 		INSERT INTO blacklist (domain) VALUES ($1) ON CONFLICT (domain) DO NOTHING
 	`, domain)
 	if err != nil {
 		return err
 	}
 	// Block all existing nodes with this domain (exact match on the host column)
-	_, err = db.Conn.Exec(`
+	_, err = tx.Exec(`
 		UPDATE nodes SET processing_status = 'blocked'
 		WHERE host = $1 AND processing_status != 'blocked'
 	`, domain)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // GetBlacklist returns all blocked domains
@@ -706,9 +781,13 @@ func (db *DB) GetBlacklist() ([]string, error) {
 
 // IsDomainBlacklisted checks whether a domain is blocked
 func (db *DB) IsDomainBlacklisted(domain string) (bool, error) {
-	var count int
-	err := db.Conn.QueryRow(`SELECT COUNT(*) FROM blacklist WHERE domain = $1`, strings.ToLower(domain)).Scan(&count)
-	return count > 0, err
+	domain = onion.NormalizeHostname(domain)
+	if domain == "" {
+		return false, ErrInvalidOnionURL
+	}
+	var blocked bool
+	err := db.Conn.QueryRow(`SELECT EXISTS (SELECT 1 FROM blacklist WHERE domain = $1)`, domain).Scan(&blocked)
+	return blocked, err
 }
 
 // ExportNodes returns all fully crawled nodes in discovery order.
@@ -747,8 +826,19 @@ func (db *DB) ExportNodes(ctx context.Context, userID int, isAdmin bool, fn func
 // DeleteBlacklist removes a domain from the blacklist and puts blocked nodes back in the queue.
 // Returns (found bool, error).
 func (db *DB) DeleteBlacklist(domain string) (bool, error) {
-	domain = strings.ToLower(strings.TrimSpace(domain))
-	res, err := db.Conn.Exec(`DELETE FROM blacklist WHERE domain = $1`, domain)
+	domain = onion.NormalizeHostname(domain)
+	if domain == "" {
+		return false, ErrInvalidOnionURL
+	}
+	tx, err := db.Conn.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	if err := lockOnionDomain(tx, domain); err != nil {
+		return false, err
+	}
+	res, err := tx.Exec(`DELETE FROM blacklist WHERE domain = $1`, domain)
 	if err != nil {
 		return false, err
 	}
@@ -756,11 +846,17 @@ func (db *DB) DeleteBlacklist(domain string) (bool, error) {
 	if affected == 0 {
 		return false, nil
 	}
-	_, err = db.Conn.Exec(`
+	_, err = tx.Exec(`
 		UPDATE nodes SET processing_status = 'pending', retry_count = 0, next_crawl_at = CURRENT_TIMESTAMP
 		WHERE host = $1 AND processing_status = 'blocked'
 	`, domain)
-	return true, err
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // GraphMLEdge represents an edge exported for GraphML — both endpoints are completed nodes.
@@ -775,8 +871,8 @@ func (db *DB) ExportGraphMLEdges(ctx context.Context, userID int, isAdmin bool, 
 	rows, err := db.Conn.QueryContext(ctx, `
 		SELECT n1.id, n2.id
 		FROM edges e
-		JOIN nodes n1 ON n1.url = e.source_url AND n1.processing_status = 'completed'
-		JOIN nodes n2 ON n2.url = e.target_url AND n2.processing_status = 'completed'
+		JOIN nodes n1 ON n1.url = e.source_url AND n1.user_id = e.user_id AND n1.processing_status = 'completed'
+		JOIN nodes n2 ON n2.url = e.target_url AND n2.user_id = e.user_id AND n2.processing_status = 'completed'
 		WHERE (e.user_id = $1 OR $2)
 	`, userID, isAdmin)
 	if err != nil {
@@ -843,11 +939,59 @@ func NormalizeEmail(email string) string {
 
 // CreateUser adds a new user with a verification token valid for 24h.
 func (db *DB) CreateUser(email, passwordHash, role, token string) error {
+	if role != "user" && role != "admin" {
+		return errors.New("invalid user role")
+	}
 	_, err := db.Conn.Exec(`
 		INSERT INTO users (email, password_hash, role, verification_token, verification_expires_at)
 		VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP + INTERVAL '24 hours')
 	`, NormalizeEmail(email), passwordHash, role, opaqueTokenHash(token))
 	return err
+}
+
+// CreateRegisteredUser atomically assigns the bootstrap admin role and creates
+// a public-registration account. The advisory transaction lock prevents two
+// differently configured application instances from both observing an empty
+// admin set and creating separate administrators.
+func (db *DB) CreateRegisteredUser(email, passwordHash, token, adminEmail string) (string, error) {
+	email = NormalizeEmail(email)
+	adminEmail = NormalizeEmail(adminEmail)
+	tx, err := db.Conn.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+
+	const bootstrapAdminLock int64 = 0x4f535041444d494e // "OSPADMIN"
+	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock($1)`, bootstrapAdminLock); err != nil {
+		return "", err
+	}
+
+	role := "user"
+	if adminEmail != "" && email == adminEmail {
+		var hasAdmin bool
+		if err := tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM users WHERE role = 'admin')`).Scan(&hasAdmin); err != nil {
+			return "", err
+		}
+		if !hasAdmin {
+			role = "admin"
+		}
+	}
+
+	if _, err := tx.Exec(`
+		INSERT INTO users (email, password_hash, role, verification_token, verification_expires_at)
+		VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP + INTERVAL '24 hours')
+	`, email, passwordHash, role, opaqueTokenHash(token)); err != nil {
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+			return "", ErrEmailInUse
+		}
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return role, nil
 }
 
 // GetUserByEmail fetches a user by email (case-insensitive).
@@ -933,14 +1077,6 @@ func (db *DB) VerifyUser(token string) error {
 		return errors.New("token invalid, expired or already used")
 	}
 	return nil
-}
-
-// HasAnyAdmin checks whether at least one user with the admin role exists.
-// Used at bootstrap — the first user with ADMIN_EMAIL becomes admin only if none exists yet.
-func (db *DB) HasAnyAdmin() (bool, error) {
-	var count int
-	err := db.Conn.QueryRow(`SELECT COUNT(*) FROM users WHERE role = 'admin'`).Scan(&count)
-	return count > 0, err
 }
 
 // LogAuthEvent inserts privacy-preserving references into auth_audit. Callers

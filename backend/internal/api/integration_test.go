@@ -120,8 +120,8 @@ func do(t *testing.T, h http.Handler, method, target, token string) *httptest.Re
 }
 
 const (
-	urlA = "http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad.onion/"
-	urlB = "http://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbd.onion/"
+	urlA = "http://pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion/"
+	urlB = "http://sp3k262uwy4r2k3ycr5awluarykdpag6a7y33jxop4cs2lu5uz5sseqd.onion/"
 )
 
 // TestAuthz_NodeIsolation: user A must not be able to read user B's node, even

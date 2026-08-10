@@ -48,6 +48,8 @@ To protect the server and ensure passive browsing:
   `net/mail.ParseAddress` and CRLF-stripped to block header injection.
 - Crawler SSRF defense: requests go only to `.onion` hosts over Tor, redirects
   to clearnet or other onion domains are blocked, and redirect depth is capped.
+  V3 addresses are verified against Tor's embedded version and SHA3 checksum;
+  userinfo and non-web ports are rejected before a URL can enter the queue.
 - Formula-injection prevention in CSV/XLSX exports; XML escaping in GraphML.
 - All request bodies are size-capped (`MaxBytesReader`) with unknown-field
   rejection; the HTTP server binds to `127.0.0.1` only, behind an nginx reverse

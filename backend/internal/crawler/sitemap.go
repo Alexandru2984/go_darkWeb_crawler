@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"onion-spider/internal/onion"
-	"strings"
 )
 
 // sitemapIndex represents a sitemap file that lists other sitemap files
@@ -85,8 +84,8 @@ func fetchAndParseSitemap(ctx context.Context, client *http.Client, sitemapURL s
 				if i >= maxChildSitemaps {
 					break
 				}
-				if isOnionURL(sm.Loc) {
-					sub := fetchAndParseSitemap(ctx, client, sm.Loc, false) // no further recursion
+				if normalized := onion.NormalizeURL(sm.Loc); normalized != "" {
+					sub := fetchAndParseSitemap(ctx, client, normalized, false) // no further recursion
 					result = append(result, sub...)
 					if len(result) >= maxSitemapURLs {
 						result = result[:maxSitemapURLs]
@@ -106,17 +105,12 @@ func fetchAndParseSitemap(ctx context.Context, client *http.Client, sitemapURL s
 	}
 
 	for _, u := range us.URLs {
-		if isOnionURL(u.Loc) {
-			result = append(result, u.Loc)
+		if normalized := onion.NormalizeURL(u.Loc); normalized != "" {
+			result = append(result, normalized)
 			if len(result) >= maxSitemapURLs {
 				break
 			}
 		}
 	}
 	return result
-}
-
-// isOnionURL checks whether a URL belongs to a v3 .onion domain.
-func isOnionURL(rawURL string) bool {
-	return onion.IsV3URL(strings.TrimSpace(rawURL))
 }

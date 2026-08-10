@@ -42,7 +42,8 @@ func (d *deps) handleBlacklistAdd(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusBadRequest, "The 'domain' field is required")
 		return
 	}
-	if !onion.IsV3Host(req.Domain) {
+	req.Domain = onion.NormalizeHostname(req.Domain)
+	if req.Domain == "" {
 		WriteJSONError(w, http.StatusBadRequest, "Only valid v3 .onion domains can be blocked")
 		return
 	}
@@ -58,8 +59,8 @@ func (d *deps) handleBlacklistAdd(w http.ResponseWriter, r *http.Request) {
 
 func (d *deps) handleBlacklistDelete(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	domain := strings.ToLower(strings.TrimSpace(chi.URLParam(r, "domain")))
-	if domain == "" || !onion.IsV3Host(domain) {
+	domain := onion.NormalizeHostname(strings.ToLower(strings.TrimSpace(chi.URLParam(r, "domain"))))
+	if domain == "" {
 		WriteJSONError(w, http.StatusBadRequest, "Invalid domain: must be a valid v3 .onion domain")
 		return
 	}

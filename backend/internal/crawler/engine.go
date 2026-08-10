@@ -216,7 +216,7 @@ func (e *Engine) worker(ctx context.Context, id int) {
 		}
 
 		// Crawl-time validation: we process exclusively .onion addresses
-		if parsedTarget, err := url.Parse(targetUrl); err != nil || !onion.IsV3Hostname(parsedTarget.Hostname()) {
+		if !onion.IsV3URL(targetUrl) {
 			log.WarnContext(ctx, "non_onion_url_skipped", "url", targetUrl)
 			metrics.CrawlsTotal.WithLabelValues("non_onion").Inc()
 			_ = e.DB.MarkRobotsBlocked(targetUrl, userID)

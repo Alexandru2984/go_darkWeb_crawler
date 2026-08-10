@@ -93,12 +93,12 @@ func TestSitemapFetch_URLSet(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/sitemap.xml" {
 			w.Header().Set("Content-Type", "application/xml")
-			fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>
+			fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad.onion/page1</loc></url>
-  <url><loc>http://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbd.onion/page2</loc></url>
+  <url><loc>http://%s/page1#fragment</loc></url>
+  <url><loc>http://%s/page2</loc></url>
   <url><loc>http://not-onion.com/page3</loc></url>
-</urlset>`)
+</urlset>`, testOnionHostA, testOnionHostB)
 			return
 		}
 		w.WriteHeader(404)
@@ -109,6 +109,9 @@ func TestSitemapFetch_URLSet(t *testing.T) {
 	urls := fetchAndParseSitemap(context.Background(), server.Client(), server.URL+"/sitemap.xml", false)
 	if len(urls) != 2 {
 		t.Errorf("expected 2 .onion URLs, got %d: %v", len(urls), urls)
+	}
+	if urls[0] != "http://"+testOnionHostA+"/page1" {
+		t.Errorf("sitemap URL was not canonicalized: %v", urls)
 	}
 }
 
@@ -124,10 +127,10 @@ func TestSitemapFetch_SitemapIndex(t *testing.T) {
 </sitemapindex>`, serverURL)
 		case "/sitemap-sub.xml":
 			w.Header().Set("Content-Type", "application/xml")
-			fmt.Fprint(w, `<?xml version="1.0"?>
+			fmt.Fprintf(w, `<?xml version="1.0"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>http://cccccccccccccccccccccccccccccccccccccccccccccccccccccccd.onion/deep</loc></url>
-</urlset>`)
+  <url><loc>http://%s/deep</loc></url>
+</urlset>`, testOnionHostC)
 		default:
 			w.WriteHeader(404)
 		}

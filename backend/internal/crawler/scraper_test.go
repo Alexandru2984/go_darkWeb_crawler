@@ -36,7 +36,7 @@ func TestScrapePage(t *testing.T) {
 				</style>
 				
 				<ul>
-					<li><a href="http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad.onion/search?q=test">DuckDuckGo</a></li>
+					<li><a href="http://` + testOnionHostA + `/search?q=test">DuckDuckGo</a></li>
 					<li><a href="/local-page">Local Page (Should be ignored)</a></li>
 				</ul>
 			</body>
@@ -74,7 +74,7 @@ func TestScrapePage(t *testing.T) {
 	}
 
 	// The full URL with path must be preserved (fix #5)
-	expectedOnion := "http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad.onion/search?q=test"
+	expectedOnion := "http://" + testOnionHostA + "/search?q=test"
 	if result.FoundOnions[0] != expectedOnion {
 		t.Errorf("Incorrect extracted onion link. Expected '%s', got '%s'", expectedOnion, result.FoundOnions[0])
 	}
@@ -84,14 +84,14 @@ func TestScrapePageExtraLinkSources(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		fmt.Fprintf(w, `<html><head>
-			<link rel="canonical" href="http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad.onion/canon">
-			<meta http-equiv="refresh" content="5; url=http://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbd.onion/redir">
+			<link rel="canonical" href="http://%s/canon">
+			<meta http-equiv="refresh" content="5; url=http://%s/redir">
 		</head><body>
-			<form action="http://cccccccccccccccccccccccccccccccccccccccccccccccccccccccd.onion/submit">
+			<form action="http://%s/submit">
 				<input type="submit">
 			</form>
-			<map><area href="http://dddddddddddddddddddddddddddddddddddddddddddddddddddddddd.onion/area"></map>
-		</body></html>`)
+			<map><area href="http://%s/area"></map>
+		</body></html>`, testOnionHostA, testOnionHostB, testOnionHostC, testOnionHostD)
 	}))
 	defer server.Close()
 
@@ -101,10 +101,10 @@ func TestScrapePageExtraLinkSources(t *testing.T) {
 	}
 
 	wantURLs := []string{
-		"http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad.onion/canon",
-		"http://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbd.onion/redir",
-		"http://cccccccccccccccccccccccccccccccccccccccccccccccccccccccd.onion/submit",
-		"http://dddddddddddddddddddddddddddddddddddddddddddddddddddddddd.onion/area",
+		"http://" + testOnionHostA + "/canon",
+		"http://" + testOnionHostB + "/redir",
+		"http://" + testOnionHostC + "/submit",
+		"http://" + testOnionHostD + "/area",
 	}
 
 	found := make(map[string]bool)

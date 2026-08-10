@@ -3,9 +3,12 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
+
+const apiTestOnionHost = "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion"
 
 // ── CrawlLimiter ──────────────────────────────────────────────────────────────
 
@@ -74,9 +77,9 @@ func TestCrawlLimiter_MaxBucketsRejectsNew(t *testing.T) {
 
 func TestIsValidOnionURL_ValidV3(t *testing.T) {
 	valid := []string{
-		"http://facebookwkhpilnemxj7asber7cyc673hlcrbjnoa7iwmqrxyqqipcid.onion",
-		"https://facebookwkhpilnemxj7asber7cyc673hlcrbjnoa7iwmqrxyqqipcid.onion",
-		"http://facebookwkhpilnemxj7asber7cyc673hlcrbjnoa7iwmqrxyqqipcid.onion/path?q=1",
+		"http://" + apiTestOnionHost,
+		"https://" + apiTestOnionHost,
+		"http://" + apiTestOnionHost + "/path?q=1",
 	}
 	for _, u := range valid {
 		if !IsValidOnionURL(u) {
@@ -89,11 +92,14 @@ func TestIsValidOnionURL_Invalid(t *testing.T) {
 	invalid := []string{
 		"",
 		"http://google.com",
-		"ftp://facebookwkhpilnemxj7asber7cyc673hlcrbjnoa7iwmqrxyqqipcid.onion",
-		"http://facebookwkhpilnemxj7asber7cyc673hlcrbjnoa7iwmqrxyqqipcid.onion:99999",
+		"ftp://" + apiTestOnionHost,
+		"http://" + apiTestOnionHost + ":99999",
+		"http://" + apiTestOnionHost + ":8080",
+		"http://user:secret@" + apiTestOnionHost + "/",
+		"http://ag6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion/",
 		"http://short.onion",
 		"javascript:alert(1)",
-		"http://facebookwkhpilnemxj7asber7cyc673hlcrbjnoa7iwmqrxyqqipcid.onion.evil.com",
+		"http://" + apiTestOnionHost + ".evil.com",
 	}
 	for _, u := range invalid {
 		if IsValidOnionURL(u) {
@@ -287,8 +293,8 @@ func TestValidatePassword_ThreeCategories(t *testing.T) {
 // ── NormalizeOnionURL ─────────────────────────────────────────────────────────
 
 func TestNormalizeOnionURL_LowercasesSchemeAndHost(t *testing.T) {
-	in := "HTTP://FacebookWkhpilnemxj7asber7cyc673hlcrbjnoa7iwmqrxyqqipcid.ONION/Path"
-	want := "http://facebookwkhpilnemxj7asber7cyc673hlcrbjnoa7iwmqrxyqqipcid.onion/Path"
+	in := "HTTP://" + strings.ToUpper(apiTestOnionHost) + "/Path#local"
+	want := "http://" + apiTestOnionHost + "/Path"
 	if got := NormalizeOnionURL(in); got != want {
 		t.Errorf("NormalizeOnionURL = %q, want %q", got, want)
 	}

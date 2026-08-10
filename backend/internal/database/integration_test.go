@@ -3,8 +3,11 @@ package database
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -13,6 +16,12 @@ import (
 // packages take this same Postgres advisory lock so their test runs cannot
 // overlap on a shared TEST_DATABASE_URL. Keep the two values identical.
 const testDBAdvisoryLock = 0x0170_9105
+
+const (
+	testURLA = "http://pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion/"
+	testURLB = "http://sp3k262uwy4r2k3ycr5awluarykdpag6a7y33jxop4cs2lu5uz5sseqd.onion/"
+	testURLC = "http://xa4r2iadxm55fbnqgwwi5mymqdcofiu3w6rpbtqn7b2dyn7mgwj64jyd.onion/"
+)
 
 func lockSharedTestDatabase(t *testing.T, conn *sql.DB) {
 	t.Helper()
@@ -96,12 +105,12 @@ func TestGetNextPendingNode_FairAcrossUsers(t *testing.T) {
 	b := mustUser(t, db, "b@example.com")
 
 	for i := 0; i < 4; i++ {
-		url := "http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad.onion/" + string(rune('a'+i))
+		url := testURLA + string(rune('a'+i))
 		if err := db.EnqueueURL(url, 0, a); err != nil {
 			t.Fatalf("enqueue A: %v", err)
 		}
 	}
-	if err := db.EnqueueURL("http://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbd.onion/", 0, b); err != nil {
+	if err := db.EnqueueURL(testURLB, 0, b); err != nil {
 		t.Fatalf("enqueue B: %v", err)
 	}
 
@@ -147,7 +156,7 @@ func TestGetNextPendingNode_PerTenantClaim(t *testing.T) {
 	a := mustUser(t, db, "a@example.com")
 	b := mustUser(t, db, "b@example.com")
 
-	const shared = "http://cccccccccccccccccccccccccccccccccccccccccccccccccccccccd.onion/"
+	const shared = testURLC
 	if err := db.EnqueueURL(shared, 0, a); err != nil {
 		t.Fatalf("enqueue A: %v", err)
 	}
@@ -186,10 +195,10 @@ func TestGetStats_AdminSeesAllPendingNodes(t *testing.T) {
 	admin := mustUser(t, db, "admin@example.com")
 	user := mustUser(t, db, "user@example.com")
 
-	if err := db.EnqueueURL("http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad.onion/", 0, admin); err != nil {
+	if err := db.EnqueueURL(testURLA, 0, admin); err != nil {
 		t.Fatalf("enqueue admin: %v", err)
 	}
-	if err := db.EnqueueURL("http://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbd.onion/", 0, user); err != nil {
+	if err := db.EnqueueURL(testURLB, 0, user); err != nil {
 		t.Fatalf("enqueue user: %v", err)
 	}
 
@@ -207,6 +216,157 @@ func TestGetStats_AdminSeesAllPendingNodes(t *testing.T) {
 	}
 	if userStats.PendingNodes != 1 {
 		t.Fatalf("user pending nodes = %d, want 1", userStats.PendingNodes)
+	}
+}
+
+func TestGraphMLEdgesNeverCrossTenantNodeIDs(t *testing.T) {
+	db := newTestDB(t)
+	a := mustUser(t, db, "graph-a@example.com")
+	b := mustUser(t, db, "graph-b@example.com")
+
+	for _, uid := range []int{a, b} {
+		if _, err := db.SaveNode(testURLA, "source", "", 200, "completed", "{}", "source", "wiki", uid); err != nil {
+			t.Fatalf("SaveNode source for user %d: %v", uid, err)
+		}
+		if _, err := db.SaveNode(testURLB, "target", "", 200, "completed", "{}", "target", "wiki", uid); err != nil {
+			t.Fatalf("SaveNode target for user %d: %v", uid, err)
+		}
+		if err := db.SaveEdge(testURLA, testURLB, 1, uid); err != nil {
+			t.Fatalf("SaveEdge for user %d: %v", uid, err)
+		}
+	}
+
+	ids := func(uid int, rawURL string) int {
+		t.Helper()
+		var id int
+		if err := db.Conn.QueryRow(`SELECT id FROM nodes WHERE user_id=$1 AND url=$2`, uid, rawURL).Scan(&id); err != nil {
+			t.Fatalf("node id for user %d: %v", uid, err)
+		}
+		return id
+	}
+	aSource, aTarget := ids(a, testURLA), ids(a, testURLB)
+	bSource, bTarget := ids(b, testURLA), ids(b, testURLB)
+
+	var userEdges []GraphMLEdge
+	if err := db.ExportGraphMLEdges(context.Background(), a, false, func(edge GraphMLEdge) error {
+		userEdges = append(userEdges, edge)
+		return nil
+	}); err != nil {
+		t.Fatalf("user GraphML edges: %v", err)
+	}
+	if len(userEdges) != 1 || userEdges[0] != (GraphMLEdge{SourceID: aSource, TargetID: aTarget}) {
+		t.Fatalf("user export crossed tenant boundary: %+v", userEdges)
+	}
+
+	allowed := map[GraphMLEdge]bool{
+		{SourceID: aSource, TargetID: aTarget}: true,
+		{SourceID: bSource, TargetID: bTarget}: true,
+	}
+	var adminEdges []GraphMLEdge
+	if err := db.ExportGraphMLEdges(context.Background(), a, true, func(edge GraphMLEdge) error {
+		adminEdges = append(adminEdges, edge)
+		return nil
+	}); err != nil {
+		t.Fatalf("admin GraphML edges: %v", err)
+	}
+	if len(adminEdges) != len(allowed) {
+		t.Fatalf("admin export returned %d edges, want %d: %+v", len(adminEdges), len(allowed), adminEdges)
+	}
+	for _, edge := range adminEdges {
+		if !allowed[edge] {
+			t.Fatalf("admin export synthesized a cross-tenant edge: %+v", edge)
+		}
+	}
+}
+
+func TestOnionValidationAndDomainWideBlacklist(t *testing.T) {
+	db := newTestDB(t)
+	uid := mustUser(t, db, "queue@example.com")
+
+	badChecksum := "http://ag6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion/"
+	if err := db.EnqueueURL(badChecksum, 0, uid); !errors.Is(err, ErrInvalidOnionURL) {
+		t.Fatalf("bad checksum enqueue error = %v, want ErrInvalidOnionURL", err)
+	}
+	if err := db.EnqueueURL("http://user:secret@"+strings.TrimPrefix(testURLA, "http://"), 0, uid); !errors.Is(err, ErrInvalidOnionURL) {
+		t.Fatalf("userinfo enqueue error = %v, want ErrInvalidOnionURL", err)
+	}
+
+	host := strings.TrimSuffix(strings.TrimPrefix(testURLA, "http://"), "/")
+	if err := db.AddBlacklist(host + ":443"); err != nil {
+		t.Fatalf("AddBlacklist canonical port: %v", err)
+	}
+	blocked, err := db.IsDomainBlacklisted(host + ":80")
+	if err != nil || !blocked {
+		t.Fatalf("domain-wide blacklist lookup: blocked=%v err=%v", blocked, err)
+	}
+	if err := db.EnqueueURL(testURLA+"private", 0, uid); !errors.Is(err, ErrBlacklisted) {
+		t.Fatalf("blacklisted enqueue error = %v, want ErrBlacklisted", err)
+	}
+
+	// A simultaneous enqueue and block must never leave a crawlable row behind,
+	// regardless of which transaction acquires the per-domain lock first.
+	hostC := strings.TrimSuffix(strings.TrimPrefix(testURLC, "http://"), "/")
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	go func() {
+		<-start
+		results <- db.EnqueueURL(testURLC, 0, uid)
+	}()
+	go func() {
+		<-start
+		results <- db.AddBlacklist(hostC)
+	}()
+	close(start)
+	for i := 0; i < 2; i++ {
+		if err := <-results; err != nil && !errors.Is(err, ErrBlacklisted) {
+			t.Fatalf("concurrent blacklist/enqueue: %v", err)
+		}
+	}
+	var crawlable int
+	if err := db.Conn.QueryRow(`
+		SELECT COUNT(*) FROM nodes WHERE user_id=$1 AND url=$2 AND processing_status != 'blocked'
+	`, uid, testURLC).Scan(&crawlable); err != nil {
+		t.Fatalf("count crawlable rows: %v", err)
+	}
+	if crawlable != 0 {
+		t.Fatal("enqueue/blacklist race left a crawlable node behind")
+	}
+}
+
+func TestCreateRegisteredUserBootstrapsOnlyOneAdmin(t *testing.T) {
+	db := newTestDB(t)
+	emails := []string{"bootstrap-a@example.com", "bootstrap-b@example.com"}
+	errCh := make(chan error, len(emails))
+	var wg sync.WaitGroup
+	for _, emailAddress := range emails {
+		emailAddress := emailAddress
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := db.CreateRegisteredUser(emailAddress, "hash", "token-"+emailAddress, emailAddress)
+			errCh <- err
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("CreateRegisteredUser: %v", err)
+		}
+	}
+
+	var admins, users int
+	if err := db.Conn.QueryRow(`
+		SELECT COUNT(*) FILTER (WHERE role='admin'), COUNT(*) FILTER (WHERE role='user')
+		FROM users WHERE email IN ($1, $2)
+	`, emails[0], emails[1]).Scan(&admins, &users); err != nil {
+		t.Fatalf("count bootstrap roles: %v", err)
+	}
+	if admins != 1 || users != 1 {
+		t.Fatalf("bootstrap roles: admins=%d users=%d, want 1 and 1", admins, users)
+	}
+	if _, err := db.CreateRegisteredUser(emails[0], "hash", "new-token", emails[0]); !errors.Is(err, ErrEmailInUse) {
+		t.Fatalf("duplicate registration error = %v, want ErrEmailInUse", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"log/slog"
@@ -64,17 +65,6 @@ func (d *deps) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Default role: user. Admin bootstrap is controlled via ADMIN_EMAIL and is
-	// only allowed if no admin exists yet in the system.
-	role := "user"
-	adminEmail := database.NormalizeEmail(d.cfg.AdminEmail)
-	if adminEmail != "" && req.Email == adminEmail {
-		hasAdmin, _ := d.cfg.DB.HasAnyAdmin()
-		if !hasAdmin {
-			role = "admin"
-		}
-	}
-
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {
 		WriteJSONError(w, http.StatusBadRequest, "Password cannot be processed")
@@ -82,10 +72,16 @@ func (d *deps) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	token := auth.GenerateVerificationToken()
 
-	if err := d.cfg.DB.CreateUser(req.Email, hash, role, token); err != nil {
-		slog.InfoContext(ctx, "register_fail", "ip", ip, "email", req.Email, "err", err)
+	role, err := d.cfg.DB.CreateRegisteredUser(req.Email, hash, token, d.cfg.AdminEmail)
+	if err != nil {
 		d.logAuthEvent("register_fail", req.Email, ip)
-		WriteJSONError(w, http.StatusBadRequest, "Error: email already in use or invalid data")
+		if errors.Is(err, database.ErrEmailInUse) {
+			slog.InfoContext(ctx, "register_conflict", "ip", ip, "email", req.Email)
+			WriteJSONError(w, http.StatusBadRequest, "Error: email already in use or invalid data")
+			return
+		}
+		slog.ErrorContext(ctx, "register_failed", "ip", ip, "email", req.Email, "err", err)
+		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
 
