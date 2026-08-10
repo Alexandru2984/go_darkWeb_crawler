@@ -191,7 +191,9 @@ paths:
 
   /api/auth/verify:
     get:
-      summary: Email-verification confirmation page (does not consume the token)
+      deprecated: true
+      summary: Legacy email-verification page for links issued before fragment-token migration
+      description: New links use /verify-account#token=... so the token is never sent in an HTTP URL.
       parameters:
         - in: query
           name: token
@@ -209,7 +211,11 @@ paths:
               type: object
               properties: { token: { type: string } }
       responses:
-        '200': { description: HTML success page, content: { text/html: {} } }
+        '200':
+          description: Success page, or JSON when Accept includes application/json
+          content:
+            text/html: {}
+            application/json: { schema: { $ref: '#/components/schemas/Message' } }
         '400': { description: Token invalid, expired or already used }
 
   /api/auth/forgot:
@@ -231,7 +237,7 @@ paths:
   /api/auth/reset:
     post:
       summary: Set a new password using a reset token
-      description: On success, all existing sessions for the account are revoked.
+      description: New links carry the token in /reset-password#token=... and the browser POSTs it here in JSON. On success, all existing sessions for the account are revoked.
       requestBody:
         required: true
         content:
@@ -310,11 +316,18 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
 
   /api/node:
-    get:
+    post:
       summary: Full detail of a single node by URL
       security: [{ bearerAuth: [] }]
-      parameters:
-        - { in: query, name: url, required: true, schema: { type: string } }
+      description: The URL is carried in JSON, never in browser/proxy request URLs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties: { url: { type: string, maxLength: 2048 } }
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/NodeDetail' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -332,12 +345,20 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
 
   /api/search:
-    get:
+    post:
       summary: Full-text search over titles and content
       security: [{ bearerAuth: [] }]
-      parameters:
-        - { in: query, name: q, required: true, schema: { type: string, maxLength: 200 } }
-        - { in: query, name: category, schema: { type: string } }
+      description: Search terms are carried in JSON, never in browser/proxy request URLs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [q]
+              properties:
+                q: { type: string, maxLength: 200 }
+                category: { type: string, maxLength: 50 }
       responses:
         '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Node' } } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }

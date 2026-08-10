@@ -57,3 +57,20 @@ func TestSendVerificationEmail_ValidDevModeNoError(t *testing.T) {
 		t.Errorf("valid recipient in dev mode should not error, got: %v", err)
 	}
 }
+
+func TestAccountLinksKeepCredentialsOutOfHTTPRequests(t *testing.T) {
+	t.Setenv("VERIFY_URL_BASE", "https://example.test/")
+	const token = "0123456789abcdef0123456789abcdef"
+
+	for name, link := range map[string]string{
+		"verification": verificationLink(token),
+		"reset":        passwordResetLink(token),
+	} {
+		if strings.Contains(link, "?token=") {
+			t.Fatalf("%s link exposed the credential in a query string: %s", name, link)
+		}
+		if !strings.HasSuffix(link, "#token="+token) {
+			t.Fatalf("%s link does not keep the credential in the URL fragment: %s", name, link)
+		}
+	}
+}

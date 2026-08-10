@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 import { validateNewPassword } from '../lib/password.js'
+import { csrfHeaders } from '../lib/csrf.js'
 
 const props = defineProps({
   token: { type: String, required: true },
@@ -26,7 +27,7 @@ const submit = async () => {
   try {
     const res = await fetch('/api/auth/reset', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...csrfHeaders('POST') },
       body: JSON.stringify({ token: props.token, password: password.value }),
     })
     const data = await res.json().catch(() => ({}))

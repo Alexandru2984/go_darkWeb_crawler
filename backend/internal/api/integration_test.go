@@ -4,9 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -109,10 +109,17 @@ func mkUser(t *testing.T, db *database.DB, email, role string) (int, string) {
 }
 
 func do(t *testing.T, h http.Handler, method, target, token string) *httptest.ResponseRecorder {
+	return doWithBody(t, h, method, target, token, nil)
+}
+
+func doWithBody(t *testing.T, h http.Handler, method, target, token string, body io.Reader) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(method, target, nil)
+	req := httptest.NewRequest(method, target, body)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
@@ -139,12 +146,29 @@ func TestAuthz_NodeIsolation(t *testing.T) {
 	}
 
 	// A reads its own node → 200.
-	if rr := do(t, h, "GET", "/api/node?url="+url.QueryEscape(urlA), aTok); rr.Code != http.StatusOK {
+	if rr := doWithBody(t, h, "POST", "/api/node", aTok, strings.NewReader(`{"url":"`+urlA+`"}`)); rr.Code != http.StatusOK {
 		t.Errorf("A reading own node: got %d, want 200 (body=%s)", rr.Code, rr.Body.String())
 	}
 	// A reads B's node → 404 (not visible across tenants).
-	if rr := do(t, h, "GET", "/api/node?url="+url.QueryEscape(urlB), aTok); rr.Code != http.StatusNotFound {
+	if rr := doWithBody(t, h, "POST", "/api/node", aTok, strings.NewReader(`{"url":"`+urlB+`"}`)); rr.Code != http.StatusNotFound {
 		t.Errorf("A reading B's node: got %d, want 404 (body=%s)", rr.Code, rr.Body.String())
+	}
+	// The POST search transport retains the same tenant boundary: a query that
+	// matches both fixtures must return only A's result.
+	rr := doWithBody(t, h, "POST", "/api/search", aTok, strings.NewReader(`{"q":"secret"}`))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("A searching own nodes: got %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+	if body := rr.Body.String(); !strings.Contains(body, urlA) || strings.Contains(body, urlB) {
+		t.Errorf("search crossed tenant boundary; body=%s", body)
+	}
+	// Sensitive lookup values are body-only: the old query-string surface is
+	// intentionally absent so browser/proxy URL logs cannot retain them.
+	if rr := do(t, h, "GET", "/api/node?url=must-not-appear-in-a-request-url", aTok); rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("legacy GET node lookup: got %d, want 405", rr.Code)
+	}
+	if rr := do(t, h, "GET", "/api/search?q=must-not-appear-in-a-request-url", aTok); rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("legacy GET search: got %d, want 405", rr.Code)
 	}
 }
 

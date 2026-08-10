@@ -2,25 +2,18 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Network } from 'vis-network'
 import { CATEGORY_COLORS, CATEGORY_LABELS, allCategories } from './lib/categories.js'
+import { csrfHeaders } from './lib/csrf.js'
+import { tokenFromFragment } from './lib/linkTokens.js'
 import ResetPassword from './components/ResetPassword.vue'
+import VerifyAccount from './components/VerifyAccount.vue'
 
-// Password-reset deep link: emails point at /reset-password?token=… . When that
-// path is loaded we render the standalone reset view instead of the dashboard.
-const resetToken = ref(
-  (() => {
-    try {
-      const u = new URL(window.location.href)
-      if (u.pathname === '/reset-password') {
-        const token = u.searchParams.get('token') || ''
-        if (token) window.history.replaceState({}, document.title, '/reset-password')
-        return token
-      }
-    } catch {
-      /* ignore */
-    }
-    return ''
-  })(),
-)
+// Email credentials arrive in a URL fragment, which browsers never transmit to
+// Cloudflare/nginx. Consume it once, then replace the current history entry.
+const resetToken = ref(tokenFromFragment(window.location.href, '/reset-password'))
+const verificationToken = ref(tokenFromFragment(window.location.href, '/verify-account'))
+if (resetToken.value || verificationToken.value) {
+  window.history.replaceState({}, document.title, window.location.pathname)
+}
 
 const status = ref({ status: 'offline', nodes_crawled: 0, pending_nodes: 0, db_connected: false, active_workers: 0 })
 const nodes = ref([])
@@ -36,6 +29,8 @@ const message = ref('')
 const messageType = ref('info') // 'info' | 'error'
 const toast = ref('')
 let toastTimer = null
+let searchTimer = null
+let searchController = null
 
 const graphContainer = ref(null)
 let network = null
@@ -61,16 +56,6 @@ const authMessage = ref('')
 // backend requires it echoed back in a header on state-changing requests. A
 // cross-site attacker can make the browser send the session cookie but cannot
 // read this value to reproduce the header.
-const readCookie = (name) => {
-  const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'))
-  return match ? decodeURIComponent(match[1]) : ''
-}
-
-const csrfHeaders = (method) => {
-  if (!method || method.toUpperCase() === 'GET') return {}
-  const token = readCookie('os_csrf')
-  return token ? { 'X-CSRF-Token': token } : {}
-}
 
 // apiFetch wraps fetch so a 401 drops the UI back to the login form instead of
 // leaving it believing there is a session while every call fails.
@@ -267,15 +252,26 @@ const fetchEdges = async () => {
 }
 
 const performSearch = async () => {
-  if (!searchQuery.value.trim()) {
+  const query = searchQuery.value.trim()
+  if (searchTimer) clearTimeout(searchTimer)
+  searchController?.abort()
+  searchController = null
+  if (!query) {
     isSearching.value = false
     fetchNodes()
     return
   }
-  
+
+  const controller = new AbortController()
+  searchController = controller
   isSearching.value = true
   try {
-    const res = await apiFetch(`${API_BASE}/search?q=${encodeURIComponent(searchQuery.value)}`)
+    const res = await apiFetch(`${API_BASE}/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q: query }),
+      signal: controller.signal,
+    })
     if (res.ok) {
       nodes.value = await res.json() || []
     } else {
@@ -283,10 +279,22 @@ const performSearch = async () => {
       messageType.value = 'error'
     }
   } catch (err) {
+    if (err.name === 'AbortError') return
     console.error('Search error:', err)
     message.value = 'Search connection error.'
     messageType.value = 'error'
+  } finally {
+    if (searchController === controller) searchController = null
   }
+}
+
+const scheduleSearch = () => {
+  if (searchTimer) clearTimeout(searchTimer)
+  if (!searchQuery.value.trim()) {
+    performSearch()
+    return
+  }
+  searchTimer = setTimeout(performSearch, 350)
 }
 
 const startCrawl = async () => {
@@ -437,6 +445,7 @@ watch(isGraphView, async (newVal) => {
 })
 
 onMounted(async () => {
+  if (resetToken.value || verificationToken.value) return
   // Resolve the session before fetching anything: the token is no longer
   // readable from this side, so whether we are logged in is only knowable
   // after the server answers.
@@ -452,12 +461,15 @@ onMounted(async () => {
 onUnmounted(() => {
   clearInterval(statusInterval)
   if (toastTimer) clearTimeout(toastTimer)
+  if (searchTimer) clearTimeout(searchTimer)
+  searchController?.abort()
   if (network) network.destroy()
 })
 </script>
 
 <template>
   <ResetPassword v-if="resetToken" :token="resetToken" />
+  <VerifyAccount v-else-if="verificationToken" :token="verificationToken" />
   <div v-else class="app-wrapper">
     <div class="container">
       <header>
@@ -556,7 +568,7 @@ onUnmounted(() => {
                 type="text" 
                 placeholder="Search crawled page content..." 
                 @keyup.enter="performSearch"
-                @input="performSearch"
+                @input="scheduleSearch"
               />
             </div>
             <div class="category-filter">

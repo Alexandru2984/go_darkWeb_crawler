@@ -69,9 +69,9 @@ func New(cfg Config) http.Handler {
 		r.Post("/api/auth/logout-all", d.handleLogoutAll)
 
 		r.Get("/api/nodes", d.handleNodes)
-		r.Get("/api/node", d.handleNode)
+		r.Post("/api/node", d.handleNode)
 		r.Get("/api/edges", d.handleEdges)
-		r.Get("/api/search", d.handleSearch)
+		r.Post("/api/search", d.handleSearch)
 
 		r.Post("/api/crawl", d.handleCrawl)
 		r.Post("/api/recrawl", d.handleRecrawl)

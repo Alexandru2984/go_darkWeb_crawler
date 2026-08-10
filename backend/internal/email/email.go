@@ -2,7 +2,6 @@ package email
 
 import (
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/mail"
 	"net/smtp"
@@ -88,9 +87,17 @@ func stripCRLF(s string) string {
 	return strings.ReplaceAll(s, "\n", "")
 }
 
+func verificationLink(token string) string {
+	return verifyBaseURL() + "/verify-account#token=" + token
+}
+
+func passwordResetLink(token string) string {
+	return verifyBaseURL() + "/reset-password#token=" + token
+}
+
 // SendVerificationEmail sends an account-confirmation link (valid 24h).
 func SendVerificationEmail(to, token string) error {
-	link := fmt.Sprintf("%s/api/auth/verify?token=%s", verifyBaseURL(), token)
+	link := verificationLink(token)
 	body := "Hello,\r\n\r\nClick the link below to confirm your account:\r\n" +
 		stripCRLF(link) + "\r\n\r\nThis link expires in 24 hours."
 	return sendMail(to, "Onion Spider account confirmation", body)
@@ -100,7 +107,7 @@ func SendVerificationEmail(to, token string) error {
 // at the SPA reset page, which collects a new password and POSTs to
 // /api/auth/reset with the token.
 func SendPasswordResetEmail(to, token string) error {
-	link := fmt.Sprintf("%s/reset-password?token=%s", verifyBaseURL(), token)
+	link := passwordResetLink(token)
 	body := "Hello,\r\n\r\nWe received a request to reset your Onion Spider password.\r\n" +
 		"Open the link below to choose a new password:\r\n" +
 		stripCRLF(link) + "\r\n\r\nThis link expires in 1 hour. " +

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 )
 
 func (d *deps) handleNodes(w http.ResponseWriter, r *http.Request) {
@@ -20,13 +21,19 @@ func (d *deps) handleNodes(w http.ResponseWriter, r *http.Request) {
 
 func (d *deps) handleNode(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	nodeURL := r.URL.Query().Get("url")
-	if nodeURL == "" {
-		WriteJSONError(w, http.StatusBadRequest, "Parameter 'url' is required")
+	var req struct {
+		URL string `json:"url"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 2300)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		WriteJSONError(w, http.StatusBadRequest, "Invalid body")
 		return
 	}
-	if len(nodeURL) > 2048 {
-		WriteJSONError(w, http.StatusBadRequest, "Parameter 'url' exceeds maximum length")
+	nodeURL := NormalizeOnionURL(req.URL)
+	if nodeURL == "" {
+		WriteJSONError(w, http.StatusBadRequest, "A valid onion URL is required")
 		return
 	}
 	node, err := d.cfg.DB.GetNodeByURL(nodeURL, GetUserID(r), IsAdmin(r))
@@ -61,16 +68,31 @@ func (d *deps) handleSearch(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Rate limit exceeded — max 60 searches/minute")
 		return
 	}
-	q := r.URL.Query().Get("q")
+	var req struct {
+		Query    string `json:"q"`
+		Category string `json:"category,omitempty"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		WriteJSONError(w, http.StatusBadRequest, "Invalid body")
+		return
+	}
+	q := strings.TrimSpace(req.Query)
 	if q == "" {
-		WriteJSONError(w, http.StatusBadRequest, "Parameter 'q' is required")
+		WriteJSONError(w, http.StatusBadRequest, "Search query is required")
 		return
 	}
 	if len(q) > 200 {
 		WriteJSONError(w, http.StatusBadRequest, "Query too long (max 200 characters)")
 		return
 	}
-	category := r.URL.Query().Get("category")
+	category := req.Category
+	if len(category) > 50 {
+		WriteJSONError(w, http.StatusBadRequest, "Category too long")
+		return
+	}
 	nodes, err := d.cfg.DB.SearchNodes(q, category, GetUserID(r), IsAdmin(r))
 	if err != nil {
 		slog.ErrorContext(r.Context(), "search_failed", "q", q, "err", err)
