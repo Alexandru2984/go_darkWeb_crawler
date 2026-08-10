@@ -52,6 +52,23 @@ Remaining production gate:
   after preserving any incident evidence that is actually required.
 - [ ] Test Alertmanager delivery, backup failure notification and the runbook.
 
+### Deployed and verified on 2026-08-10
+
+Release `ee271ed`, deployed after a fresh encrypted backup, with the previous
+binary and both nginx configs preserved as a rollback artifact.
+
+Verified against production rather than assumed:
+
+- Clearnet 200, onion 200, direct-origin request refused before HTTP.
+- Onion login: twelve consecutive failures against twelve distinct addresses all
+  returned 401. Before this release the sixth would have returned 429, because
+  every Tor visitor shared one per-address bucket.
+- Clearnet login: five attempts, then 429 — the per-address limit is unchanged.
+- The per-account lockout still fires independently: five failures against the
+  *same* address return 429 on either path. That control, not the address, is
+  what bounds an attack on a specific account.
+- Probe addresses appear in the journal only as `ref:` HMAC pseudonyms.
+
 Operator action, not reachable from this repository:
 
 - [ ] Disable Cloudflare Browser Insights/analytics and NEL reporting for this
