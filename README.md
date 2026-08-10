@@ -91,6 +91,26 @@ Security and production planning:
 - [`docs/incident-response.md`](docs/incident-response.md)
 - [`docs/production-roadmap.md`](docs/production-roadmap.md)
 
+## 📱 Interface
+
+The dashboard is a routed Vue 3 application, mobile-first from 320 px:
+
+- **Routes are code-split.** `vis-network` is roughly three quarters of the old
+  bundle and used to be downloaded by everyone who merely opened the page. It
+  now lives in a chunk loaded only when a signed-in user opens the network map,
+  which took the login route from ~187 kB gzip to ~43 kB — the difference is
+  felt most over Tor.
+- **The dense table becomes cards below 900 px** rather than scrolling sideways
+  or dropping columns; every row keeps its category, status and response code.
+- **Controls are built to a 44 px touch target**, inputs stay at 16 px so iOS
+  does not zoom the page on focus, and the navigation collapses into a drawer.
+- **Accessibility:** landmarks, a skip link, real labels bound to every field,
+  `role="alert"` on feedback, a live region for crawler status, visible focus
+  rings, and a stated text equivalent for the graph canvas (the list view),
+  which is not keyboard-operable.
+- **Account security screen** for enrolling two-factor authentication, storing
+  recovery codes, and reviewing or signing out individual devices.
+
 ## 🚀 Tech Stack
 
 - **Backend:** Go (Golang)

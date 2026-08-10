@@ -1,37 +1,63 @@
-/* Global base for the Onion Spider dashboard.
+/* Design tokens and document shell for the Onion Spider dashboard.
  *
- * Everything here applies to the real app. Component-scoped rules live in the
- * respective .vue files; this file owns design tokens, the document shell, and
- * the responsive rules that have to cross component boundaries.
+ * This file owns the design system: tokens, the document shell, base element
+ * styling and the handful of primitives that are shared across every view.
+ * Component-specific rules live in the respective .vue files.
  *
  * The app is dark-only by design — it renders a network graph and status
- * colours (red/green/amber) that are tuned for a dark canvas, so there is no
- * light theme to fall back to. color-scheme is pinned accordingly so form
- * controls and scrollbars are rendered dark by the browser rather than
- * flashing white.
+ * colours (red/green/amber) tuned for a dark canvas, so there is no light
+ * theme to fall back to. color-scheme is pinned accordingly so form controls
+ * and scrollbars are rendered dark by the browser rather than flashing white.
  */
 
 :root {
+  /* ── Surfaces ─────────────────────────────────────────────────────────── */
   --bg: #0a0a0a;
   --surface: #111;
-  --surface-2: #151515;
-  --border: #222;
+  --surface-2: #161616;
+  --surface-3: #1d1d1d;
+  --border: #242424;
   --border-strong: #333;
 
-  --text: #e0e0e0;
-  --text-dim: #888;
-  --text-faint: #555;
+  /* ── Text ─────────────────────────────────────────────────────────────── */
+  --text: #e8e8e8;
+  --text-dim: #9a9a9a;
+  --text-faint: #6a6a6a;
 
-  --accent: #ff3333;
-  --accent-dim: rgba(255, 51, 51, 0.4);
-  --link: #4da6ff;
-  --ok: #00ff00;
+  /* ── Accents ──────────────────────────────────────────────────────────── */
+  --accent: #ff3b3b;
+  --accent-hover: #ff5c5c;
+  --accent-dim: rgba(255, 59, 59, 0.35);
+  --link: #62b0ff;
+  --ok: #3ddc84;
+  --warn: #ffc857;
+  --danger: #ff6b6b;
 
+  /* ── Spacing scale ────────────────────────────────────────────────────── */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+
+  /* ── Radii and elevation ──────────────────────────────────────────────── */
+  --radius-sm: 8px;
   --radius: 12px;
   --radius-lg: 16px;
+  --radius-pill: 999px;
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 8px 40px rgba(0, 0, 0, 0.55);
 
-  --sans: 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: 'JetBrains Mono', 'Fira Code', ui-monospace, Consolas, monospace;
+  /* ── Type ─────────────────────────────────────────────────────────────── */
+  --sans: "Inter", system-ui, "Segoe UI", Roboto, sans-serif;
+  --mono: "JetBrains Mono", "Fira Code", ui-monospace, Consolas, monospace;
+
+  /* Minimum comfortable hit area. WCAG 2.2 target size (minimum) is 24px, but
+   * a thumb on a phone wants considerably more, so controls are built to 44px
+   * and only shrink for genuinely secondary affordances. */
+  --tap: 44px;
 
   /* Single source of truth for the content width. The dashboard's table and
    * graph need room, so this is wider than a text layout would be. */
@@ -63,40 +89,212 @@ body {
 }
 
 #app {
-  width: 100%;
-  max-width: var(--content-max);
-  margin: 0 auto;
   min-height: 100svh;
   display: flex;
   flex-direction: column;
-  /* text-align:center and border-inline used to live here, inherited from the
-   * Vite starter template. Both were wrong for a dashboard: the first
-   * centre-aligned every table cell and paragraph, the second drew stray
-   * vertical rules down the page. */
   text-align: left;
 }
 
+/* ── Base elements ──────────────────────────────────────────────────────── */
+
+h1,
+h2,
+h3 {
+  line-height: 1.25;
+  margin: 0;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+a {
+  color: var(--link);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
 /* Wide content must scroll within its own box so the page body never gains a
- * horizontal scrollbar. App.vue marks the node table with .table-responsive;
- * the class was in the markup but had no rule behind it, so on a phone the
- * six-column table pushed the whole document sideways. */
+ * horizontal scrollbar. */
 .table-responsive {
   width: 100%;
   overflow-x: auto;
-  /* Momentum scrolling on iOS, and a hint that there is more to the right. */
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
 }
 
-/* Keep focus visible for keyboard users — several controls in App.vue are
- * styled <button>s and <span>s that would otherwise lose the default ring. */
+/* Keep focus visible for keyboard users — many controls are styled <button>s
+ * that would otherwise lose the default ring. */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+  border-radius: 2px;
 }
 
-/* Respect users who ask for less motion: the crawling status pill pulses and
- * the toast slides. */
+/* Visible only once focused: lets a keyboard user jump the navigation. */
+.skip-link {
+  position: absolute;
+  left: var(--s-3);
+  top: calc(-1 * var(--s-7));
+  z-index: 100;
+  padding: var(--s-3) var(--s-4);
+  background: var(--accent);
+  color: #fff;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  transition: top 0.15s ease;
+}
+.skip-link:focus {
+  top: var(--s-3);
+}
+
+/* Screen-reader-only text that still carries meaning for assistive tech. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── Shared primitives ──────────────────────────────────────────────────── */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--s-5);
+  box-shadow: var(--shadow);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.muted {
+  color: var(--text-dim);
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+/* Inputs. Font-size stays at 16px on small screens: anything smaller makes
+ * iOS Safari zoom the whole page when the field receives focus. */
+.field {
+  width: 100%;
+  min-height: var(--tap);
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: #070707;
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+}
+.field::placeholder {
+  color: var(--text-faint);
+}
+.field:focus-visible {
+  border-color: var(--accent);
+}
+.field[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin-bottom: var(--s-2);
+}
+
+/* Buttons. Every variant keeps the 44px minimum so the same markup works on a
+ * phone without a separate mobile stylesheet. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  min-height: var(--tap);
+  padding: 0 var(--s-5);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+.btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.btn--secondary {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.btn--secondary:hover:not(:disabled) {
+  background: #262626;
+}
+.btn--ghost {
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--text-dim);
+}
+.btn--ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.btn--danger {
+  background: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.btn--danger:hover:not(:disabled) {
+  background: rgba(255, 107, 107, 0.12);
+}
+.btn--block {
+  width: 100%;
+}
+.btn--sm {
+  min-height: 36px;
+  padding: 0 var(--s-3);
+  font-size: 0.85rem;
+}
+
+/* Feedback messages. role="alert" carries the urgency for assistive tech; the
+ * colour is only a reinforcement, never the sole signal. */
+.msg {
+  margin: var(--s-3) 0 0;
+  font-size: 0.9rem;
+}
+.msg--error {
+  color: var(--danger);
+}
+.msg--ok {
+  color: var(--ok);
+}
+.msg--info {
+  color: var(--text-dim);
+}
+
+/* Respect users who ask for less motion. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
