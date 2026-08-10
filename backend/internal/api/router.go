@@ -73,6 +73,13 @@ func New(cfg Config) http.Handler {
 		r.Post("/api/auth/logout", d.handleLogout)
 		r.Post("/api/auth/logout-all", d.handleLogoutAll)
 
+		// Second-factor management. Outside the admin group on purpose: an
+		// admin who must enrol has to be able to reach these.
+		r.Get("/api/auth/totp", d.handleTOTPStatus)
+		r.Post("/api/auth/totp/setup", d.handleTOTPSetup)
+		r.Post("/api/auth/totp/confirm", d.handleTOTPConfirm)
+		r.Post("/api/auth/totp/disable", d.handleTOTPDisable)
+
 		r.Get("/api/nodes", d.handleNodes)
 		r.Post("/api/node", d.handleNode)
 		r.Get("/api/edges", d.handleEdges)
@@ -91,7 +98,7 @@ func New(cfg Config) http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(RequireAuth)
 		r.Use(LoadDBRole(cfg.DB))
-		r.Use(RequireAdminDB)
+		r.Use(RequireAdminDB(cfg.DB, cfg.RequireAdminMFA))
 
 		r.Get("/api/blacklist", d.handleBlacklistList)
 		r.Post("/api/blacklist", d.handleBlacklistAdd)

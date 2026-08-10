@@ -124,18 +124,38 @@ func LoadDBRole(db *database.DB) func(http.Handler) http.Handler {
 
 // RequireAdminDB blocks requests whose DB-loaded role (set by LoadDBRole) is
 // not 'admin'. MUST be preceded by LoadDBRole in the middleware chain.
-func RequireAdminDB(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if GetUserID(r) == 0 {
-			WriteJSONError(w, http.StatusUnauthorized, "Authentication required")
-			return
-		}
-		if !IsAdmin(r) {
-			WriteJSONError(w, http.StatusForbidden, "Admin role required")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+//
+// When requireMFA is set it additionally refuses administrators who have not
+// enrolled a second factor. The gate is on administrative endpoints only: the
+// account still works, and the enrolment endpoints are deliberately outside
+// this middleware, so the way to satisfy the requirement is always reachable.
+func RequireAdminDB(db *database.DB, requireMFA bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if GetUserID(r) == 0 {
+				WriteJSONError(w, http.StatusUnauthorized, "Authentication required")
+				return
+			}
+			if !IsAdmin(r) {
+				WriteJSONError(w, http.StatusForbidden, "Admin role required")
+				return
+			}
+			if requireMFA {
+				state, err := db.GetTOTPState(GetUserID(r))
+				if err != nil {
+					slog.ErrorContext(r.Context(), "admin_mfa_check_failed", "uid", GetUserID(r), "err", err)
+					WriteJSONError(w, http.StatusInternalServerError, "Internal error")
+					return
+				}
+				if !state.Enabled {
+					WriteJSONError(w, http.StatusForbidden,
+						"Administrative actions require two-factor authentication. Enrol at /api/auth/totp/setup.")
+					return
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // GetUserID returns the authenticated user's ID, or 0 if no valid JWT was provided.

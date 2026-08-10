@@ -14,8 +14,14 @@ type Config struct {
 
 	AllowRegistration bool
 	AdminEmail        string
-	Workers           int
-	CORSOrigins       []string
+
+	// RequireAdminMFA gates administrative endpoints on the admin having a
+	// second factor enrolled. It does not gate ordinary use, and enrolment
+	// itself is never gated, so turning this on cannot lock an admin out of
+	// the account they need in order to comply with it.
+	RequireAdminMFA bool
+	Workers         int
+	CORSOrigins     []string
 }
 
 // deps bundles the shared state used by HTTP handlers. It is created by New().

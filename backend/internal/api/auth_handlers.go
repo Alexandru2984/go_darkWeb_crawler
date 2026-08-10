@@ -110,6 +110,10 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 		Mode     string `json:"mode,omitempty"`
+		// Code carries the second factor: either a current TOTP code or one
+		// recovery code. Absent on the first request, which is how the client
+		// discovers that a second factor is needed at all.
+		Code string `json:"code,omitempty"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1024)
 	dec := json.NewDecoder(r.Body)
@@ -172,6 +176,36 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 		d.logAuthEvent("login_unverified", req.Email, ip)
 		WriteJSONError(w, http.StatusForbidden, "Account is not yet verified")
 		return
+	}
+
+	// Second factor, checked only after the password. Answering "two-factor
+	// required" to anyone who merely guessed an email would turn this endpoint
+	// into an oracle for which accounts have it enrolled.
+	totpState, err := d.cfg.DB.GetTOTPState(user.ID)
+	if err != nil {
+		slog.ErrorContext(ctx, "totp_state_failed", "uid", user.ID, "err", err)
+		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
+		return
+	}
+	if totpState.Enabled {
+		if req.Code == "" {
+			// Not a failed login: the password was right and nothing has been
+			// spent. The client re-submits with the code.
+			writeNoStoreJSON(w, http.StatusUnauthorized, map[string]any{
+				"error":         "Two-factor code required",
+				"totp_required": true,
+			})
+			return
+		}
+		if !d.verifySecondFactor(user.ID, totpState, req.Code) {
+			d.logAuthEvent("login_fail", req.Email, ip)
+			slog.InfoContext(ctx, "login_fail", "ip", ip, "email", req.Email, "reason", "bad_second_factor")
+			writeNoStoreJSON(w, http.StatusUnauthorized, map[string]any{
+				"error":         "Invalid two-factor code",
+				"totp_required": true,
+			})
+			return
+		}
 	}
 
 	// The password was just proved correct, which is the only moment the

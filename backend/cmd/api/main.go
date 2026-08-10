@@ -204,8 +204,13 @@ func main() {
 		Engine:            engine,
 		AllowRegistration: os.Getenv("ALLOW_REGISTRATION") == "true",
 		AdminEmail:        os.Getenv("ADMIN_EMAIL"),
-		Workers:           workers,
-		CORSOrigins:       api.SplitAndTrim(corsOrigin, ","),
+		// Administrative actions require a second factor unless explicitly
+		// disabled. Defaulting to on means a fresh deployment is not quietly
+		// less protected than an operator assumes; enrolment endpoints stay
+		// reachable either way, so this cannot lock an admin out.
+		RequireAdminMFA: os.Getenv("REQUIRE_ADMIN_MFA") != "false",
+		Workers:         workers,
+		CORSOrigins:     api.SplitAndTrim(corsOrigin, ","),
 	})
 
 	// Ops endpoints live on the root mux, OUTSIDE the chi middleware stack and

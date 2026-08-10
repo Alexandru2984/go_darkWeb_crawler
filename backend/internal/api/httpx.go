@@ -66,3 +66,26 @@ func SplitAndTrim(s, sep string) []string {
 	}
 	return out
 }
+
+// decodeJSONBody reads a size-capped JSON body into dst, rejecting unknown
+// fields, and writes the 400 itself when the body is unusable. Returns false
+// when the caller should stop.
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, maxBytes int64, dst any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		WriteJSONError(w, http.StatusBadRequest, "Invalid body")
+		return false
+	}
+	return true
+}
+
+// writeNoStoreJSON sends a JSON response that must never be cached. Second-factor
+// secrets, recovery codes and session inventories are all in this category.
+func writeNoStoreJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(payload)
+}

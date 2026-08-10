@@ -68,7 +68,7 @@ func lockTestDB(t *testing.T, db *sql.DB) {
 
 // newAPI spins up the full router against a fresh, migrated, truncated Postgres
 // at $TEST_DATABASE_URL. Skips when the env var is unset.
-func newAPI(t *testing.T) (http.Handler, *database.DB) {
+func newAPI(t *testing.T, overrides ...func(*Config)) (http.Handler, *database.DB) {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
@@ -85,12 +85,22 @@ func newAPI(t *testing.T) (http.Handler, *database.DB) {
 	t.Cleanup(func() { db.Conn.Close() })
 
 	eng := crawler.NewEngine(db, "127.0.0.1:9050", 1, 1) // not Start()ed
-	h := New(Config{
+	cfg := Config{
 		DB:          db,
 		Engine:      eng,
 		CORSOrigins: []string{"http://localhost"},
-	})
-	return h, db
+	}
+	for _, apply := range overrides {
+		apply(&cfg)
+	}
+	return New(cfg), db
+}
+
+// newAPIWithConfig is newAPI with the handler configuration adjusted, for tests
+// that exercise a policy switch rather than the default posture.
+func newAPIWithConfig(t *testing.T, apply func(*Config)) (http.Handler, *database.DB) {
+	t.Helper()
+	return newAPI(t, apply)
 }
 
 // mkUser creates a user with the given role and returns (id, bearer token).

@@ -45,6 +45,13 @@ To protect the server and ensure passive browsing:
   upgraded in place on their next successful login, without a reset email and
   without signing their other sessions out. Login runs a constant-time comparison
   (and a dummy hash for unknown emails) to prevent account enumeration via timing.
+- Two-factor authentication (TOTP, RFC 6238) with ten single-use recovery
+  codes. Only code digests are stored. Each accepted code advances a per-account
+  watermark, so a code observed in transit cannot be replayed inside its
+  validity window. Administrative endpoints refuse to act for an admin without a
+  second factor enrolled — enrolment itself is never gated, so the requirement
+  can always be satisfied. Disabling it demands both the password and a current
+  code, so a stolen session cannot strip the control meant to outlast it.
 - Account lockout after repeated failed logins, plus per-recipient rate limiting
   — all auth events are written to an audit log. Authenticated requests are
   rate-limited per account rather than per address, because the onion vhost has

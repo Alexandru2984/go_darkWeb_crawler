@@ -171,6 +171,13 @@ paths:
                   enum: [cookie, bearer]
                   default: cookie
                   description: Bearer mode returns a token and does not set session cookies.
+                code:
+                  type: string
+                  description: >-
+                    Second factor, when the account has one: a current TOTP code
+                    or one single-use recovery code. Omit it on the first
+                    request; the 401 that comes back carries totp_required so
+                    the client knows to ask for one.
       responses:
         '200':
           description: OK
@@ -185,7 +192,19 @@ paths:
                   role: { type: string }
                   email: { type: string }
         '400': { description: Bad request }
-        '401': { description: Invalid credentials }
+        '401':
+          description: >-
+            Invalid credentials, or the password was correct and a second factor
+            is still needed. The two are distinguished by totp_required, which
+            is only ever returned after the password has been verified — so it
+            cannot be used to discover which accounts exist or have MFA.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  totp_required: { type: boolean }
         '403': { description: Account not verified }
         '429': { $ref: '#/components/responses/TooManyRequests' }
 
@@ -297,6 +316,97 @@ paths:
         '200': { description: All sessions revoked, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { description: Missing or invalid X-CSRF-Token (cookie-authenticated requests only) }
+
+  /api/auth/totp:
+    get:
+      summary: Second-factor status for the current account
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      responses:
+        '200':
+          description: Current state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled: { type: boolean }
+                  required: { type: boolean, description: Whether this account must enrol (administrators, when REQUIRE_ADMIN_MFA is on) }
+                  recovery_codes_remaining: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/auth/totp/setup:
+    post:
+      summary: Begin second-factor enrolment
+      description: >-
+        Stages a new secret and returns it once, with the otpauth:// URI an
+        authenticator app scans. Nothing is enforced until /confirm proves the
+        user can generate codes from it, so an abandoned enrolment cannot lock
+        the account. Refused while a second factor is already active.
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      responses:
+        '200':
+          description: Enrolment staged
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secret: { type: string }
+                  provisioning_uri: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { description: Already enabled — disable first to re-enrol }
+
+  /api/auth/totp/confirm:
+    post:
+      summary: Activate the second factor and receive recovery codes
+      description: >-
+        The recovery codes are returned exactly once; only their digests are
+        stored. The confirming code's step is recorded immediately so it cannot
+        then be replayed at login.
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties: { code: { type: string } }
+      responses:
+        '200':
+          description: Enabled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled: { type: boolean }
+                  recovery_codes: { type: array, items: { type: string } }
+                  message: { type: string }
+        '400': { description: Invalid code, or no enrolment in progress }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/auth/totp/disable:
+    post:
+      summary: Turn the second factor off
+      description: >-
+        Requires the account password and a current code (or a recovery code),
+        so a stolen session cannot remove the control intended to survive it.
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password, code]
+              properties:
+                password: { type: string }
+                code: { type: string }
+      responses:
+        '200': { description: Disabled, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
+        '400': { description: Not enabled }
+        '401': { description: Wrong password or code }
 
   /api/status:
     get:
