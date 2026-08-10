@@ -62,6 +62,12 @@ The full REST API is documented as an OpenAPI 3.0 spec at
 auth scheme and error codes. Paste it into any Swagger/Redoc viewer to browse
 it interactively.
 
+Security and production planning:
+
+- [`docs/security-threat-model.md`](docs/security-threat-model.md)
+- [`docs/incident-response.md`](docs/incident-response.md)
+- [`docs/production-roadmap.md`](docs/production-roadmap.md)
+
 ## 🚀 Tech Stack
 
 - **Backend:** Go (Golang)

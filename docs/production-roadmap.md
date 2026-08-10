@@ -1,0 +1,216 @@
+# Privacy-first production roadmap
+
+This is the implementation order, not a promise that every idea belongs in the
+product. Security and privacy gates take precedence over feature count.
+
+## Product north star
+
+- Private by default: no third-party analytics, advertising, fingerprinting or
+  sensitive request logs.
+- Tor-native: the onion endpoint is a first-class access path, not a hidden
+  afterthought.
+- Tenant-safe: every read, write, graph edge, export and background job is
+  scoped at the database boundary and tested with duplicate cross-tenant data.
+- Data-minimal: users control retention, export and deletion; raw content is
+  optional and expires.
+- Honest security: publish limitations, threat model and incident process; no
+  “unhackable” or zero-knowledge claim while the hosted crawler sees URLs.
+- Fast and accessible: useful on a small phone, keyboard, screen reader and slow
+  Tor circuit without pulling a large graph bundle on first paint.
+
+## Stage 0 — release blockers
+
+Completed in the current hardening series:
+
+- [x] Patch known reachable Go/npm vulnerabilities and verify scanners.
+- [x] HMAC/redact sensitive application logs and disable nginx access logging.
+- [x] Add `no-store`, tighter CSP and repository-side Cloudflare origin guard.
+- [x] Minimize JWT claims; pin algorithm/issuer/audience/lifetime.
+- [x] Keep browser JWT out of script-readable login JSON.
+- [x] Hash verification/reset credentials with crash-safe legacy migration.
+- [x] Bind GraphML edges to the owning tenant.
+- [x] Cryptographically validate Tor v3 addresses and serialize blacklist
+  decisions against enqueue races.
+- [x] Make first-admin bootstrap atomic and fail closed.
+- [x] Create threat model and incident-response runbook.
+
+Remaining production gate:
+
+- [ ] Deploy the binary and nginx config with an explicit rollback artifact.
+- [ ] Verify Cloudflare path, onion path, direct-origin rejection, cookies,
+  headers, migrations, metrics and redacted logs externally.
+- [ ] Disable Cloudflare Browser Insights/analytics and NEL reporting for this
+  hostname; verify the response contains no third-party telemetry endpoint.
+- [ ] Purge or tightly retain historical logs containing raw URLs/searches only
+  after preserving any incident evidence that is actually required.
+- [ ] Remove redundant `.env` copies after identifying and rotating any still
+  valid old credentials; narrow the systemd bind mount to the release artifact.
+- [ ] Test Alertmanager delivery, backup failure notification and the runbook.
+
+## Stage 1 — privacy lifecycle
+
+1. **Account privacy center**
+   - show stored identity, sessions, retention settings and recent security
+     events without raw IP addresses;
+   - download a machine-readable personal-data export;
+   - delete account with re-authentication, grace period and immediate session
+     revocation;
+   - separately delete crawl history, stored page content or searches.
+
+2. **Retention engine**
+   - per-account defaults for raw page content, metadata, nodes and edges;
+   - short default retention for raw content and extracted identifiers;
+   - scheduled deletion with bounded batches, metrics and dry-run mode;
+   - legal-hold mechanism that is explicit, audited and never silently enabled;
+   - backup-retention documentation so deletion timelines include recoverable
+     copies.
+
+3. **Data minimization modes**
+   - metadata-only crawl mode that never stores page text;
+   - opt-in entity extraction instead of always extracting email/crypto data;
+   - optional query-string stripping per crawl/watchlist;
+   - content hashing and change detection without retaining old bodies;
+   - POST-based search/detail lookup so sensitive values do not enter browser,
+     proxy and referrer URL surfaces.
+
+4. **Encryption and key architecture**
+   - envelope-encrypt raw content, metadata and URLs with per-tenant data keys;
+   - keep key-encryption keys outside PostgreSQL and support rotation;
+   - encrypt offsite backups with a key not stored on the VPS;
+   - document that server-side search/crawling still requires controlled
+     plaintext access at processing time;
+   - explore a local-agent mode for users who require the server never to learn
+     target URLs.
+
+Acceptance: deletion/export/retention integration tests, documented key-loss
+and restore behavior, no raw sensitive values in telemetry, and a published
+privacy notice/data inventory.
+
+## Stage 2 — account and authorization security
+
+- Passkeys/WebAuthn as the preferred login, with TOTP and recovery codes as a
+  fallback; phishing-resistant MFA mandatory for admins.
+- Replace coarse JWT-only sessions with server-tracked, rotating sessions:
+  session list, last-used time, device label, one-session revoke and revoke-all.
+- Short access credential plus rotated HttpOnly refresh credential, with replay
+  detection and key rotation (`kid`) support.
+- Argon2id password hashing with transparent bcrypt upgrade on successful login;
+  accept long passphrases and screen against breached passwords without sending
+  the full password to a third party.
+- Offline, one-use admin bootstrap command; remove public registration’s ability
+  to assign an admin role.
+- PostgreSQL row-level security and separate least-privilege DB roles for API,
+  crawler, migrations and backup.
+- Fine-grained permissions for read, crawl, export and administration; immutable
+  audit events for privilege and session changes.
+- Safer anti-abuse: progressive backoff and proof-of-work/CAPTCHA alternative
+  that does not embed a privacy-hostile third party, especially for onion users
+  who share a loopback source address.
+
+## Stage 3 — production and supply chain
+
+- Dedicated Unix user and dedicated Tor instance for Onion Spider; no shared
+  home/project tree in the service namespace.
+- Root-owned, versioned release directory and atomic symlink switch for deploy
+  and rollback; reproducible build metadata and checksums.
+- Pin GitHub Actions and container bases by digest; minimize workflow token
+  permissions; protect `main` and production environments.
+- Generate CycloneDX/SPDX SBOMs, scan source/secrets/filesystems/images, sign
+  artifacts and verify signatures at deploy.
+- Fix and test the Docker topology so the API binds to the container interface
+  without weakening the host-systemd loopback bind.
+- Automated encrypted offsite backup, object-lock/immutability where practical,
+  monthly scratch restore and recorded RPO/RTO.
+- PostgreSQL TLS or Unix socket locally, least privileges, slow-query/connection
+  anomaly alerts and storage/disk capacity plans.
+- Prometheus/Alertmanager on loopback with auth or firewall defense in depth;
+  security alerts for admin login, lockout bursts, bulk export, origin rejection,
+  migration failure and backup failure.
+- Fuzzing for URL, JWT, robots, sitemap, HTML extraction and every export
+  encoder; load tests for queue, search, export and decompression/parser limits.
+- CAA/DNSSEC/account MFA review, Cloudflare authenticated origin pulls/mTLS and
+  documented emergency DNS/origin procedure.
+
+## Stage 4 — useful privacy-respecting features
+
+Highest-value product capabilities:
+
+- Watchlists with configurable recrawl interval and private change alerts.
+- Content diff view with explicit retention controls and no raw body history by
+  default.
+- Tags, notes, collections and per-item deletion.
+- Advanced search filters: status, category, date, host, title-only and saved
+  local presets; cursor pagination and cancelable/debounced requests.
+- Graph filters, clustering, depth controls, time slices and lazy loading so the
+  browser never downloads the whole graph by default.
+- Crawl job page with per-user quota, priority, pause/cancel, error reason and
+  estimated queue position.
+- Bulk import preview/deduplication and scoped export with expiry, row estimate
+  and explicit confirmation for sensitive content.
+- NDJSON/CSV/XLSX/GraphML export jobs generated asynchronously, encrypted for
+  large downloads and deleted automatically.
+- API keys with narrow scopes, expiry, last-used time and one-time display;
+  never reuse browser sessions for automation.
+- Webhooks signed with rotating secrets, allowlisted destinations and strict
+  egress protection; disabled by default.
+- Optional local-only notifications and self-hosted SMTP; no push vendor by
+  default.
+- Transparent crawl provenance: first/last seen, content hash, response status,
+  redirect chain and policy decision without exposing other tenants.
+- Abuse controls, safe-content reporting and operator quarantine that preserve
+  evidence without exposing it in the normal UI.
+
+Do not add engagement analytics, ad SDKs, social trackers, remote fonts, remote
+CAPTCHAs or a service worker that caches authenticated API responses.
+
+## Stage 5 — responsive UI, accessibility and performance
+
+- Split the public landing/docs shell from the authenticated dashboard. Load
+  graphing and export code only after login and only on the relevant route.
+- Replace the single large component with routed views and a small design
+  system: tokens for color/spacing/type, reusable form/control/table/card
+  components and consistent empty/error/loading states.
+- Mobile first at 320 px: navigation drawer, stacked controls, touch targets at
+  least 44 px, cards for dense tables, sticky action bar and no page-level
+  horizontal overflow.
+- Accessible forms with real labels, autocomplete, error association and focus
+  movement; keyboard-operable graph/list alternative; skip link, landmarks,
+  reduced motion and WCAG AA contrast.
+- Cancel stale fetches, debounce search, virtualize long lists, use cursor
+  pagination and enforce performance budgets for JavaScript/CSS/first load over
+  Tor.
+- Add skeleton/empty/offline/error states without storing private API responses
+  in persistent browser caches.
+- Test desktop/mobile Chromium and Firefox/Tor Browser plus keyboard and an
+  automated accessibility suite in CI.
+
+Acceptance budgets: no initial graph dependency on the public/login route,
+mobile layout at 320/375/768 px, WCAG 2.2 AA target, and a compressed initial JS
+budget substantially below the current approximately 187 kB gzip bundle.
+
+## Stage 6 — SEO without indexing private data
+
+SEO applies only to public, non-sensitive pages. The dashboard, auth flows,
+search results, node details, exports and onion endpoint stay `noindex` and
+must never appear in a sitemap.
+
+- Public landing page with a precise title/description, canonical URL, product
+  explanation, privacy/security model and link to the onion-access guide.
+- Public `/privacy`, `/security`, `/docs` and `/about` pages rendered as static
+  HTML or SSR so crawlers do not need the dashboard JavaScript.
+- `robots.txt` and `sitemap.xml` listing only public pages; per-private-route
+  `X-Robots-Tag: noindex, nofollow, noarchive` at nginx as defense in depth.
+- Open Graph/Twitter metadata using a locally hosted image; Organization and
+  SoftwareApplication JSON-LD only where claims are accurate.
+- Stable semantic headings, internal links, language/locale metadata, custom
+  404, canonical redirect policy and measured Core Web Vitals.
+- No public node directory, URL snippets or aggregate pages that can reveal
+  what users crawl. Search visibility must never outrank privacy.
+
+## Release cadence
+
+Each stage is a separate reviewed commit or small commit series with tests,
+migration/rollback notes and production verification evidence. A feature does
+not ship merely because it works locally: its data collection, retention,
+abuse, accessibility, monitoring and incident implications must be answered in
+the same change.
