@@ -67,7 +67,7 @@ tidy: ## Tidy go.mod / go.sum.
 	cd $(BACKEND_DIR) && go mod tidy
 
 .PHONY: vulncheck
-vulncheck: ## Run govulncheck against the API package (install: go install golang.org/x/vuln/cmd/govulncheck@latest).
+vulncheck: ## Run govulncheck against the API package (install: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0).
 	cd $(BACKEND_DIR) && govulncheck ./...
 
 ##@ Frontend

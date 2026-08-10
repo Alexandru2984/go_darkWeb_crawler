@@ -1,0 +1,8 @@
+# Reviewed false positives. Keep these commit/file/rule/line fingerprints exact:
+# broad path or rule allowlists would hide a real credential added later.
+f34809d26087cba009ea1ff64c9bb9675e058f34:backend/internal/api/api_test.go:generic-api-key:11
+c77bed2a542548078c2d431a550d5c13f91b5d77:frontend/src/lib/linkTokens.test.js:generic-api-key:4
+c77bed2a542548078c2d431a550d5c13f91b5d77:backend/internal/email/email_test.go:generic-api-key:63
+d49232fd7a3962a00cd7eb1f6313b72b6a9b5469:backend/internal/database/db_test.go:generic-api-key:87
+858f975a3dc70a6b579d25da7b9a5e8b4f74f59d:backend/internal/api/integration_test.go:generic-api-key:20
+717538f9e31a55349b29d49fd16a919dff90013a:backend/internal/auth/auth_test.go:generic-api-key:13

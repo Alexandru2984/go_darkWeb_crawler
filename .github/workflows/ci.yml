@@ -15,6 +15,41 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  secrets:
+    name: Secret history (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A shallow clone cannot prove that an older commit never contained
+          # a live credential.
+          fetch-depth: 0
+
+      - name: Download checksum-pinned Gitleaks
+        env:
+          GITLEAKS_VERSION: 8.29.1
+          GITLEAKS_SHA256: e4eb209d04e20339d77122a3bdf9cd41351255cfb27ebcb75e85325e04f88924
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/gitleaks.tar.gz"
+          curl --fail --silent --show-error --location \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            --output "${archive}"
+          printf '%s  %s\n' "${GITLEAKS_SHA256}" "${archive}" | sha256sum --check --strict
+          tar -xzf "${archive}" -C "${RUNNER_TEMP}" gitleaks
+
+      - name: Scan application history
+        run: |
+          "${RUNNER_TEMP}/gitleaks" git \
+            --no-banner \
+            --redact=100 \
+            --timeout=180 \
+            --max-decode-depth=3 \
+            --max-archive-depth=1 \
+            --max-target-megabytes=25 \
+            --log-opts="--all -- . :!pkg/**" \
+            .
+
   go:
     name: Backend (Go ${{ matrix.go }})
     runs-on: ubuntu-latest
@@ -100,7 +135,7 @@ jobs:
           cache-dependency-path: backend/go.sum
 
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
 
       - name: Run govulncheck
         working-directory: backend
