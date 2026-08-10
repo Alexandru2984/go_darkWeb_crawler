@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"onion-spider/internal/auth"
 	"onion-spider/internal/database"
@@ -111,9 +112,36 @@ func LoadDBRole(db *database.DB) func(http.Handler) http.Handler {
 				WriteJSONError(w, http.StatusUnauthorized, "Session no longer valid")
 				return
 			}
-			if claims, ok := r.Context().Value(userContextKey).(*auth.Claims); ok && claims.TokenVersion != tokenVersion {
+			claims, _ := r.Context().Value(userContextKey).(*auth.Claims)
+			if claims != nil && claims.TokenVersion != tokenVersion {
 				WriteJSONError(w, http.StatusUnauthorized, "Session has been revoked, please log in again")
 				return
+			}
+			// Per-device revocation. token_version can only invalidate every
+			// token at once, so signing one device out has to be checked here,
+			// against the session the token names.
+			//
+			// A token minted before sessions existed carries no handle. Those
+			// are honoured until they expire rather than rejected: the
+			// alternative is signing every user out on deploy to enforce a
+			// capability none of their tokens could have had.
+			if claims != nil && claims.SessionID != "" {
+				active, err := db.SessionActive(uid, claims.SessionID)
+				if err != nil {
+					slog.ErrorContext(r.Context(), "session_lookup_failed", "uid", uid, "err", err)
+					WriteJSONError(w, http.StatusInternalServerError, "Internal error")
+					return
+				}
+				if !active {
+					clearSessionCookies(w, r)
+					WriteJSONError(w, http.StatusUnauthorized, "This session has been signed out")
+					return
+				}
+				// Best-effort and throttled; a failure here must not fail the
+				// request, since it only affects a display value.
+				if err := db.TouchSession(claims.SessionID, sessionTouchInterval); err != nil {
+					slog.WarnContext(r.Context(), "session_touch_failed", "err", err)
+				}
 			}
 			ctx := context.WithValue(r.Context(), dbRoleContextKey, role)
 			ctx = context.WithValue(ctx, dbEmailContextKey, email)
@@ -121,6 +149,11 @@ func LoadDBRole(db *database.DB) func(http.Handler) http.Handler {
 		})
 	}
 }
+
+// sessionTouchInterval is how stale a session's last-used timestamp may get
+// before a request refreshes it. Writing on every request would put a row
+// update behind every read in the API for a value nobody needs to the second.
+const sessionTouchInterval = 5 * time.Minute
 
 // RequireAdminDB blocks requests whose DB-loaded role (set by LoadDBRole) is
 // not 'admin'. MUST be preceded by LoadDBRole in the middleware chain.

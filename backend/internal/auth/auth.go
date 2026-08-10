@@ -83,6 +83,11 @@ type Claims struct {
 	// DB on each authenticated request. A mismatch (because the version was
 	// bumped on password reset / logout-all) invalidates the token immediately.
 	TokenVersion int `json:"tv"`
+	// SessionID is a random handle for the sessions row backing this token. It
+	// is what makes revoking one device possible: token_version can only
+	// invalidate every token an account has at once. Empty on tokens issued
+	// before sessions existed, which stay valid until they expire.
+	SessionID string `json:"sid,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -243,11 +248,23 @@ func NeedsRehash(hash string) bool {
 	return p.memory < argonMemory || p.time < argonTime || p.threads < argonThreads
 }
 
-func GenerateToken(userID, tokenVersion int) (string, error) {
+// NewSessionID returns a random handle to put in a token's sid claim.
+func NewSessionID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand unavailable: " + err.Error())
+	}
+	return hex.EncodeToString(b)
+}
+
+// GenerateToken issues a session credential. sessionID may be empty only for
+// callers that deliberately do not want a revocable session.
+func GenerateToken(userID, tokenVersion int, sessionID string) (string, error) {
 	now := time.Now()
 	claims := &Claims{
 		UserID:       userID,
 		TokenVersion: tokenVersion,
+		SessionID:    sessionID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    tokenIssuer,
 			Audience:  jwt.ClaimStrings{tokenAudience},

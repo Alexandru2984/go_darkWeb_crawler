@@ -65,7 +65,7 @@ func TestCheckPasswordHash_RejectsWrongLongPassword(t *testing.T) {
 }
 
 func TestGenerateAndValidateToken_RoundTrip(t *testing.T) {
-	tok, err := GenerateToken(42, 7)
+	tok, err := GenerateToken(42, 7, "")
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}

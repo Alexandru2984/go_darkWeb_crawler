@@ -178,6 +178,28 @@ func main() {
 		}
 	}()
 
+	// Session sweeper: drop rows no token can name any more. Revoked sessions
+	// are deliberately kept until their natural expiry, so the inventory still
+	// explains what a leaked token could have done during its lifetime.
+	go func() {
+		run := func() {
+			n, err := dbConn.DeleteExpiredSessions()
+			if err != nil {
+				logger.Error("session sweeper failed", "op", "DeleteExpiredSessions", "err", err)
+				return
+			}
+			if n > 0 {
+				logger.Info("session sweeper removed expired sessions", "count", n)
+			}
+		}
+		run()
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			run()
+		}
+	}()
+
 	// Queue-depth gauge poller: refresh onionspider_queue_nodes every 30s so
 	// Prometheus can chart pending/crawling/failed backlog over time.
 	go func() {

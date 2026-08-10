@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -106,7 +107,14 @@ func mkVerifiedUser(t *testing.T, db *database.DB, email, password, role string)
 	if err != nil || u == nil {
 		t.Fatalf("GetUserByEmail: %v", err)
 	}
-	tok, err := auth.GenerateToken(u.ID, u.TokenVersion)
+	// Mint a token backed by a real session row. A handle that resolves to
+	// nothing is rejected on every authenticated request, so this fixture has
+	// to go through the same path a login does.
+	sid := auth.NewSessionID()
+	if _, err := db.CreateSession(u.ID, sid, "Test client", time.Now().Add(auth.TokenTTL)); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	tok, err := auth.GenerateToken(u.ID, u.TokenVersion, sid)
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
@@ -277,5 +285,122 @@ func TestEnrolmentCannotBeHijackedWhileActive(t *testing.T) {
 
 	if rr := doWithBody(t, h, http.MethodPost, "/api/auth/totp/setup", token, nil); rr.Code != http.StatusConflict {
 		t.Fatalf("re-enrolment while active: got %d, want 409", rr.Code)
+	}
+}
+
+func TestRevokingOneSessionLeavesTheOthersAlone(t *testing.T) {
+	// The whole point of the sessions table: before it, the only lever was
+	// token_version, which signs every device out at once.
+	h, db := newAPI(t)
+	const (
+		emailAddress = "sessions@example.com"
+		password     = "Correct-Horse-9!"
+	)
+	uid, phone := mkVerifiedUser(t, db, emailAddress, password, "user")
+
+	sid := auth.NewSessionID()
+	if _, err := db.CreateSession(uid, sid, "Firefox on Linux", time.Now().Add(auth.TokenTTL)); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	laptop, err := auth.GenerateToken(uid, 0, sid)
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+
+	// Both devices work, and each sees both sessions listed.
+	for name, tok := range map[string]string{"phone": phone, "laptop": laptop} {
+		if rr := do(t, h, http.MethodGet, "/api/nodes", tok); rr.Code != http.StatusOK {
+			t.Fatalf("%s before revocation: got %d", name, rr.Code)
+		}
+	}
+	rr := do(t, h, http.MethodGet, "/api/auth/sessions", laptop)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list sessions: got %d, body=%s", rr.Code, rr.Body.String())
+	}
+	var sessions []struct {
+		ID          int    `json:"id"`
+		DeviceLabel string `json:"device_label"`
+		Current     bool   `json:"current"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &sessions); err != nil {
+		t.Fatalf("decode sessions: %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("expected 2 sessions, got %d: %+v", len(sessions), sessions)
+	}
+
+	// Exactly one row is flagged as the caller's own.
+	var target int
+	current := 0
+	for _, s := range sessions {
+		if s.Current {
+			current++
+		} else {
+			target = s.ID
+		}
+	}
+	if current != 1 {
+		t.Fatalf("expected exactly one session marked current, got %d", current)
+	}
+
+	// Revoke the other device from this one.
+	if rr := do(t, h, http.MethodDelete, "/api/auth/sessions/"+strconv.Itoa(target), laptop); rr.Code != http.StatusOK {
+		t.Fatalf("revoke: got %d, body=%s", rr.Code, rr.Body.String())
+	}
+	if rr := do(t, h, http.MethodGet, "/api/nodes", phone); rr.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked device still authenticated: got %d", rr.Code)
+	}
+	if rr := do(t, h, http.MethodGet, "/api/nodes", laptop); rr.Code != http.StatusOK {
+		t.Fatalf("revoking one device signed out the other: got %d", rr.Code)
+	}
+}
+
+func TestSessionsCannotBeRevokedAcrossAccounts(t *testing.T) {
+	h, db := newAPI(t)
+	const password = "Correct-Horse-9!"
+	victimID, victimToken := mkVerifiedUser(t, db, "victim@example.com", password, "user")
+	_, attackerToken := mkVerifiedUser(t, db, "attacker@example.com", password, "user")
+
+	sessions, err := db.ListSessions(victimID, "")
+	if err != nil || len(sessions) == 0 {
+		t.Fatalf("victim sessions: %v (%d)", err, len(sessions))
+	}
+	victimSession := sessions[0].ID
+
+	rr := do(t, h, http.MethodDelete, "/api/auth/sessions/"+strconv.Itoa(victimSession), attackerToken)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("cross-account revoke: got %d, want 404", rr.Code)
+	}
+	if rr := do(t, h, http.MethodGet, "/api/nodes", victimToken); rr.Code != http.StatusOK {
+		t.Fatalf("victim was signed out by another account: got %d", rr.Code)
+	}
+}
+
+func TestLogoutRevokesTheSessionNotJustTheCookie(t *testing.T) {
+	// Clearing a cookie only stops one browser sending the token. A copy of
+	// that token must stop working too.
+	h, db := newAPI(t)
+	_, token := mkVerifiedUser(t, db, "logout@example.com", "Correct-Horse-9!", "user")
+
+	if rr := do(t, h, http.MethodPost, "/api/auth/logout", token); rr.Code != http.StatusOK {
+		t.Fatalf("logout: got %d", rr.Code)
+	}
+	if rr := do(t, h, http.MethodGet, "/api/nodes", token); rr.Code != http.StatusUnauthorized {
+		t.Fatalf("token still worked after logout: got %d", rr.Code)
+	}
+}
+
+func TestLegacyTokensWithoutASessionStillWork(t *testing.T) {
+	// Tokens minted before this feature carry no session handle. Rejecting them
+	// would sign every user out on deploy to enforce something none of their
+	// tokens could have carried.
+	h, db := newAPI(t)
+	uid, _ := mkVerifiedUser(t, db, "legacy-session@example.com", "Correct-Horse-9!", "user")
+	legacy, err := auth.GenerateToken(uid, 0, "")
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+	if rr := do(t, h, http.MethodGet, "/api/nodes", legacy); rr.Code != http.StatusOK {
+		t.Fatalf("legacy token rejected: got %d, body=%s", rr.Code, rr.Body.String())
 	}
 }

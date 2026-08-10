@@ -5,10 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"os"
 	"onion-spider/internal/crawler"
 	"onion-spider/internal/database"
 	"onion-spider/internal/proxy"
+	"os"
 )
 
 func main() {

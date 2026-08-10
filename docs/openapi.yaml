@@ -317,6 +317,48 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { description: Missing or invalid X-CSRF-Token (cookie-authenticated requests only) }
 
+  /api/auth/sessions:
+    get:
+      summary: List the devices this account is signed in on
+      description: >-
+        No IP address is recorded, and the device label is a coarse family such
+        as "Firefox on Linux" derived from the User-Agent rather than the raw
+        header, which would be close to a fingerprint and outlives the session.
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      responses:
+        '200':
+          description: Active sessions, most recently used first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: integer }
+                    device_label: { type: string }
+                    created_at: { type: string }
+                    last_used_at: { type: string }
+                    expires_at: { type: string }
+                    current: { type: boolean, description: True for the session making this request }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/auth/sessions/{id}:
+    delete:
+      summary: Sign one device out
+      description: >-
+        Takes effect on that device's next request, not when its token expires.
+        A session belonging to another account answers 404 rather than 403, so
+        the response cannot confirm that an id exists.
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: Signed out, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
+        '400': { description: Invalid session id }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: No such session for this account }
+
   /api/auth/totp:
     get:
       summary: Second-factor status for the current account

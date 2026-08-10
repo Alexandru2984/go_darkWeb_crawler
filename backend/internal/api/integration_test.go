@@ -113,7 +113,7 @@ func mkUser(t *testing.T, db *database.DB, email, role string) (int, string) {
 	if err != nil || u == nil {
 		t.Fatalf("GetUserByEmail(%s): %v", email, err)
 	}
-	tok, err := auth.GenerateToken(u.ID, u.TokenVersion)
+	tok, err := auth.GenerateToken(u.ID, u.TokenVersion, "")
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}

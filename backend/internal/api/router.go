@@ -75,6 +75,9 @@ func New(cfg Config) http.Handler {
 
 		// Second-factor management. Outside the admin group on purpose: an
 		// admin who must enrol has to be able to reach these.
+		r.Get("/api/auth/sessions", d.handleSessions)
+		r.Delete("/api/auth/sessions/{id}", d.handleRevokeSession)
+
 		r.Get("/api/auth/totp", d.handleTOTPStatus)
 		r.Post("/api/auth/totp/setup", d.handleTOTPSetup)
 		r.Post("/api/auth/totp/confirm", d.handleTOTPConfirm)

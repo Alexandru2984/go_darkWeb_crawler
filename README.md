@@ -45,6 +45,12 @@ To protect the server and ensure passive browsing:
   upgraded in place on their next successful login, without a reset email and
   without signing their other sessions out. Login runs a constant-time comparison
   (and a dummy hash for unknown emails) to prevent account enumeration via timing.
+- Each login gets its own server-side session, so a single device can be signed
+  out without disturbing the others — `token_version` could only ever revoke
+  everything at once. Sessions store a coarse device family ("Firefox on Linux")
+  and never an IP address or the raw User-Agent. Revocation takes effect on the
+  device's next request, and logging out revokes the session rather than merely
+  clearing the cookie, so a copied token stops working too.
 - Two-factor authentication (TOTP, RFC 6238) with ten single-use recovery
   codes. Only code digests are stored. Each accepted code advances a per-account
   watermark, so a code observed in transit cannot be replayed inside its

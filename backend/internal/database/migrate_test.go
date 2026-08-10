@@ -84,7 +84,7 @@ func TestMigrationsApplyAndIdempotent(t *testing.T) {
 	// schema_migrations should record the latest version, not dirty. Bump this
 	// alongside every new migration: it is what catches a migration file that
 	// was added but never actually applied.
-	const latestVersion = 5
+	const latestVersion = 6
 	var v int
 	var dirty bool
 	if err := db.QueryRow(`SELECT version, dirty FROM schema_migrations`).Scan(&v, &dirty); err != nil {

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"onion-spider/internal/auth"
 	"onion-spider/internal/database"
@@ -224,7 +225,15 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	token, err := auth.GenerateToken(user.ID, user.TokenVersion)
+	// Every login gets its own session row, so one device can later be signed
+	// out without disturbing the others.
+	sessionID := auth.NewSessionID()
+	if _, err := d.cfg.DB.CreateSession(user.ID, sessionID, DeviceLabel(r.UserAgent()), time.Now().Add(auth.TokenTTL)); err != nil {
+		slog.ErrorContext(ctx, "create_session_failed", "uid", user.ID, "err", err)
+		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
+		return
+	}
+	token, err := auth.GenerateToken(user.ID, user.TokenVersion, sessionID)
 	if err != nil {
 		slog.ErrorContext(ctx, "jwt_generate_failed", "email", user.Email, "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
@@ -268,6 +277,13 @@ func (d *deps) handleMe(w http.ResponseWriter, r *http.Request) {
 // that is logout-all's job. Signing out on a shared machine should not kill the
 // user's other sessions.
 func (d *deps) handleLogout(w http.ResponseWriter, r *http.Request) {
+	// Clearing the cookie only stops this browser sending the token. Revoking
+	// the session is what makes a copy of that token stop working elsewhere.
+	if sid := SessionID(r); sid != "" {
+		if err := d.cfg.DB.RevokeSessionByToken(sid); err != nil {
+			slog.ErrorContext(r.Context(), "revoke_session_on_logout_failed", "err", err)
+		}
+	}
 	clearSessionCookies(w, r)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
@@ -458,6 +474,9 @@ func (d *deps) handleLogoutAll(w http.ResponseWriter, r *http.Request) {
 		slog.ErrorContext(r.Context(), "logout_all_failed", "uid", uid, "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
+	}
+	if err := d.cfg.DB.RevokeAllSessions(uid, ""); err != nil {
+		slog.ErrorContext(r.Context(), "revoke_all_sessions_failed", "uid", uid, "err", err)
 	}
 	slog.InfoContext(r.Context(), "logout_all", "uid", uid)
 	// This browser's session is one of the ones just revoked; drop its cookies
