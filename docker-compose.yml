@@ -63,6 +63,8 @@ services:
       SMTP_USER: "${SMTP_USER:-}"
       SMTP_PASS: "${SMTP_PASS:-}"
       SMTP_FROM: "${SMTP_FROM:-}"
+      SMTP_TLS_MODE: "${SMTP_TLS_MODE:-starttls}"
+      SMTP_TIMEOUT: "${SMTP_TIMEOUT:-10s}"
       # Tor control port stays disabled in dev (the api logs a warning and
       # continues without circuit renewal). To enable, mount a torrc with
       # ControlPort + HashedControlPassword and set TOR_CONTROL_* here.

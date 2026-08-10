@@ -45,7 +45,9 @@ To protect the server and ensure passive browsing:
   rate limiting — all auth events are written to an audit log.
 - Email verification uses a POST-confirmation page so link-preview bots can't
   silently activate accounts; recipient addresses are parsed with
-  `net/mail.ParseAddress` and CRLF-stripped to block header injection.
+  `net/mail.ParseAddress` and CRLF-stripped to block header injection. SMTP has
+  a bounded end-to-end timeout and refuses to send credentials or messages
+  unless the server establishes certificate-verified TLS 1.2 or newer.
 - Crawler SSRF defense: requests go only to `.onion` hosts over Tor, redirects
   to clearnet or other onion domains are blocked, and redirect depth is capped.
   V3 addresses are verified against Tor's embedded version and SHA3 checksum;
