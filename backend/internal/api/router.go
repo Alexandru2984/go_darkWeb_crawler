@@ -15,11 +15,24 @@ import (
 // goroutine background workers tied to the application lifecycle (engine
 // start, sweeper, audit retention) — those remain in main().
 func New(cfg Config) http.Handler {
+	// A zero grace period would delete an account the moment it is requested,
+	// removing the window in which a hijacked session's deletion can be undone.
+	// Treat "unset" as the default rather than as "immediately": a caller that
+	// forgot to configure this should get the safe behaviour, not the one that
+	// destroys data soonest.
+	if cfg.DeletionGrace <= 0 {
+		cfg.DeletionGrace = 7 * 24 * time.Hour
+	}
+
 	d := &deps{
 		cfg: cfg,
 
 		crawlLim:  NewCrawlLimiter(20, time.Minute),
 		searchLim: NewCrawlLimiter(60, time.Minute),
+
+		// Ten re-authentications an hour is far more than anyone deleting their
+		// own data needs, and far fewer than online password guessing requires.
+		sensitiveLim: NewCrawlLimiter(10, time.Hour),
 
 		// Onion limits are aggregates over the whole front door, not per
 		// visitor, so they are sized well above the clearnet per-address limit.
@@ -82,6 +95,16 @@ func New(cfg Config) http.Handler {
 		r.Post("/api/auth/totp/setup", d.handleTOTPSetup)
 		r.Post("/api/auth/totp/confirm", d.handleTOTPConfirm)
 		r.Post("/api/auth/totp/disable", d.handleTOTPDisable)
+
+		// Privacy centre. Like second-factor management, deliberately outside
+		// the admin group: an account must always be able to see, export and
+		// delete its own data, whatever else it is or is not allowed to do.
+		r.Get("/api/privacy/settings", d.handlePrivacySettings)
+		r.Post("/api/privacy/settings", d.handlePrivacySettingsUpdate)
+		r.Get("/api/privacy/export", d.handlePrivacyExport)
+		r.Post("/api/privacy/purge", d.handlePrivacyPurge)
+		r.Post("/api/privacy/account/delete", d.handleAccountDeleteRequest)
+		r.Post("/api/privacy/account/delete/cancel", d.handleAccountDeleteCancel)
 
 		r.Get("/api/nodes", d.handleNodes)
 		r.Post("/api/node", d.handleNode)

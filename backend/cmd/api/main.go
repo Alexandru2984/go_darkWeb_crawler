@@ -200,6 +200,97 @@ func main() {
 		}
 	}()
 
+	// How long a requested account deletion waits before the sweeper acts on it.
+	// Seven days is long enough that someone who loses access over a weekend
+	// still gets the chance to stop it. Zero is deliberately not accepted: an
+	// immediate deletion would remove the only defence against a hijacked
+	// session wiping the account before its owner ever hears about it.
+	deletionGrace := 7 * 24 * time.Hour
+	if v := os.Getenv("ACCOUNT_DELETION_GRACE_DAYS"); v != "" {
+		if dgd, err := strconv.Atoi(v); err == nil && dgd > 0 {
+			deletionGrace = time.Duration(dgd) * 24 * time.Hour
+		}
+	}
+
+	// Retention sweeper: delete crawl records that have outlived the policy of
+	// the account that owns them. Accounts default to keeping everything, so
+	// this does nothing until someone opts in on the Privacy page.
+	//
+	// RETENTION_DRY_RUN reports what each pass would remove without removing
+	// anything (see onionspider_retention_pending). An automatic destructive job
+	// meeting a database that already has data in it should be watched for a
+	// while before it is armed, and this is how.
+	retentionBatch := 1000
+	if v := os.Getenv("RETENTION_BATCH"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			retentionBatch = n
+		}
+	}
+	retentionDryRun := os.Getenv("RETENTION_DRY_RUN") == "true"
+	go func() {
+		run := func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			report, err := dbConn.ApplyRetention(ctx, retentionBatch, retentionDryRun)
+			if err != nil {
+				logger.Error("retention sweeper failed", "op", "ApplyRetention", "err", err)
+				return
+			}
+			metrics.RetentionPending.WithLabelValues("nodes").Set(float64(report.NodesMatched))
+			metrics.RetentionLastRun.SetToCurrentTime()
+			if report.NodesDeleted > 0 {
+				metrics.RetentionDeleted.WithLabelValues("nodes").Add(float64(report.NodesDeleted))
+			}
+			if report.NodesMatched > 0 {
+				logger.Info("retention pass complete",
+					"accounts", report.Accounts,
+					"nodes_matched", report.NodesMatched,
+					"nodes_deleted", report.NodesDeleted,
+					"dry_run", report.DryRun)
+			}
+		}
+		run()
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			run()
+		}
+	}()
+
+	// Account-deletion sweeper: erase accounts whose grace period has elapsed.
+	//
+	// Never dry-run. Retention is a policy the operator sets and can get wrong
+	// on everyone's behalf; this acts only on accounts that asked for it, and
+	// quietly not honouring that request is the failure mode to avoid.
+	go func() {
+		run := func() {
+			due, err := dbConn.DueAccountDeletions(50)
+			if err != nil {
+				logger.Error("deletion sweeper failed", "op", "DueAccountDeletions", "err", err)
+				return
+			}
+			for _, d := range due {
+				// The audit table is keyed by a reference of the address rather
+				// than by user_id, so the cascade cannot reach it; deriving the
+				// same reference here is what lets the login history go with the
+				// account it belongs to.
+				ref := auth.AuditReference("email", database.NormalizeEmail(d.Email))
+				if err := dbConn.DeleteAccount(d.UserID, ref); err != nil {
+					logger.Error("account deletion failed", "uid", d.UserID, "err", err)
+					continue
+				}
+				metrics.RetentionDeleted.WithLabelValues("accounts").Add(1)
+				logger.Info("account deleted after grace period", "uid", d.UserID)
+			}
+		}
+		run()
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			run()
+		}
+	}()
+
 	// Queue-depth gauge poller: refresh onionspider_queue_nodes every 30s so
 	// Prometheus can chart pending/crawling/failed backlog over time.
 	go func() {
@@ -231,6 +322,7 @@ func main() {
 		// less protected than an operator assumes; enrolment endpoints stay
 		// reachable either way, so this cannot lock an admin out.
 		RequireAdminMFA: os.Getenv("REQUIRE_ADMIN_MFA") != "false",
+		DeletionGrace:   deletionGrace,
 		Workers:         workers,
 		CORSOrigins:     api.SplitAndTrim(corsOrigin, ","),
 	})

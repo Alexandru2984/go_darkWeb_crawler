@@ -268,9 +268,22 @@ func (d *deps) handleMe(w http.ResponseWriter, r *http.Request) {
 	if IsAdmin(r) {
 		role = "admin"
 	}
+	body := map[string]any{"email": GetDBEmail(r), "role": role}
+
+	// A pending deletion is reported on the endpoint every page already calls,
+	// so the warning follows the user around the application instead of only
+	// appearing on the screen they would have to think to visit. A lookup
+	// failure here is logged and dropped: identity is what this endpoint is
+	// for, and refusing to answer it over a banner would sign the user out.
+	if settings, err := d.cfg.DB.GetPrivacySettings(GetUserID(r)); err != nil {
+		slog.ErrorContext(r.Context(), "me_privacy_lookup_failed", "uid", GetUserID(r), "err", err)
+	} else if settings.DeletionScheduledFor != nil {
+		body["deletion_scheduled_for"] = settings.DeletionScheduledFor.UTC().Format(time.RFC3339)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	json.NewEncoder(w).Encode(map[string]string{"email": GetDBEmail(r), "role": role})
+	json.NewEncoder(w).Encode(body)
 }
 
 // handleLogout clears this browser's session. It does not bump token_version —

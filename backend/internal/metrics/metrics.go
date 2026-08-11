@@ -46,4 +46,30 @@ var (
 		Name: "onionspider_queue_nodes",
 		Help: "Number of nodes by processing_status (refreshed periodically).",
 	}, []string{"status"})
+
+	// RetentionDeleted counts rows the automatic lifecycle jobs removed.
+	// kind ∈ {nodes, accounts}. These jobs destroy data on a timer with nobody
+	// watching, so what they did has to be observable after the fact — a
+	// misconfigured retention window shows up here as a spike long before
+	// anyone notices their records are missing.
+	RetentionDeleted = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "onionspider_retention_deleted_total",
+		Help: "Rows deleted by the retention and account-deletion sweepers, by kind.",
+	}, []string{"kind"})
+
+	// RetentionPending reports what the last pass matched. In dry-run mode
+	// nothing is deleted and this is the only output, which is how a retention
+	// policy is meant to be introduced: watch the number first, then arm it.
+	RetentionPending = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "onionspider_retention_pending",
+		Help: "Rows matched by the most recent retention pass, by kind.",
+	}, []string{"kind"})
+
+	// RetentionLastRun is the unix timestamp of the last completed pass. A
+	// sweeper that silently stopped running looks identical to one with nothing
+	// to do unless this is watched for staleness.
+	RetentionLastRun = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "onionspider_retention_last_run_timestamp_seconds",
+		Help: "Unix time of the last completed retention pass.",
+	})
 )

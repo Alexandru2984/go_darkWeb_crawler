@@ -15,20 +15,28 @@ const state = reactive({
   /** False until the first /api/auth/me answer, so the UI can avoid flashing
    *  the login form at somebody who is in fact still signed in. */
   checked: false,
+  /** Set when the account is scheduled for erasure. Carried in session state
+   *  rather than fetched by the Privacy page alone, so the warning reaches
+   *  someone who never opens that page — including the case that matters, where
+   *  the deletion was scheduled by somebody else. */
+  deletionScheduledFor: "",
 });
 
 export const session = state;
 export const isLoggedIn = computed(() => !!state.email);
 export const isAdmin = computed(() => state.role === "admin");
+export const deletionPending = computed(() => !!state.deletionScheduledFor);
 
 export async function loadSession() {
   const { ok, data } = await apiJSON("/api/auth/me");
   if (ok) {
     state.email = data.email || "";
     state.role = data.role || "";
+    state.deletionScheduledFor = data.deletion_scheduled_for || "";
   } else {
     state.email = "";
     state.role = "";
+    state.deletionScheduledFor = "";
   }
   state.checked = true;
   return ok;
@@ -45,6 +53,7 @@ export function setSession({ email, role }) {
 export function clearSession() {
   state.email = "";
   state.role = "";
+  state.deletionScheduledFor = "";
 }
 
 export async function signOut() {

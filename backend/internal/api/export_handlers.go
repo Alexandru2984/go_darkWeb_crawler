@@ -18,27 +18,46 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
+// acquireExportSlot takes the per-user and global export slots, writing the 429
+// itself when either is unavailable. The returned function releases both and
+// must be deferred; it is only valid when ok is true.
+//
+// Every export streams an unbounded amount of data, so the caps are what stops
+// one account — or the whole tenancy at once — from turning a download into a
+// memory and bandwidth incident. Shared by the crawl-data exports and the
+// personal-data export, which are the same cost from the server's side.
+func (d *deps) acquireExportSlot(w http.ResponseWriter, uid int) (release func(), ok bool) {
+	userSemAny, _ := d.exportPerUser.LoadOrStore(uid, make(chan struct{}, 1))
+	userSem := userSemAny.(chan struct{})
+	select {
+	case userSem <- struct{}{}:
+	default:
+		WriteJSONError(w, http.StatusTooManyRequests, "You already have an export in progress — wait for it to finish")
+		return nil, false
+	}
+	select {
+	case d.exportGlobalSem <- struct{}{}:
+	default:
+		<-userSem
+		WriteJSONError(w, http.StatusTooManyRequests, "Too many simultaneous exports on the server — try again in a few moments")
+		return nil, false
+	}
+	return func() {
+		<-d.exportGlobalSem
+		<-userSem
+	}, true
+}
+
 // handleExport streams the user's nodes (or all nodes for admins) in the
 // requested format. Concurrency: at most 1 export per user, and at most 4
 // global exports in flight — anything beyond returns 429.
 func (d *deps) handleExport(w http.ResponseWriter, r *http.Request) {
 	uid := GetUserID(r)
-	userSemAny, _ := d.exportPerUser.LoadOrStore(uid, make(chan struct{}, 1))
-	userSem := userSemAny.(chan struct{})
-	select {
-	case userSem <- struct{}{}:
-		defer func() { <-userSem }()
-	default:
-		WriteJSONError(w, http.StatusTooManyRequests, "You already have an export in progress — wait for it to finish")
+	release, ok := d.acquireExportSlot(w, uid)
+	if !ok {
 		return
 	}
-	select {
-	case d.exportGlobalSem <- struct{}{}:
-		defer func() { <-d.exportGlobalSem }()
-	default:
-		WriteJSONError(w, http.StatusTooManyRequests, "Too many simultaneous exports on the server — try again in a few moments")
-		return
-	}
+	defer release()
 
 	// Whitelist: reassign `format` to a string literal so CodeQL sees the
 	// value as fully untainted before it flows into the log line below.

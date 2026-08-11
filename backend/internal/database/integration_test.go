@@ -56,15 +56,20 @@ func newTestDB(t *testing.T) *DB {
 	if err := conn.Ping(); err != nil {
 		t.Fatalf("db.Ping: %v", err)
 	}
-	if err := runMigrations(conn); err != nil {
-		t.Fatalf("runMigrations: %v", err)
-	}
 	// `go test ./...` runs this package and internal/api concurrently against
 	// the same TEST_DATABASE_URL, and both TRUNCATE — so each was wiping the
 	// other's fixtures mid-test. The advisory lock makes them take turns. See
 	// the longer note on lockTestDB in internal/api/integration_test.go for why
 	// it is held on a dedicated connection and released explicitly.
+	//
+	// Locking comes before the migration, not after: the migration test in this
+	// package tears the whole schema down, so a fixture that migrates outside
+	// the lock can have its tables dropped out from under it before it runs a
+	// single query.
 	lockSharedTestDatabase(t, conn)
+	if err := runMigrations(conn); err != nil {
+		t.Fatalf("runMigrations: %v", err)
+	}
 	if _, err := conn.Exec(`TRUNCATE nodes, edges, auth_audit, blacklist, users RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}

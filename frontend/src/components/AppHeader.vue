@@ -16,6 +16,7 @@ const open = computed({
 const links = [
   { to: "/", label: "Dashboard" },
   { to: "/security", label: "Security" },
+  { to: "/privacy", label: "Privacy" },
 ];
 
 const handleSignOut = async () => {

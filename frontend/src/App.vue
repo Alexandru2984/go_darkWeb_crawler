@@ -2,7 +2,7 @@
 import { ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import AppHeader from "./components/AppHeader.vue";
-import { session } from "./stores/session.js";
+import { session, deletionPending } from "./stores/session.js";
 
 const route = useRoute();
 const navOpen = ref(false);
@@ -21,6 +21,18 @@ watch(
   <a class="skip-link" href="#main">Skip to content</a>
 
   <AppHeader v-if="!route.meta.public" v-model:open="navOpen" />
+
+  <!-- A pending deletion follows the user across every screen. Showing it only
+       on the Privacy page would mean the person most likely to need it — one
+       whose account somebody else scheduled for deletion — never sees it. -->
+  <div v-if="deletionPending && !route.meta.public" class="alarm" role="alert">
+    <span>
+      This account is scheduled for deletion. Nothing has been removed yet.
+    </span>
+    <RouterLink to="/privacy" class="alarm__action"
+      >Review or cancel</RouterLink
+    >
+  </div>
 
   <main id="main" class="main" :class="{ 'main--bare': route.meta.public }">
     <!-- Nothing renders until the session question has been answered once, so
@@ -60,6 +72,27 @@ watch(
   align-items: center;
   justify-content: center;
   padding: var(--s-4);
+}
+
+.alarm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2) var(--s-4);
+  padding: var(--s-3) var(--s-4);
+  background: rgba(255, 200, 87, 0.12);
+  border-bottom: 1px solid var(--warn);
+  color: #f0d9a0;
+  font-size: 0.88rem;
+  text-align: center;
+}
+.alarm__action {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  font-weight: 700;
+  color: var(--warn);
 }
 
 .booting {

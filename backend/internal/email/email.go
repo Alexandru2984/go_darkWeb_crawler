@@ -271,6 +271,34 @@ func SendVerificationEmail(to, token string) error {
 	return sendMail(to, "Onion Spider account confirmation", body)
 }
 
+// SendAccountDeletionScheduledEmail warns that an account is queued for
+// erasure and names the deadline for calling it off.
+//
+// This goes to the registered address, which is the one thing an attacker
+// operating from a stolen session does not control. It carries no link and no
+// token: cancelling requires signing in, so there is nothing here worth
+// intercepting, and a mail that could cancel by itself would just be a second
+// credential in someone's inbox.
+func SendAccountDeletionScheduledEmail(to string, scheduledFor time.Time) error {
+	body := "Hello,\r\n\r\nYour Onion Spider account is scheduled for deletion on " +
+		stripCRLF(scheduledFor.UTC().Format("2006-01-02 15:04 UTC")) + ".\r\n\r\n" +
+		"When that time arrives your account, your crawl records and your links " +
+		"are permanently removed. This cannot be undone afterwards.\r\n\r\n" +
+		"If you did not ask for this, sign in before that date and cancel the " +
+		"deletion from the Privacy page — then change your password, because " +
+		"someone else knew it."
+	return sendMail(to, "Onion Spider account deletion scheduled", body)
+}
+
+// SendAccountDeletionCancelledEmail confirms that a pending deletion was called
+// off, so the owner learns about it even if they were not the one who cancelled.
+func SendAccountDeletionCancelledEmail(to string) error {
+	body := "Hello,\r\n\r\nThe scheduled deletion of your Onion Spider account has " +
+		"been cancelled. Nothing was removed.\r\n\r\n" +
+		"If you did not do this, sign in and change your password."
+	return sendMail(to, "Onion Spider account deletion cancelled", body)
+}
+
 // SendPasswordResetEmail sends a password-reset link (valid 1h). The link points
 // at the SPA reset page, which collects a new password and POSTs to
 // /api/auth/reset with the token.

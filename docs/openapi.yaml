@@ -62,6 +62,21 @@ components:
       type: object
       properties:
         message: { type: string }
+    PrivacySettings:
+      type: object
+      properties:
+        retention_days:
+          type: integer
+          description: Age after which crawl records are deleted automatically. 0 keeps them indefinitely.
+        store_content:
+          type: boolean
+          description: >-
+            False is metadata-only: titles, status codes, categories and the
+            link graph are still recorded, but no copy of the page text is kept.
+            The change-detection digest is still computed, so recrawl scheduling
+            keeps working — a digest is not a copy.
+        deletion_requested_at: { type: string, format: date-time, nullable: true }
+        deletion_scheduled_for: { type: string, format: date-time, nullable: true }
     Node:
       type: object
       properties:
@@ -630,6 +645,152 @@ paths:
         '200': { description: Export stream (content type depends on format) }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { description: Export already in progress or server export limit reached }
+
+  /api/privacy/settings:
+    get:
+      summary: This account's data-retention policy
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      responses:
+        '200':
+          description: Current policy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  settings: { $ref: '#/components/schemas/PrivacySettings' }
+                  max_retention_days: { type: integer }
+                  deletion_grace: { type: integer, description: Days between a deletion request and it taking effect }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      summary: Set the retention window and the metadata-only switch
+      description: >-
+        Applies from now on. Turning store_content off stops new page text being
+        written but does not erase what is already stored — POST
+        /api/privacy/purge with scope=page_content does that. Bundling the two
+        would mean a settings toggle silently destroyed data.
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [retention_days, store_content]
+              properties:
+                retention_days: { type: integer, minimum: 0, maximum: 3650, description: 0 keeps records indefinitely }
+                store_content: { type: boolean }
+      responses:
+        '200':
+          description: Saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  settings: { $ref: '#/components/schemas/PrivacySettings' }
+                  message: { type: string }
+        '400': { description: Retention window out of range }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/privacy/export:
+    get:
+      summary: Download everything held about this account
+      description: >-
+        A single JSON document: account record, data settings, signed-in
+        devices, authentication history, crawl records and links. Credential
+        material is deliberately excluded — the password digest, the TOTP seed,
+        recovery-code digests and the opaque verification and reset tokens are
+        never selected. Scoped to the calling account even for administrators.
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      responses:
+        '200': { description: application/json attachment }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { description: Export already in progress or server export limit reached }
+
+  /api/privacy/purge:
+    post:
+      summary: Delete one category of stored data
+      description: >-
+        Re-authenticates before acting. A session cookie is a bearer credential,
+        so a stolen session must not be able to destroy the account's data on
+        its own. scope=activity_log holds back events from the last two hours:
+        those rows are the live state behind the account lockout and the
+        per-recipient mail caps, and clearing them on demand would turn this
+        into a reset button for both.
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scope, password]
+              properties:
+                scope: { type: string, enum: [crawl_history, page_content, activity_log] }
+                password: { type: string }
+                code: { type: string, description: TOTP or recovery code, required when a second factor is enrolled }
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  scope: { type: string }
+                  deleted: { type: integer }
+                  message: { type: string }
+        '400': { description: Unknown data category }
+        '401': { description: Wrong password or second factor }
+        '429': { description: Too many re-authentication attempts }
+
+  /api/privacy/account/delete:
+    post:
+      summary: Schedule this account for deletion
+      description: >-
+        Nothing is destroyed by this call. The account is erased after the
+        configured grace period, and a mail is sent to the registered address —
+        which an attacker operating from a hijacked session does not control —
+        naming the deadline for cancelling. A second request while one is
+        pending is refused rather than moving the deadline.
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string }
+                code: { type: string, description: TOTP or recovery code, required when a second factor is enrolled }
+      responses:
+        '200':
+          description: Scheduled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deletion_scheduled_for: { type: string, format: date-time }
+                  message: { type: string }
+        '401': { description: Wrong password or second factor }
+        '409': { description: A deletion is already scheduled }
+        '429': { description: Too many re-authentication attempts }
+
+  /api/privacy/account/delete/cancel:
+    post:
+      summary: Call off a scheduled deletion
+      description: >-
+        Deliberately not re-authenticated. Cancelling only ever preserves data,
+        and a password prompt in front of the undo button is what turns a
+        misclick into a permanent loss.
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      responses:
+        '200': { description: Cancelled, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
+        '400': { description: No deletion is scheduled }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /api/blacklist:
     get:

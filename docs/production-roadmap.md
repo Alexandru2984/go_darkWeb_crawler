@@ -86,23 +86,23 @@ Operator action, not reachable from this repository:
 ## Stage 1 — privacy lifecycle
 
 1. **Account privacy center**
-   - show stored identity, sessions, retention settings and recent security
+   - [x] show stored identity, sessions, retention settings and recent security
      events without raw IP addresses;
-   - download a machine-readable personal-data export;
-   - delete account with re-authentication, grace period and immediate session
-     revocation;
-   - separately delete crawl history, stored page content or searches.
+   - [x] download a machine-readable personal-data export;
+   - [x] delete account with re-authentication and grace period;
+   - [x] separately delete crawl history, stored page content or sign-in history.
 
 2. **Retention engine**
-   - per-account defaults for raw page content, metadata, nodes and edges;
-   - short default retention for raw content and extracted identifiers;
-   - scheduled deletion with bounded batches, metrics and dry-run mode;
-   - legal-hold mechanism that is explicit, audited and never silently enabled;
-   - backup-retention documentation so deletion timelines include recoverable
-     copies.
+   - [x] per-account retention window for nodes and edges;
+   - [x] scheduled deletion with bounded batches, metrics and dry-run mode;
+   - [ ] short default retention for raw content and extracted identifiers;
+   - [ ] legal-hold mechanism that is explicit, audited and never silently
+     enabled;
+   - [ ] backup-retention documentation so deletion timelines include
+     recoverable copies.
 
 3. **Data minimization modes**
-   - metadata-only crawl mode that never stores page text;
+   - [x] metadata-only crawl mode that never stores page text;
    - opt-in entity extraction instead of always extracting email/crypto data;
    - optional query-string stripping per crawl/watchlist;
    - content hashing and change detection without retaining old bodies;
@@ -121,6 +121,58 @@ Operator action, not reachable from this repository:
 Acceptance: deletion/export/retention integration tests, documented key-loss
 and restore behavior, no raw sensitive values in telemetry, and a published
 privacy notice/data inventory.
+
+### Delivered — privacy centre, retention engine, metadata-only mode
+
+Migration `000007_privacy_lifecycle` adds a per-account policy: `retention_days`
+(0 = keep indefinitely, which is what every existing account already had, so the
+default preserves current behaviour), `store_content`, and the pair
+`deletion_requested_at` / `deletion_scheduled_for`.
+
+Decisions worth recording, because each one was a fork where the obvious choice
+was the worse one:
+
+- **Deletion is scheduled, never immediate.** A session cookie is a bearer
+  credential; "delete everything" is exactly what an attacker holding one would
+  reach for. The grace period (`ACCOUNT_DELETION_GRACE_DAYS`, default 7) plus a
+  mail to the registered address — which such an attacker does not control — is
+  what makes the account recoverable. `api.New` clamps a zero grace up to the
+  default rather than treating "unset" as "delete now".
+- **Re-authentication on every destructive endpoint**, password plus second
+  factor when enrolled, rate-limited to ten attempts an hour per account. These
+  endpoints report whether a password was correct, which makes them a guessing
+  oracle for anyone already holding a session; the limiter is the equivalent of
+  the login path's account lockout.
+- **Cancelling a deletion is deliberately not re-authenticated.** It only ever
+  preserves data, and a password prompt in front of the undo button is what
+  turns a misclick into a permanent loss.
+- **Clearing the sign-in history holds back the last two hours.** `auth_audit`
+  is not only a record — it is the live state behind the account lockout and the
+  per-recipient caps on verification and reset mail. Deleting it wholesale on
+  demand would turn "clear my history" into a reset button for both.
+- **Metadata-only mode still stores the content digest.** A digest is not a
+  copy: keeping it means change detection and recrawl scheduling keep working
+  without this service holding what the page said. `PurgeStoredContent` clears
+  the digest alongside the text, because a digest of a copy we no longer hold
+  would make the next crawl conclude nothing had changed and never write content
+  again.
+- **The personal-data export is scoped to the calling account even for
+  administrators**, and never selects credential material — password digest,
+  TOTP seed, recovery-code digests, verification and reset tokens. Its fallible
+  lookups run before the first byte is written, so ordinary failures return an
+  honest status rather than a truncated document claiming to be a 200.
+- **Retention ships with `RETENTION_DRY_RUN`**, reporting matches through
+  `onionspider_retention_pending` without deleting. An automatic destructive job
+  meeting a database that already holds data should be watched before it is
+  armed. In-flight ('crawling') rows are excluded so a worker never writes
+  results to a row that was deleted underneath it.
+
+Fixed in passing: the test fixtures in `internal/api` and `internal/database`
+migrated the shared test database *before* taking the cross-package advisory
+lock, so the migration test's `Down()` could drop the schema between another
+package's migration and its first query. It failed as `relation "nodes" does not
+exist` in roughly one full-suite run in two. Both fixtures now lock first, and
+the migration test restores the schema before releasing the lock.
 
 ## Stage 2 — account and authorization security
 

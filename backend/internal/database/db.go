@@ -286,6 +286,13 @@ func domainBlacklistedTx(tx *sql.Tx, hostname string) (bool, error) {
 // SaveNode saves or updates information about an onion site after crawling.
 // Returns (contentChanged bool, error). If the content hash hasn't changed,
 // performs a minimal update (without touching content or tsvector).
+//
+// Accounts that turned page storage off (see PrivacySettings) get everything
+// except the text: title, status, headers, category and the link graph are all
+// still recorded. The change-detection digest is still computed over the fetched
+// content, because a digest is not a copy — keeping it means a metadata-only
+// account can still be told that a page changed without this service holding
+// what the page said.
 func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status string, metadata string, content string, category string, userID int) (bool, error) {
 	canonical, _, err := canonicalCrawlURL(nodeURL)
 	if err != nil {
@@ -297,9 +304,22 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 	}
 	newHash := ContentHash(title, content)
 
-	// Check if the hash has changed since the last visit
+	// One round trip for both the previous digest and the account's storage
+	// preference. Scalar subqueries so a first visit (no node row) and a
+	// vanished account both come back NULL rather than as an error.
 	var oldHash sql.NullString
-	_ = db.Conn.QueryRow(`SELECT content_hash FROM nodes WHERE url = $1 AND user_id = $2`, nodeURL, userID).Scan(&oldHash)
+	var keepContent sql.NullBool
+	_ = db.Conn.QueryRow(`
+		SELECT (SELECT content_hash FROM nodes WHERE url = $1 AND user_id = $2),
+		       (SELECT store_content FROM users WHERE id = $2)
+	`, nodeURL, userID).Scan(&oldHash, &keepContent)
+
+	// A missing preference means the account was deleted mid-crawl; not storing
+	// the text is the conservative reading.
+	storedContent := content
+	if !keepContent.Valid || !keepContent.Bool {
+		storedContent = ""
+	}
 
 	contentChanged := !oldHash.Valid || oldHash.String != newHash
 
@@ -318,7 +338,7 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 			last_crawled_at   = CURRENT_TIMESTAMP,
 			next_crawl_at     = CURRENT_TIMESTAMP + (INTERVAL '1 day' * nodes.re_crawl_interval_days)
 		WHERE nodes.processing_status != 'blocked';
-		`, nodeURL, title, statusCode, server, status, metadata, content, newHash, category, userID)
+		`, nodeURL, title, statusCode, server, status, metadata, storedContent, newHash, category, userID)
 		return true, err
 	}
 

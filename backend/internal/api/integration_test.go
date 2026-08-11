@@ -74,11 +74,25 @@ func newAPI(t *testing.T, overrides ...func(*Config)) (http.Handler, *database.D
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL not set — skipping API authorization integration test")
 	}
+	// The lock is taken BEFORE the schema is built, not after.
+	//
+	// InitDB applies the migrations, and the migration test in internal/database
+	// runs them back down — dropping every table. Migrating first and locking
+	// second leaves a window between the two where that teardown lands, and this
+	// fixture then truncates a schema that no longer exists. It failed as
+	// "relation \"nodes\" does not exist" in roughly one full-suite run in two.
+	// Everything that touches the schema has to happen inside the lock.
+	lockConn, err := sql.Open("postgres", dsn)
+	if err != nil {
+		t.Fatalf("sql.Open (lock): %v", err)
+	}
+	t.Cleanup(func() { lockConn.Close() })
+	lockTestDB(t, lockConn)
+
 	db, err := database.InitDB(dsn)
 	if err != nil {
 		t.Fatalf("InitDB: %v", err)
 	}
-	lockTestDB(t, db.Conn)
 	if _, err := db.Conn.Exec(`TRUNCATE nodes, edges, auth_audit, blacklist, users RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}

@@ -84,7 +84,7 @@ func TestMigrationsApplyAndIdempotent(t *testing.T) {
 	// schema_migrations should record the latest version, not dirty. Bump this
 	// alongside every new migration: it is what catches a migration file that
 	// was added but never actually applied.
-	const latestVersion = 6
+	const latestVersion = 7
 	var v int
 	var dirty bool
 	if err := db.QueryRow(`SELECT version, dirty FROM schema_migrations`).Scan(&v, &dirty); err != nil {
@@ -124,6 +124,15 @@ func TestMigrationsApplyAndIdempotent(t *testing.T) {
 		if tableExists(t, db, tbl) {
 			t.Errorf("expected table %q to be dropped after Down()", tbl)
 		}
+	}
+
+	// Put the schema back before releasing the lock. This test is the only one
+	// that leaves the database empty, and the next test to take the lock — in
+	// this package or in internal/api — expects to find tables there. Restoring
+	// it here keeps "holding the lock means the schema exists" true, rather than
+	// making every other fixture defend against this one.
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("restore schema after Down(): %v", err)
 	}
 }
 
