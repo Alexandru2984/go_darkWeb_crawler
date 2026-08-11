@@ -220,14 +220,63 @@ the migration test restores the schema before releasing the lock.
 - CAA/DNSSEC/account MFA review, Cloudflare authenticated origin pulls/mTLS and
   documented emergency DNS/origin procedure.
 
+### Delivered — annotations and change watching
+
+Migration `000008_annotations_and_watches` adds `node_tags`, `node_notes`,
+`watches` and `watch_events`. Everything is keyed by `(user_id, node_id)`, never
+by node alone: two accounts can hold the same .onion in their own graphs, and
+what one wrote about it is none of the other's business.
+
+- **Every endpoint takes the address in a POST body, including the reads.** A
+  .onion address in a request line reaches browser history, the `Referer` header
+  on the next navigation and every proxy log in between. For a service whose
+  purpose is that nobody learns which hidden services an account follows, that
+  is the wrong shape however convenient GET would be. This matches the Stage 1
+  note about POST-based lookups.
+- **"Not yours" and "does not exist" answer identically (404).** Distinguishing
+  them turns the annotation surface into an oracle for what somebody else is
+  tracking.
+- **The watch keeps its own digest watermark**, separate from
+  `nodes.content_hash`. The crawler advances the node's digest as part of storing
+  the crawl, so a watch reading that column would find everything unchanged; and
+  a failure between storing the crawl and recording the event would lose the
+  notification permanently. With its own watermark, a lost write simply means the
+  next crawl notices the same difference again.
+- **One observation can produce more than one event.** A page rewritten while the
+  site was down comes back as both *recovered* and *content changed*. An earlier
+  version reported only the recovery and then advanced the digest, which
+  swallowed the change permanently — caught by
+  `TestChangeDuringAnOutageIsReportedOnRecovery` before it shipped.
+- **`last_reachable` is its own column rather than a sentinel inside
+  `last_status`.** A network failure has no HTTP status at all, so folding the
+  two forces "no status" to mean either "never observed" or "was fine" — and both
+  readings misfire: a week-long outage reports going down on every pass, or never
+  reports coming back.
+- **Reachability events fire on transitions only**, and a 5xx counts as
+  unreachable: for the person watching, a 503 and a dead circuit mean the same
+  thing.
+- **The retention sweeper skips annotated and watched sites.** A retention window
+  is a statement about crawl records the account stopped looking at; a tag, a
+  note or a watch is that account saying this site matters. Reaping those on a
+  timer would destroy the user's own writing — which crawling again cannot
+  regenerate — as a side effect of a setting about crawl data.
+- **Nothing is emailed.** A message saying "the site you are watching changed"
+  tells the mail provider, and every hop, exactly what this account follows. The
+  feed is read after signing in.
+
+Annotations and watches are included in the personal-data export and removed by
+account deletion, so the V2 guarantees cover them.
+
 ## Stage 4 — useful privacy-respecting features
 
 Highest-value product capabilities:
 
-- Watchlists with configurable recrawl interval and private change alerts.
+- [x] Watchlists with configurable recrawl interval and private change alerts
+  (in-app feed, never emailed).
+- [x] Tags and private notes, per-item deletion, exempt from retention.
+- Collections built on tags (saved filters over the tag set).
 - Content diff view with explicit retention controls and no raw body history by
   default.
-- Tags, notes, collections and per-item deletion.
 - Advanced search filters: status, category, date, host, title-only and saved
   local presets; cursor pagination and cancelable/debounced requests.
 - Graph filters, clustering, depth controls, time slices and lazy loading so the

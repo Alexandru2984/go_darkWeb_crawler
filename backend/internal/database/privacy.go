@@ -251,6 +251,12 @@ type RetentionReport struct {
 // and will write results back for it; deleting the row underneath produces a
 // crawl whose output lands nowhere and a log line about a node that no longer
 // exists. It will be reaped on the next pass, once it is no longer in flight.
+//
+// So are rows the account has annotated or is watching. A retention window is a
+// statement about crawl records the account has not looked at; a tag, a note or
+// a watch is that account explicitly saying this site matters to it. Reaping
+// those on a timer would quietly destroy the user's own writing — which the
+// crawl data cannot regenerate — as a side effect of a setting about crawl data.
 func (db *DB) ApplyRetention(ctx context.Context, batch int, dryRun bool) (RetentionReport, error) {
 	report := RetentionReport{DryRun: dryRun}
 	if batch <= 0 {
@@ -291,6 +297,9 @@ func (db *DB) ApplyRetention(ctx context.Context, batch int, dryRun bool) (Reten
 				   AND discovered_at < $2
 				   AND (last_crawled_at IS NULL OR last_crawled_at < $2)
 				   AND processing_status <> 'crawling'
+				   AND NOT EXISTS (SELECT 1 FROM node_tags  t WHERE t.node_id = nodes.id)
+				   AND NOT EXISTS (SELECT 1 FROM node_notes o WHERE o.node_id = nodes.id)
+				   AND NOT EXISTS (SELECT 1 FROM watches    w WHERE w.node_id = nodes.id)
 			`, p.userID, cutoff).Scan(&n)
 			if err != nil {
 				return report, err
@@ -306,6 +315,9 @@ func (db *DB) ApplyRetention(ctx context.Context, batch int, dryRun bool) (Reten
 				   AND discovered_at < $2
 				   AND (last_crawled_at IS NULL OR last_crawled_at < $2)
 				   AND processing_status <> 'crawling'
+				   AND NOT EXISTS (SELECT 1 FROM node_tags  t WHERE t.node_id = nodes.id)
+				   AND NOT EXISTS (SELECT 1 FROM node_notes o WHERE o.node_id = nodes.id)
+				   AND NOT EXISTS (SELECT 1 FROM watches    w WHERE w.node_id = nodes.id)
 				 ORDER BY discovered_at
 				 LIMIT $3
 			)

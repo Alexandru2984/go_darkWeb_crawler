@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import { useRouter } from "vue-router";
 import { session, isLoggedIn, signOut } from "../stores/session.js";
+import { unseenChanges } from "../stores/changes.js";
 import StatusBar from "./StatusBar.vue";
 
 const props = defineProps({ open: { type: Boolean, default: false } });
@@ -15,6 +16,7 @@ const open = computed({
 
 const links = [
   { to: "/", label: "Dashboard" },
+  { to: "/changes", label: "Changes", badge: unseenChanges },
   { to: "/security", label: "Security" },
   { to: "/privacy", label: "Privacy" },
 ];
@@ -69,6 +71,14 @@ const handleSignOut = async () => {
           class="nav__link"
         >
           {{ link.label }}
+          <!-- The count is in the accessible name too, not only the visual
+               badge: "Changes, 3 unread" is what a screen reader should say. -->
+          <span v-if="link.badge?.value" class="nav__badge">
+            <span aria-hidden="true">{{
+              link.badge.value > 99 ? "99+" : link.badge.value
+            }}</span>
+            <span class="sr-only">, {{ link.badge.value }} unread</span>
+          </span>
         </RouterLink>
         <span class="nav__user" :title="session.email">{{
           session.email
@@ -191,11 +201,27 @@ const handleSignOut = async () => {
 .nav__link {
   display: flex;
   align-items: center;
+  gap: var(--s-2);
   min-height: var(--tap);
   padding: 0 var(--s-3);
   border-radius: var(--radius-sm);
   color: var(--text-dim);
   font-weight: 600;
+}
+
+.nav__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: #0a0a0a;
+  font-size: 0.7rem;
+  font-weight: 800;
+  line-height: 1;
 }
 .nav__link:hover {
   background: var(--surface-2);

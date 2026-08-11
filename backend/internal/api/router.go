@@ -106,6 +106,19 @@ func New(cfg Config) http.Handler {
 		r.Post("/api/privacy/account/delete", d.handleAccountDeleteRequest)
 		r.Post("/api/privacy/account/delete/cancel", d.handleAccountDeleteCancel)
 
+		// Annotations and watches. All POST, including the reads: these carry a
+		// .onion address, and a request line ends up in browser history, the
+		// Referer header, and every proxy log on the way.
+		r.Post("/api/annotations", d.handleAnnotation)
+		r.Post("/api/annotations/tag", d.handleTag)
+		r.Post("/api/annotations/note", d.handleNote)
+		r.Get("/api/tags", d.handleTags)
+
+		r.Post("/api/watch", d.handleWatch)
+		r.Get("/api/watches", d.handleWatches)
+		r.Get("/api/watch/events", d.handleWatchEvents)
+		r.Post("/api/watch/events/seen", d.handleWatchEventsSeen)
+
 		r.Get("/api/nodes", d.handleNodes)
 		r.Post("/api/node", d.handleNode)
 		r.Get("/api/edges", d.handleEdges)

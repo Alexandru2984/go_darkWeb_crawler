@@ -23,6 +23,12 @@ const routes = [
     meta: { requiresAuth: true, title: "Account security" },
   },
   {
+    path: "/changes",
+    name: "changes",
+    component: () => import("./views/ChangesView.vue"),
+    meta: { requiresAuth: true, title: "Changes" },
+  },
+  {
     path: "/privacy",
     name: "privacy",
     component: () => import("./views/PrivacyView.vue"),

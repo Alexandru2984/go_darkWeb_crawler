@@ -253,6 +253,12 @@ func (e *Engine) worker(ctx context.Context, id int) {
 			if errRetry := e.DB.FailNodeWithRetry(targetUrl, userID); errRetry != nil {
 				log.ErrorContext(ctx, "retry_mark_failed", "url", targetUrl, "err", errRetry)
 			}
+			// A hidden service that stopped answering is a change worth
+			// reporting — often the more interesting one — so failures reach
+			// the watch too, not just successes.
+			if errWatch := e.DB.RecordWatchObservation(targetUrl, userID, false, 0); errWatch != nil {
+				log.ErrorContext(ctx, "watch_observation_failed", "url", targetUrl, "err", errWatch)
+			}
 			e.onNetworkError()
 			continue
 		}
@@ -268,6 +274,14 @@ func (e *Engine) worker(ctx context.Context, id int) {
 			}
 		} else if !changed {
 			log.DebugContext(ctx, "content_unchanged", "url", targetUrl)
+		}
+
+		// Fold the result into any watch on this site. Done after SaveNode, so
+		// the node's digest is already current — the watch compares against its
+		// own watermark, which is what makes losing this call harmless: the next
+		// crawl notices the same difference again.
+		if err := e.DB.RecordWatchObservation(targetUrl, userID, true, result.StatusCode); err != nil {
+			log.ErrorContext(ctx, "watch_observation_failed", "url", targetUrl, "err", err)
 		}
 
 		if depth < e.MaxDepth {

@@ -176,6 +176,12 @@ func (d *deps) handlePrivacyExport(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
+	watches, err := d.cfg.DB.ListWatches(uid)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "export_watches_failed", "uid", uid, "err", err)
+		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
+		return
+	}
 
 	rc := http.NewResponseController(w)
 	rc.SetWriteDeadline(time.Now().Add(10 * time.Minute))
@@ -205,6 +211,7 @@ func (d *deps) handlePrivacyExport(w http.ResponseWriter, r *http.Request) {
 	writeSection("sessions", sessions)
 	writeSection("recovery_codes_unused", recoveryRemaining)
 	writeSection("authentication_history", history)
+	writeSection("watches", watches)
 
 	// isAdmin is passed as false regardless of role: this is the account's own
 	// data, not an administrative dump. An admin exporting their personal data
@@ -221,6 +228,23 @@ func (d *deps) handlePrivacyExport(w http.ResponseWriter, r *http.Request) {
 		return enc.Encode(n)
 	}); err != nil {
 		slog.ErrorContext(r.Context(), "export_failed", "format", "privacy", "kind", "nodes", "err", err)
+	}
+
+	// The account's own writing about these sites. Included for the same reason
+	// the crawl records are, and more so: a crawler produced those, whereas
+	// these are the user's words.
+	w.Write([]byte(`],"annotations":[`))
+	firstNote := true
+	if err := d.cfg.DB.ExportAnnotations(r.Context(), uid, func(a database.AnnotatedSite) error {
+		if !firstNote {
+			if _, err := w.Write([]byte(",")); err != nil {
+				return err
+			}
+		}
+		firstNote = false
+		return enc.Encode(a)
+	}); err != nil {
+		slog.ErrorContext(r.Context(), "export_failed", "format", "privacy", "kind", "annotations", "err", err)
 	}
 
 	w.Write([]byte(`],"links":[`))

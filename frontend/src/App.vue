@@ -2,7 +2,8 @@
 import { ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import AppHeader from "./components/AppHeader.vue";
-import { session, deletionPending } from "./stores/session.js";
+import { session, deletionPending, isLoggedIn } from "./stores/session.js";
+import { refreshUnseenChanges, setUnseenChanges } from "./stores/changes.js";
 
 const route = useRoute();
 const navOpen = ref(false);
@@ -14,6 +15,18 @@ watch(
   () => {
     navOpen.value = false;
   },
+);
+
+// The unread badge is fetched once the session is known, and cleared on the way
+// out. Leaving a stale count on the login screen would show the next person at
+// this browser how much activity the previous account had.
+watch(
+  isLoggedIn,
+  (signedIn) => {
+    if (signedIn) refreshUnseenChanges();
+    else setUnseenChanges(0);
+  },
+  { immediate: true },
 );
 </script>
 

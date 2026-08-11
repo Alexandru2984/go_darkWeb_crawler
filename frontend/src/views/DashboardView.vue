@@ -15,6 +15,8 @@ import {
   allCategories,
 } from "../lib/categories.js";
 import NodeList from "../components/NodeList.vue";
+import NodeAnnotator from "../components/NodeAnnotator.vue";
+import { refreshUnseenChanges } from "../stores/changes.js";
 
 // Loaded on demand: the graph pulls in vis-network, which is by far the largest
 // dependency here. Someone who only uses the list never downloads it.
@@ -27,6 +29,16 @@ const nodes = ref([]);
 const edges = ref([]);
 const loading = ref(false);
 const graphLoading = ref(false);
+
+// The site whose annotation sheet is open. Empty means closed; the dialog is
+// driven by this rather than a separate boolean so the two can never disagree.
+const annotating = ref({ url: "", title: "" });
+const openAnnotator = (node) => {
+  annotating.value = { url: node.url, title: node.title };
+};
+const closeAnnotator = () => {
+  annotating.value = { url: "", title: "" };
+};
 
 const targetUrl = ref("");
 const submitting = ref(false);
@@ -323,7 +335,11 @@ onUnmounted(() => {
         </button>
       </div>
 
-      <NodeList :nodes="visibleNodes" :loading="loading" />
+      <NodeList
+        :nodes="visibleNodes"
+        :loading="loading"
+        @annotate="openAnnotator"
+      />
     </section>
 
     <!-- Graph -->
@@ -331,6 +347,13 @@ onUnmounted(() => {
       <p v-if="graphLoading" class="muted">Loading map…</p>
       <GraphPanel v-else :nodes="nodes" :edges="edges" @notice="showToast" />
     </template>
+
+    <NodeAnnotator
+      :url="annotating.url"
+      :title="annotating.title"
+      @close="closeAnnotator"
+      @changed="refreshUnseenChanges"
+    />
 
     <Transition name="toast">
       <p v-if="toast" class="toast" role="status">{{ toast }}</p>

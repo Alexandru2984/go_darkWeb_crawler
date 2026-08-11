@@ -5,6 +5,7 @@ defineProps({
   nodes: { type: Array, required: true },
   loading: { type: Boolean, default: false },
 });
+const emit = defineEmits(["annotate"]);
 
 const categoryStyle = (category) => {
   const colour = CATEGORY_COLORS[category] || CATEGORY_COLORS.unknown;
@@ -52,6 +53,14 @@ const statusClass = (status) => `pill--${(status || "").replace("_", "-")}`;
             <dd>{{ node.id }}</dd>
           </div>
         </dl>
+        <button
+          class="btn btn--ghost btn--sm node-card__annotate"
+          type="button"
+          @click="emit('annotate', node)"
+        >
+          Tags, note &amp; watch
+          <span class="sr-only">for {{ node.title || node.url }}</span>
+        </button>
       </article>
     </div>
 
@@ -68,6 +77,9 @@ const statusClass = (status) => `pill--${(status || "").replace("_", "-")}`;
             <th scope="col">Category</th>
             <th scope="col">Server</th>
             <th scope="col" class="col-code">Code</th>
+            <th scope="col" class="col-act">
+              <span class="sr-only">Actions</span>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -95,6 +107,16 @@ const statusClass = (status) => `pill--${(status || "").replace("_", "-")}`;
               >
                 {{ node.status_code || "—" }}
               </span>
+            </td>
+            <td class="col-act">
+              <button
+                class="btn btn--ghost btn--sm"
+                type="button"
+                @click="emit('annotate', node)"
+              >
+                Annotate
+                <span class="sr-only">{{ node.title || node.url }}</span>
+              </button>
             </td>
           </tr>
         </tbody>
@@ -159,6 +181,10 @@ const statusClass = (status) => `pill--${(status || "").replace("_", "-")}`;
 .node-card__meta dd {
   margin: 0;
   color: var(--text);
+}
+.node-card__annotate {
+  margin-top: var(--s-3);
+  width: 100%;
 }
 
 /* ── Shared chips ───────────────────────────────────────────────────────── */
@@ -246,7 +272,8 @@ const statusClass = (status) => `pill--${(status || "").replace("_", "-")}`;
   }
 
   .col-id,
-  .col-code {
+  .col-code,
+  .col-act {
     width: 1%;
     white-space: nowrap;
   }

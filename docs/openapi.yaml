@@ -62,6 +62,27 @@ components:
       type: object
       properties:
         message: { type: string }
+    Annotation:
+      type: object
+      description: >-
+        What one account attached to one site. Private to that account: two
+        accounts can hold the same .onion in their own graphs, and neither sees
+        the other's tags, note or watch.
+      properties:
+        tags: { type: array, items: { type: string } }
+        note: { type: string }
+        watch: { $ref: '#/components/schemas/Watch' }
+    Watch:
+      type: object
+      nullable: true
+      properties:
+        id: { type: integer }
+        url: { type: string }
+        title: { type: string }
+        interval_days: { type: integer }
+        last_status: { type: integer }
+        last_checked_at: { type: string }
+        created_at: { type: string }
     PrivacySettings:
       type: object
       properties:
@@ -645,6 +666,201 @@ paths:
         '200': { description: Export stream (content type depends on format) }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { description: Export already in progress or server export limit reached }
+
+  /api/annotations:
+    post:
+      summary: Read this account's tags, note and watch for one site
+      description: >-
+        POST rather than GET even though it only reads. The body carries a
+        .onion address, and a request line reaches browser history, the Referer
+        header on the next navigation and every proxy log in between — which for
+        this service is precisely the information that must not escape. A site
+        belonging to another account answers 404, identically to one that does
+        not exist, so this cannot be used to probe what somebody else tracks.
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties: { url: { type: string } }
+      responses:
+        '200':
+          description: The account's annotation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Annotation' }
+        '400': { description: Invalid onion URL }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Not in this account's graph }
+
+  /api/annotations/tag:
+    post:
+      summary: Add or remove one tag
+      description: Tags are normalised (lowercased, whitespace collapsed) so "Market" and "market " are one label.
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, tag]
+              properties:
+                url: { type: string }
+                tag: { type: string, maxLength: 40 }
+                remove: { type: boolean, default: false }
+      responses:
+        '200':
+          description: The updated annotation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Annotation' }
+        '400': { description: Invalid tag, invalid URL, or the per-site tag limit was reached }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Not in this account's graph }
+
+  /api/annotations/note:
+    post:
+      summary: Replace this account's private note on a site
+      description: An empty body deletes the note rather than storing a blank one.
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, body]
+              properties:
+                url: { type: string }
+                body: { type: string, maxLength: 4000 }
+      responses:
+        '200':
+          description: The updated annotation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Annotation' }
+        '400': { description: Note too long or invalid URL }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Not in this account's graph }
+
+  /api/tags:
+    get:
+      summary: This account's tags with usage counts
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      responses:
+        '200':
+          description: Tags, most used first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    tag: { type: string }
+                    count: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/watch:
+    post:
+      summary: Start, re-interval or stop watching a site
+      description: >-
+        Starting a watch also sets the site's recrawl interval — a watch that
+        never triggers a recrawl would never notice anything. Annotated and
+        watched sites are exempt from the retention sweeper.
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string }
+                interval_days: { type: integer, minimum: 1, maximum: 365, default: 1 }
+                stop: { type: boolean, default: false }
+      responses:
+        '200':
+          description: The watch, or null after stopping
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  watch: { $ref: '#/components/schemas/Watch' }
+                  message: { type: string }
+        '400': { description: Interval out of range or invalid URL }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Not in this account's graph }
+
+  /api/watches:
+    get:
+      summary: Everything this account is watching
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      responses:
+        '200':
+          description: Watches, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Watch' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/watch/events:
+    get:
+      summary: The change feed
+      description: >-
+        Read here rather than emailed. A message saying "the site you are
+        watching changed" tells the mail provider — and every server between
+        here and it — what this account is interested in. Only transitions
+        produce entries, so a site that has been down for a week yields one
+        event rather than one per crawl; a page rewritten during an outage
+        produces both a recovery and a content-change event when it returns.
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: Events newest first, with the unread count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unseen: { type: integer }
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        url: { type: string }
+                        title: { type: string }
+                        kind: { type: string, enum: [content_changed, unreachable, recovered] }
+                        status_code: { type: integer }
+                        detected_at: { type: string }
+                        seen: { type: boolean }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/watch/events/seen:
+    post:
+      summary: Mark the whole feed read
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      responses:
+        '200':
+          description: How many entries were marked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { marked: { type: integer } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /api/privacy/settings:
     get:
