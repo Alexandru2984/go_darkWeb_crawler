@@ -209,20 +209,34 @@ func (d *deps) handlePrivacyExport(w http.ResponseWriter, r *http.Request) {
 		return err
 	}
 
-	w.Write([]byte("{"))
-	writeSection("format_version", privacyExportVersion)
-	writeSection("generated_at", time.Now().UTC().Format(time.RFC3339))
-	writeSection("account", profile)
-	writeSection("privacy_settings", settings)
-	writeSection("sessions", sessions)
-	writeSection("recovery_codes_unused", recoveryRemaining)
-	writeSection("authentication_history", history)
-	writeSection("watches", watches)
+	writeChunk := func(chunk string) {
+		if _, err := w.Write([]byte(chunk)); err != nil {
+			panic(http.ErrAbortHandler)
+		}
+	}
+	writeChunk("{")
+	for _, section := range []struct {
+		name  string
+		value any
+	}{
+		{"format_version", privacyExportVersion},
+		{"generated_at", time.Now().UTC().Format(time.RFC3339)},
+		{"account", profile},
+		{"privacy_settings", settings},
+		{"sessions", sessions},
+		{"recovery_codes_unused", recoveryRemaining},
+		{"authentication_history", history},
+		{"watches", watches},
+	} {
+		if err := writeSection(section.name, section.value); err != nil {
+			panic(http.ErrAbortHandler)
+		}
+	}
 
 	// isAdmin is passed as false regardless of role: this is the account's own
 	// data, not an administrative dump. An admin exporting their personal data
 	// should not receive every other tenant's crawl records inside it.
-	w.Write([]byte(`"crawl_records":[`))
+	writeChunk(`"crawl_records":[`)
 	firstNode := true
 	if err := d.cfg.DB.ExportNodes(r.Context(), uid, false, func(n database.Node) error {
 		if !firstNode {
@@ -234,12 +248,13 @@ func (d *deps) handlePrivacyExport(w http.ResponseWriter, r *http.Request) {
 		return enc.Encode(n)
 	}); err != nil {
 		slog.ErrorContext(r.Context(), "export_failed", "format", "privacy", "kind", "nodes", "err", err)
+		panic(http.ErrAbortHandler)
 	}
 
 	// The account's own writing about these sites. Included for the same reason
 	// the crawl records are, and more so: a crawler produced those, whereas
 	// these are the user's words.
-	w.Write([]byte(`],"annotations":[`))
+	writeChunk(`],"annotations":[`)
 	firstNote := true
 	if err := d.cfg.DB.ExportAnnotations(r.Context(), uid, func(a database.AnnotatedSite) error {
 		if !firstNote {
@@ -251,9 +266,10 @@ func (d *deps) handlePrivacyExport(w http.ResponseWriter, r *http.Request) {
 		return enc.Encode(a)
 	}); err != nil {
 		slog.ErrorContext(r.Context(), "export_failed", "format", "privacy", "kind", "annotations", "err", err)
+		panic(http.ErrAbortHandler)
 	}
 
-	w.Write([]byte(`],"links":[`))
+	writeChunk(`],"links":[`)
 	firstEdge := true
 	if err := d.cfg.DB.ExportEdges(r.Context(), uid, func(e database.Edge) error {
 		if !firstEdge {
@@ -265,8 +281,9 @@ func (d *deps) handlePrivacyExport(w http.ResponseWriter, r *http.Request) {
 		return enc.Encode(e)
 	}); err != nil {
 		slog.ErrorContext(r.Context(), "export_failed", "format", "privacy", "kind", "edges", "err", err)
+		panic(http.ErrAbortHandler)
 	}
-	w.Write([]byte("]}"))
+	writeChunk("]}")
 }
 
 // handlePrivacyPurge deletes one category of the account's stored data.
