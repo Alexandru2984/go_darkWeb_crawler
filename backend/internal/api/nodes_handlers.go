@@ -5,18 +5,24 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"onion-spider/internal/database"
 )
 
 func (d *deps) handleNodes(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	limit, offset := ParsePagination(r)
-	nodes, err := d.cfg.DB.GetNodes(limit, offset, GetUserID(r), HasAdminAccess(r))
+	category, status := r.URL.Query().Get("category"), r.URL.Query().Get("status")
+	if !validateNodeFilters(w, category, status) {
+		return
+	}
+	nodes, err := d.cfg.DB.GetNodes(r.Context(), category, status, limit+1, offset, GetUserID(r), HasAdminAccess(r))
 	if err != nil {
 		slog.ErrorContext(r.Context(), "get_nodes_failed", "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
-	json.NewEncoder(w).Encode(nodes)
+	writeNodePage(w, nodes, limit)
 }
 
 func (d *deps) handleNode(w http.ResponseWriter, r *http.Request) {
@@ -70,6 +76,7 @@ func (d *deps) handleSearch(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Query    string `json:"q"`
 		Category string `json:"category,omitempty"`
+		Status   string `json:"status,omitempty"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1024)
 	dec := json.NewDecoder(r.Body)
@@ -87,16 +94,37 @@ func (d *deps) handleSearch(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusBadRequest, "Query too long (max 200 characters)")
 		return
 	}
-	category := req.Category
-	if len(category) > 50 {
-		WriteJSONError(w, http.StatusBadRequest, "Category too long")
+	if !validateNodeFilters(w, req.Category, req.Status) {
 		return
 	}
-	nodes, err := d.cfg.DB.SearchNodes(q, category, GetUserID(r), HasAdminAccess(r))
+	limit, offset := ParsePagination(r)
+	nodes, err := d.cfg.DB.SearchNodes(r.Context(), q, req.Category, req.Status, limit+1, offset, GetUserID(r), HasAdminAccess(r))
 	if err != nil {
 		slog.ErrorContext(r.Context(), "search_failed", "q", q, "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
+	}
+	writeNodePage(w, nodes, limit)
+}
+
+func validateNodeFilters(w http.ResponseWriter, category, status string) bool {
+	if len(category) > 50 {
+		WriteJSONError(w, http.StatusBadRequest, "Category too long")
+		return false
+	}
+	switch status {
+	case "", "pending", "crawling", "completed", "failed", "blocked":
+		return true
+	default:
+		WriteJSONError(w, http.StatusBadRequest, "Invalid crawl status")
+		return false
+	}
+}
+
+func writeNodePage(w http.ResponseWriter, nodes []database.Node, limit int) {
+	if len(nodes) > limit {
+		w.Header().Set("X-Has-More", "true")
+		nodes = nodes[:limit]
 	}
 	json.NewEncoder(w).Encode(nodes)
 }

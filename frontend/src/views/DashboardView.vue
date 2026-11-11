@@ -1,13 +1,12 @@
 <script setup>
 import {
   ref,
-  computed,
   onMounted,
   onUnmounted,
   watch,
   defineAsyncComponent,
 } from "vue";
-import { apiFetch, apiJSON } from "../lib/api.js";
+import { apiFetch, apiJSON, readJSON } from "../lib/api.js";
 import { isAdmin } from "../stores/session.js";
 import {
   CATEGORY_COLORS,
@@ -26,9 +25,11 @@ const GraphPanel = defineAsyncComponent(
 
 const view = ref("list"); // 'list' | 'graph'
 const nodes = ref([]);
+const graphNodes = ref([]);
 const edges = ref([]);
 const loading = ref(false);
 const graphLoading = ref(false);
+const graphError = ref("");
 
 // The site whose annotation sheet is open. Empty means closed; the dialog is
 // driven by this rather than a separate boolean so the two can never disagree.
@@ -48,12 +49,24 @@ const formKind = ref("info");
 const query = ref("");
 const searching = ref(false);
 const category = ref("all");
+const status = ref("");
+const page = ref(1);
+const hasMore = ref(false);
+const resultError = ref("");
+const statuses = {
+  pending: "Queued",
+  crawling: "Crawling",
+  completed: "Completed",
+  failed: "Failed",
+  blocked: "Blocked",
+};
 
 const toast = ref("");
 let toastTimer = null;
 let pollTimer = null;
 let searchTimer = null;
-let searchAbort = null;
+let resultsRequest;
+let graphRequest;
 
 const showToast = (text) => {
   toast.value = text;
@@ -61,66 +74,99 @@ const showToast = (text) => {
   toastTimer = setTimeout(() => (toast.value = ""), 3000);
 };
 
-const visibleNodes = computed(() =>
-  category.value === "all"
-    ? nodes.value
-    : nodes.value.filter((n) => n.category === category.value),
-);
-
-const fetchNodes = async () => {
-  if (searching.value) return;
-  loading.value = true;
-  const { ok, data } = await apiJSON("/api/nodes");
-  if (ok) nodes.value = data || [];
-  loading.value = false;
-};
-
-const fetchEdges = async () => {
-  const { ok, data } = await apiJSON("/api/edges");
-  if (ok) edges.value = data || [];
-};
-
-const runSearch = async () => {
+const loadResults = async (background = false) => {
+  if (background && resultsRequest) return;
+  resultsRequest?.abort();
+  const request = new AbortController();
+  resultsRequest = request;
+  if (!background) loading.value = true;
+  resultError.value = "";
   const q = query.value.trim();
-  clearTimeout(searchTimer);
-  searchAbort?.abort();
-  searchAbort = null;
-
+  const filters = {
+    category: category.value === "all" ? "" : category.value,
+    status: status.value,
+  };
+  const params = new URLSearchParams({ page: page.value, limit: 30 });
+  const endpoint = q ? "search" : "nodes";
   if (!q) {
-    searching.value = false;
-    return fetchNodes();
+    for (const [key, value] of Object.entries(filters)) {
+      if (value) params.set(key, value);
+    }
   }
-
-  const controller = new AbortController();
-  searchAbort = controller;
-  searching.value = true;
-  loading.value = true;
   try {
-    // The query travels in a POST body, never a query string: search terms are
-    // exactly the kind of value that should not reach proxy logs or history.
-    const response = await apiFetch("/api/search", {
-      method: "POST",
-      json: { q },
-      signal: controller.signal,
+    const response = await apiFetch(`/api/${endpoint}?${params}`, {
+      ...(q ? { method: "POST", json: { q, ...filters } } : {}),
+      signal: request.signal,
     });
-    if (response.ok) nodes.value = (await response.json()) || [];
+    const data = await readJSON(response);
+    if (resultsRequest !== request) return;
+    if (!response.ok) {
+      resultError.value = data.error || "Could not load results.";
+      return;
+    }
+    nodes.value = data || [];
+    hasMore.value = response.headers.get("X-Has-More") === "true";
   } catch (err) {
-    if (err.name !== "AbortError") showToast("Search failed.");
+    if (err.name !== "AbortError" && resultsRequest === request) {
+      resultError.value = "Could not reach the server.";
+    }
   } finally {
-    if (searchAbort === controller) searchAbort = null;
-    loading.value = false;
+    if (resultsRequest === request) {
+      resultsRequest = null;
+      loading.value = false;
+    }
   }
+};
+
+const updateResults = () => {
+  clearTimeout(searchTimer);
+  page.value = 1;
+  hasMore.value = false;
+  nodes.value = [];
+  searching.value = Boolean(query.value.trim());
+  return loadResults();
 };
 
 const scheduleSearch = () => {
   clearTimeout(searchTimer);
-  if (!query.value.trim()) return runSearch();
-  searchTimer = setTimeout(runSearch, 350);
+  resultsRequest?.abort();
+  if (!query.value.trim()) return updateResults();
+  searchTimer = setTimeout(updateResults, 350);
 };
 
 const clearSearch = () => {
   query.value = "";
-  runSearch();
+  updateResults();
+};
+
+const changePage = (delta) => {
+  page.value += delta;
+  nodes.value = [];
+  loadResults();
+};
+
+const loadGraph = async () => {
+  graphRequest?.abort();
+  const request = new AbortController();
+  graphRequest = request;
+  graphLoading.value = true;
+  graphError.value = "";
+  try {
+    const [nodePage, edgePage] = await Promise.all([
+      apiJSON("/api/nodes", { signal: request.signal }),
+      apiJSON("/api/edges", { signal: request.signal }),
+    ]);
+    if (graphRequest !== request) return;
+    if (!nodePage.ok || !edgePage.ok) throw new Error("graph request failed");
+    graphNodes.value = nodePage.data || [];
+    edges.value = edgePage.data || [];
+  } catch (err) {
+    if (err.name !== "AbortError" && graphRequest === request) {
+      graphError.value = "Could not load the network map.";
+    }
+  } finally {
+    if (graphRequest === request) graphLoading.value = false;
+  }
 };
 
 const startCrawl = async () => {
@@ -169,17 +215,23 @@ const downloadExport = async (format) => {
   }
 };
 
-watch(view, async (v) => {
-  if (v !== "graph") return;
-  graphLoading.value = true;
-  await Promise.all([fetchEdges(), fetchNodes()]);
-  graphLoading.value = false;
+watch([category, status], updateResults);
+watch(view, (current) => {
+  if (current === "graph") loadGraph();
+  else graphRequest?.abort();
 });
 
 onMounted(() => {
-  fetchNodes();
+  loadResults();
   pollTimer = setInterval(() => {
-    if (view.value === "list" && !searching.value) fetchNodes();
+    if (
+      view.value === "list" &&
+      page.value === 1 &&
+      !query.value.trim() &&
+      !document.hidden
+    ) {
+      loadResults(true);
+    }
   }, 10000);
 });
 
@@ -187,7 +239,8 @@ onUnmounted(() => {
   clearInterval(pollTimer);
   clearTimeout(toastTimer);
   clearTimeout(searchTimer);
-  searchAbort?.abort();
+  resultsRequest?.abort();
+  graphRequest?.abort();
 });
 </script>
 
@@ -197,6 +250,9 @@ onUnmounted(() => {
     <section class="card" aria-labelledby="crawl-heading">
       <div class="section-head">
         <h2 id="crawl-heading" class="section-title">Crawl a new address</h2>
+        <RouterLink class="btn btn--ghost btn--sm" :to="{ name: 'queue' }">
+          View queue
+        </RouterLink>
         <div v-if="isAdmin" class="exports">
           <span class="exports__label">Export</span>
           <button
@@ -277,10 +333,11 @@ onUnmounted(() => {
           type="search"
           placeholder="Search crawled content…"
           @input="scheduleSearch"
-          @keyup.enter="runSearch"
+          maxlength="200"
+          @keyup.enter="updateResults"
         />
         <button
-          v-if="searching"
+          v-if="query"
           class="btn btn--ghost btn--sm"
           type="button"
           @click="clearSearch"
@@ -321,31 +378,76 @@ onUnmounted(() => {
         </button>
       </div>
 
+      <div class="status-filter">
+        <label class="label" for="status-filter">Crawl status</label>
+        <select id="status-filter" v-model="status" class="field">
+          <option value="">Any status</option>
+          <option
+            v-for="(label, value) in statuses"
+            :key="value"
+            :value="value"
+          >
+            {{ label }}
+          </option>
+        </select>
+      </div>
+
       <div class="section-head section-head--tight">
         <h2 id="results-heading" class="section-title">
           {{ searching ? "Search results" : "Recently discovered" }}
-          <span class="muted count">({{ visibleNodes.length }})</span>
+          <span class="muted count">({{ nodes.length }})</span>
         </h2>
         <button
           class="btn btn--ghost btn--sm"
           type="button"
-          @click="fetchNodes"
+          @click="loadResults()"
         >
           Refresh
         </button>
       </div>
 
+      <p v-if="resultError" class="msg msg--error" role="alert">
+        {{ resultError }}
+      </p>
       <NodeList
-        :nodes="visibleNodes"
+        v-else
+        :nodes="nodes"
         :loading="loading"
         @annotate="openAnnotator"
       />
+      <nav v-if="page > 1 || hasMore" class="pager" aria-label="Results pages">
+        <button
+          class="btn btn--secondary"
+          type="button"
+          :disabled="page === 1 || loading"
+          @click="changePage(-1)"
+        >
+          Previous
+        </button>
+        <span class="muted" aria-live="polite">Page {{ page }}</span>
+        <button
+          class="btn btn--secondary"
+          type="button"
+          :disabled="!hasMore || loading"
+          @click="changePage(1)"
+        >
+          Next
+        </button>
+      </nav>
     </section>
 
     <!-- Graph -->
     <template v-else>
       <p v-if="graphLoading" class="muted">Loading map…</p>
-      <GraphPanel v-else :nodes="nodes" :edges="edges" @notice="showToast" />
+      <p v-else-if="graphError" class="msg msg--error" role="alert">
+        {{ graphError }}
+      </p>
+      <GraphPanel
+        v-else
+        :nodes="graphNodes"
+        :edges="edges"
+        @notice="showToast"
+      />
     </template>
 
     <NodeAnnotator
@@ -362,6 +464,20 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.status-filter {
+  margin-top: var(--s-3);
+  max-width: 14rem;
+}
+
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-3);
+  margin-top: var(--s-4);
+}
+
 .section-head {
   display: flex;
   flex-wrap: wrap;

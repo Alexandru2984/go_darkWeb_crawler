@@ -443,38 +443,24 @@ func (db *DB) CountPendingNodes(userID int) (int, error) {
 	return n, err
 }
 
-// SearchNodes performs a Full-Text search on title and content using the GIN index.
-// If category is non-empty, also filters by category.
-func (db *DB) SearchNodes(searchQuery, category string, userID int, isAdmin bool) ([]Node, error) {
-	rows, err := db.Conn.Query(`
+// SearchNodes performs full-text search on titles and content.
+func (db *DB) SearchNodes(ctx context.Context, searchQuery, category, status string, limit, offset, userID int, isAdmin bool) ([]Node, error) {
+	rows, err := db.Conn.QueryContext(ctx, `
 		SELECT id, url, COALESCE(title, ''), COALESCE(status_code, 0), COALESCE(server_header, ''),
 		       processing_status, COALESCE(category, 'unknown'),
 		       to_char(last_crawled_at, 'YYYY-MM-DD HH24:MI:SS')
 		FROM nodes
 		WHERE search_vector @@ plainto_tsquery('english', $1)
-		  AND ($2 = '' OR category = $2)
-		  AND (user_id = $3 OR $4)
-		ORDER BY ts_rank(search_vector, plainto_tsquery('english', $1)) DESC
-		LIMIT 50
-	`, searchQuery, category, userID, isAdmin)
+		  AND ($2 = '' OR COALESCE(category, 'unknown') = $2)
+		  AND ($3 = '' OR processing_status = $3)
+		  AND (user_id = $4 OR $5)
+		ORDER BY ts_rank(search_vector, plainto_tsquery('english', $1)) DESC, id DESC
+		LIMIT $6 OFFSET $7
+	`, searchQuery, category, status, userID, isAdmin, limit, offset)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var nodes []Node
-	for rows.Next() {
-		var n Node
-		var lastCrawled sql.NullString
-		if err := rows.Scan(&n.ID, &n.URL, &n.Title, &n.StatusCode, &n.ServerHeader, &n.ProcessingStatus, &n.Category, &lastCrawled); err != nil {
-			return nil, err
-		}
-		if lastCrawled.Valid {
-			n.LastCrawledAt = lastCrawled.String
-		}
-		nodes = append(nodes, n)
-	}
-	return nodes, rows.Err()
+	return scanNodes(rows)
 }
 
 // SaveEdge creates a link between two sites and adds the target to the queue if new.
@@ -712,18 +698,24 @@ func (db *DB) MarkRobotsBlocked(nodeURL string, userID int) error {
 	return err
 }
 
-func (db *DB) GetNodes(limit, offset int, userID int, isAdmin bool) ([]Node, error) {
-	if limit <= 0 || limit > 200 {
-		limit = 50
-	}
-	rows, err := db.Conn.Query(`
+func (db *DB) GetNodes(ctx context.Context, category, status string, limit, offset, userID int, isAdmin bool) ([]Node, error) {
+	rows, err := db.Conn.QueryContext(ctx, `
 		SELECT id, url, COALESCE(title, ''), COALESCE(status_code, 0), COALESCE(server_header, ''),
 		       processing_status, COALESCE(category, 'unknown'),
 		       to_char(last_crawled_at, 'YYYY-MM-DD HH24:MI:SS')
-		FROM nodes WHERE (user_id = $3 OR $4) ORDER BY discovered_at DESC LIMIT $1 OFFSET $2`, limit, offset, userID, isAdmin)
+		FROM nodes
+		WHERE (user_id = $3 OR $4)
+		  AND ($5 = '' OR COALESCE(category, 'unknown') = $5)
+		  AND ($6 = '' OR processing_status = $6)
+		ORDER BY discovered_at DESC, id DESC LIMIT $1 OFFSET $2
+	`, limit, offset, userID, isAdmin, category, status)
 	if err != nil {
 		return nil, err
 	}
+	return scanNodes(rows)
+}
+
+func scanNodes(rows *sql.Rows) ([]Node, error) {
 	defer rows.Close()
 
 	var nodes []Node

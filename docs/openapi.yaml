@@ -512,9 +512,15 @@ paths:
     get:
       summary: List crawled nodes (own; all for admins)
       security: [{ bearerAuth: [] }]
+      description: >-
+        Applies category and status filters before pagination. Returns X-Has-More
+        when another page exists. Global administrative data requires the
+        configured MFA policy.
       parameters:
         - { in: query, name: page, schema: { type: integer, default: 1 } }
         - { in: query, name: limit, schema: { type: integer, default: 50, maximum: 200 } }
+        - { in: query, name: category, schema: { type: string, maxLength: 50 } }
+        - { in: query, name: status, schema: { type: string, enum: [pending, crawling, completed, failed, blocked] } }
       responses:
         '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Node' } } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -552,7 +558,10 @@ paths:
     post:
       summary: Full-text search over titles and content
       security: [{ bearerAuth: [] }]
-      description: Search terms are carried in JSON, never in browser/proxy request URLs.
+      description: Filters and search terms are carried in JSON. Results are ordered by relevance and ID. X-Has-More indicates another page.
+      parameters:
+        - { in: query, name: page, schema: { type: integer, default: 1, maximum: 10000 } }
+        - { in: query, name: limit, schema: { type: integer, default: 50, maximum: 200 } }
       requestBody:
         required: true
         content:
@@ -563,6 +572,7 @@ paths:
               properties:
                 q: { type: string, maxLength: 200 }
                 category: { type: string, maxLength: 50 }
+                status: { type: string, enum: [pending, crawling, completed, failed, blocked] }
       responses:
         '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Node' } } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }

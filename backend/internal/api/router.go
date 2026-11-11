@@ -63,6 +63,7 @@ func New(cfg Config) http.Handler {
 		AllowedOrigins: cfg.CORSOrigins,
 		AllowedMethods: []string{"GET", "POST", "DELETE", "OPTIONS"},
 		AllowedHeaders: []string{"Accept", "Content-Type", "Authorization", csrfHeader},
+		ExposedHeaders: []string{"X-Has-More"},
 		MaxAge:         300,
 	}))
 
