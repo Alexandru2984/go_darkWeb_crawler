@@ -201,8 +201,8 @@ func (db *DB) DeleteCrawlHistory(userID int) (int64, error) {
 // would then never regain content even after the account turned storage back on.
 func (db *DB) PurgeStoredContent(userID int) (int64, error) {
 	res, err := db.Conn.Exec(`
-		UPDATE nodes SET content = NULL, content_hash = NULL
-		 WHERE user_id = $1 AND content IS NOT NULL AND content <> ''
+		UPDATE nodes SET content = NULL, content_hash = NULL, metadata = metadata - 'entities'
+		 WHERE user_id = $1 AND (content <> '' OR metadata ? 'entities')
 	`, userID)
 	if err != nil {
 		return 0, err

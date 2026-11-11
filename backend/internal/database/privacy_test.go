@@ -401,11 +401,12 @@ func TestPurgingActivityLogKeepsLiveThrottlingState(t *testing.T) {
 func TestMetadataOnlyAccountStoresNoPageTextButStillDetectsChange(t *testing.T) {
 	db := newTestDB(t)
 	uid := mustUser(t, db, "meta@example.com")
+	const meta = `{"description":"Page description","entities":{"emails":["body@example.com"]}}`
 	if err := db.SetPrivacySettings(uid, 0, false); err != nil {
 		t.Fatalf("SetPrivacySettings: %v", err)
 	}
 
-	changed, err := db.SaveNode(testURLA, "A title", "nginx", 200, "completed", "", "the secret page body", "market", uid)
+	changed, err := db.SaveNode(testURLA, "A title", "nginx", 200, "completed", meta, "the secret page body", "market", uid)
 	if err != nil {
 		t.Fatalf("SaveNode: %v", err)
 	}
@@ -427,22 +428,27 @@ func TestMetadataOnlyAccountStoresNoPageTextButStillDetectsChange(t *testing.T) 
 		t.Error("no content digest stored — change detection is now impossible")
 	}
 	// Title and the rest of the metadata are still the point of the crawl.
-	var title, category string
+	var title, category, description string
+	var hasEntities bool
 	if err := db.Conn.QueryRow(
-		`SELECT COALESCE(title, ''), COALESCE(category, '') FROM nodes WHERE url = $1 AND user_id = $2`,
-		testURLA, uid).Scan(&title, &category); err != nil {
+		`SELECT COALESCE(title, ''), COALESCE(category, ''), metadata->>'description', metadata ? 'entities' FROM nodes WHERE url = $1 AND user_id = $2`,
+		testURLA, uid).Scan(&title, &category, &description, &hasEntities); err != nil {
 		t.Fatalf("read metadata: %v", err)
 	}
-	if title != "A title" || category != "market" {
+	if title != "A title" || category != "market" || description != "Page description" {
 		t.Errorf("metadata was dropped along with the content: title=%q category=%q", title, category)
 	}
 
+	if hasEntities {
+		t.Error("metadata-only crawl stored values extracted from the body")
+	}
+
 	// Same text again: unchanged.
-	if changed, err := db.SaveNode(testURLA, "A title", "nginx", 200, "completed", "", "the secret page body", "market", uid); err != nil || changed {
+	if changed, err := db.SaveNode(testURLA, "A title", "nginx", 200, "completed", meta, "the secret page body", "market", uid); err != nil || changed {
 		t.Errorf("recrawl of identical content reported changed=%v (err %v), want false", changed, err)
 	}
 	// Different text: detected, still without storing it.
-	changed, err = db.SaveNode(testURLA, "A title", "nginx", 200, "completed", "", "a different body", "market", uid)
+	changed, err = db.SaveNode(testURLA, "A title", "nginx", 200, "completed", meta, "a different body", "market", uid)
 	if err != nil {
 		t.Fatalf("SaveNode(changed): %v", err)
 	}
@@ -456,6 +462,24 @@ func TestMetadataOnlyAccountStoresNoPageTextButStillDetectsChange(t *testing.T) 
 	}
 	if content != "" {
 		t.Errorf("metadata-only account stored page text on recrawl: %q", content)
+	}
+
+	if err := db.SetPrivacySettings(uid, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := db.SaveNode(testURLA, "A title", "nginx", 200, "completed", meta, "a different body", "market", uid); err != nil || changed {
+		t.Fatalf("enabling storage changed the digest: changed=%v, err=%v", changed, err)
+	}
+	if err := db.Conn.QueryRow(`SELECT content, metadata ? 'entities' FROM nodes WHERE url = $1 AND user_id = $2`,
+		testURLA, uid).Scan(&content, &hasEntities); err != nil || content != "a different body" || !hasEntities {
+		t.Fatalf("crawl after re-enabling storage: content=%q, entities=%v, err=%v", content, hasEntities, err)
+	}
+	if _, err := db.PurgeStoredContent(uid); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Conn.QueryRow(`SELECT content IS NULL AND NOT (metadata ? 'entities') FROM nodes WHERE url = $1 AND user_id = $2`,
+		testURLA, uid).Scan(&hasEntities); err != nil || !hasEntities {
+		t.Fatalf("content purge retained page text or entities: cleared=%v, err=%v", hasEntities, err)
 	}
 }
 

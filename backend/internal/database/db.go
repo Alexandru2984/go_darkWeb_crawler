@@ -304,29 +304,44 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 	}
 	newHash := ContentHash(title, content)
 
-	// One round trip for both the previous digest and the account's storage
-	// preference. Scalar subqueries so a first visit (no node row) and a
-	// vanished account both come back NULL rather than as an error.
-	var oldHash sql.NullString
-	var keepContent sql.NullBool
-	_ = db.Conn.QueryRow(`
-		SELECT (SELECT content_hash FROM nodes WHERE url = $1 AND user_id = $2),
-		       (SELECT store_content FROM users WHERE id = $2)
-	`, nodeURL, userID).Scan(&oldHash, &keepContent)
+	// Hold the account preference through the write so a concurrent privacy
+	// update cannot finish while a crawl is still about to store page text.
+	tx, err := db.Conn.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
 
-	// A missing preference means the account was deleted mid-crawl; not storing
-	// the text is the conservative reading.
-	storedContent := content
-	if !keepContent.Valid || !keepContent.Bool {
-		storedContent = ""
+	var keepContent bool
+	if err := tx.QueryRow(`SELECT store_content FROM users WHERE id = $1 FOR SHARE`,
+		userID).Scan(&keepContent); err != nil {
+		return false, err
+	}
+	var oldHash sql.NullString
+	var hadContent bool
+	err = tx.QueryRow(`
+		SELECT content_hash, COALESCE(content <> '', FALSE) FROM nodes
+		WHERE url = $1 AND user_id = $2
+	`, nodeURL, userID).Scan(&oldHash, &hadContent)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
 	}
 
+	storedContent := content
+	if !keepContent {
+		storedContent = ""
+	}
 	contentChanged := !oldHash.Valid || oldHash.String != newHash
 
-	if contentChanged {
-		// New content or first visit: full update
-		_, err := db.Conn.Exec(`
-		INSERT INTO nodes (url, title, status_code, server_header, processing_status, metadata, content, content_hash, category, last_crawled_at, next_crawl_at, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + (INTERVAL '1 day' * 7), $10) ON CONFLICT (url, user_id) DO UPDATE SET
+	if contentChanged || (keepContent && !hadContent && content != "") {
+		// Restore an unchanged body if storage was re-enabled after the last crawl.
+		_, err := tx.Exec(`
+		INSERT INTO nodes (url, title, status_code, server_header, processing_status,
+			metadata, content, content_hash, category, last_crawled_at, next_crawl_at, user_id)
+		VALUES ($1, $2, $3, $4, $5,
+			CASE WHEN $11 THEN $6::jsonb ELSE $6::jsonb - 'entities' END,
+			$7, $8, $9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '7 days', $10)
+		ON CONFLICT (url, user_id) DO UPDATE SET
 			title             = EXCLUDED.title,
 			status_code       = EXCLUDED.status_code,
 			server_header     = EXCLUDED.server_header,
@@ -338,12 +353,15 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 			last_crawled_at   = CURRENT_TIMESTAMP,
 			next_crawl_at     = CURRENT_TIMESTAMP + (INTERVAL '1 day' * nodes.re_crawl_interval_days)
 		WHERE nodes.processing_status != 'blocked';
-		`, nodeURL, title, statusCode, server, status, metadata, storedContent, newHash, category, userID)
-		return true, err
+		`, nodeURL, title, statusCode, server, status, metadata, storedContent, newHash, category, userID, keepContent)
+		if err != nil {
+			return false, err
+		}
+		return contentChanged, tx.Commit()
 	}
 
 	// Unchanged content: minimal update — don't touch content/tsvector/category
-	_, err = db.Conn.Exec(`
+	_, err = tx.Exec(`
 	UPDATE nodes SET
 		status_code       = $3,
 		server_header     = $4,
@@ -352,7 +370,10 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 		next_crawl_at     = CURRENT_TIMESTAMP + (INTERVAL '1 day' * re_crawl_interval_days)
 	WHERE url = $1 AND user_id = $2 AND processing_status != 'blocked'
 	`, nodeURL, userID, statusCode, server, status)
-	return false, err
+	if err != nil {
+		return false, err
+	}
+	return false, tx.Commit()
 }
 
 // EnqueueURL adds a URL to the crawling queue without overwriting existing data.
