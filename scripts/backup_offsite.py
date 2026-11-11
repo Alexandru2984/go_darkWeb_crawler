@@ -186,13 +186,19 @@ def restore_sql(container, archive, passphrase, work):
             decrypted.stdout.close()
             restored = subprocess.Popen(
                 ["docker", "exec", "-i", container, "psql", "-X", "--quiet",
-                 "--set", "ON_ERROR_STOP=1", "-U", "restore", "-d", "onion_spider_restore"],
+                 "--set", "ON_ERROR_STOP=1", "--set", "VERBOSITY=sqlstate",
+                 "-U", "restore", "-d", "onion_spider_restore"],
                 stdin=unpacked.stdout, stdout=subprocess.DEVNULL, stderr=errors,
             )
             processes.append(restored)
             unpacked.stdout.close()
             codes = [process.wait(timeout=15 * 60) for process in reversed(processes)]
             if any(code != 0 for code in codes):
+                errors.flush()
+                diagnostic = (work / "restore-errors.log").read_text(errors="replace")
+                state = re.search(r"ERROR:\s+([A-Z0-9]{5})\s*$", diagnostic, re.MULTILINE)
+                sqlstate = state.group(1) if state else "unavailable"
+                print(f"backup: stream failure (psql={codes[0]}, gzip={codes[1]}, gpg={codes[2]}, SQLSTATE={sqlstate})", flush=True)
                 raise RuntimeError("Archive decryption, decompression or SQL restore failed")
         finally:
             for process in reversed(processes):
@@ -253,7 +259,7 @@ def check_restore():
 
                 for _ in range(60):
                     ready = subprocess.run(
-                        ["docker", "exec", container, "pg_isready", "-U", "restore",
+                        ["docker", "exec", container, "pg_isready", "-h", "127.0.0.1", "-U", "restore",
                          "-d", "onion_spider_restore"],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
                     )
