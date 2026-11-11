@@ -1,6 +1,10 @@
 # Security threat model
 
-Last reviewed: 2026-08-09
+Baseline reviewed on 2026-08-09.
+
+The current findings, release verification and remaining operational work are
+recorded in the [2026-11-11 security review](security-audit-2026-11-11.md).
+The original release gate below describes the baseline review.
 
 Scope: Onion Spider API, crawler, web UI, PostgreSQL data, Tor integration,
 nginx/Cloudflare edge, systemd deployment, email and backups.

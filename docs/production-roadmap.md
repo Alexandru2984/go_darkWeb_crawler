@@ -3,6 +3,54 @@
 This is the implementation order, not a promise that every idea belongs in the
 product. Security and privacy gates take precedence over feature count.
 
+## Current plan reviewed on 2026-11-11
+
+The current audit is recorded in
+[the security review](security-audit-2026-11-11.md). Earlier delivery notes below
+describe their original release dates.
+
+### Delivered in the current implementation
+
+- [x] Apply MFA policy to every administrative data path and revoke older
+  sessions when authentication factors change.
+- [x] Require the current password for MFA setup, protect concurrent enrolment
+  and bound password work across accounts.
+- [x] Honour account-deletion cancellation and enforce metadata-only writes.
+- [x] Purge extracted page entities and restore text after storage is re-enabled.
+- [x] Patch runtime dependencies, isolate Docker build contexts and repair
+  container-to-container API access.
+- [x] Add a responsive queue page and a crawl-record details dialog.
+- [x] Filter category and status before pagination in both list and search.
+- [x] Handle expired sessions, offline errors and obsolete annotation requests.
+- [x] Reflect server registration availability on the sign-in page.
+- [x] Add a public product page with an interactive fictional-data demo.
+- [x] Add canonical metadata, a public sitemap and local robots policy.
+- [x] Enforce npm security auditing, strict lint and source/binary Go scanning.
+
+### Next implementation stages
+
+| Order | Stage | Capabilities and completion criteria |
+| --- | --- | --- |
+| 1 | Operational recovery and detection | Restore a healthy project scrape target, load the project alert rules, verify operator alert routing, exercise encrypted restore and add offsite recovery. Record measured detection and restoration times |
+| 2 | Account hardening | Encrypt TOTP seeds with key rotation, add password change with session invalidation, add passkeys per origin, improve recovery-code management and review privilege changes. Cover replay and concurrent credential updates |
+| 3 | Collections and search | Add private saved searches, collections built from tags, host/date/title filters, user-selected sorting and clear filter reset. Keep sensitive terms out of request URLs and shareable links |
+| 4 | Research workflow | Add a private bookmarks view, note search, tag management, configurable change-feed filters and explicit review state. Support the same URL under separate accounts throughout |
+| 5 | Crawl job management | Show quota use, scheduled time and failure reasons. Add per-account pause/cancel and safe batch import with validation, deduplication and an acceptance preview. Serialize state changes against worker claims |
+| 6 | Graph exploration | Add category/status filters, selected-node details, connected-neighbour loading, clustering and an accessible list of the displayed graph. Keep graph data loading bounded |
+| 7 | Optional history | Add explicit opt-in snapshots, bounded retention and a text-diff view. Include snapshots in export, purge and account deletion before enabling the feature |
+| 8 | Exports and automation | Add explicit export scope, row estimates, cancellable export jobs, expiry and encrypted temporary storage. Introduce separate API credentials with narrow scopes, one-time display, expiry and revocation |
+| 9 | Onboarding and mobile | Choose invitation or registration flow, provide rate-limited verification resend, add first-use guidance, improve empty states and complete keyboard, screen-reader, Firefox and Safari checks |
+| 10 | CI and release automation | Pin action revisions, add browser and accessibility checks, container runtime smoke tests and image scanning. Verify the pushed workflow and create a reproducible release/rollback path |
+| 11 | Public documentation and SEO | Add public usage/security documentation, validate crawler-visible metadata, improve public-page performance and expand the demo. Keep authenticated records and account pages excluded from indexing |
+
+Each stage should land as a focused, verified commit using the repository owner's
+identity. Features that retain additional data must include export, retention and
+deletion behaviour in the same stage.
+
+The current interface keeps the graph in a separately loaded chunk. The final
+build transfers about 45.8 kB gzip for the shared entry chunk and about 154.5 kB
+gzip for the graph chunk. Those figures provide a baseline for further UI work.
+
 ## Product north star
 
 - Private by default: no third-party analytics, advertising, fingerprinting or
