@@ -1,8 +1,10 @@
 <script setup>
 import { ref, onMounted } from "vue";
+import { useRouter } from "vue-router";
 import { apiJSON } from "../lib/api.js";
-import { session } from "../stores/session.js";
+import { clearSession, session } from "../stores/session.js";
 
+const router = useRouter();
 const totp = ref({
   enabled: false,
   required: false,
@@ -14,6 +16,7 @@ const loading = ref(true);
 // Enrolment state. The secret and the recovery codes exist in memory only, for
 // as long as the user needs to record them — they are never written to storage.
 const enrolling = ref(false);
+const enrolPassword = ref("");
 const secret = ref("");
 const provisioningUri = ref("");
 const enrolCode = ref("");
@@ -47,8 +50,10 @@ const beginEnrol = async () => {
   busy.value = true;
   const { ok, data } = await apiJSON("/api/auth/totp/setup", {
     method: "POST",
+    json: { password: enrolPassword.value },
   });
   busy.value = false;
+  enrolPassword.value = "";
   if (!ok) return say(data.error || "Could not start enrolment.", "error");
   secret.value = data.secret;
   provisioningUri.value = data.provisioning_uri;
@@ -65,6 +70,8 @@ const confirmEnrol = async () => {
   busy.value = false;
   if (!ok) return say(data.error || "That code was not accepted.", "error");
   recoveryCodes.value = data.recovery_codes || [];
+  totp.value.enabled = true;
+  sessions.value = [];
   enrolling.value = false;
   secret.value = "";
   provisioningUri.value = "";
@@ -73,7 +80,6 @@ const confirmEnrol = async () => {
     "Two-factor authentication is on. Save the recovery codes below now.",
     "ok",
   );
-  await loadAll();
 };
 
 const cancelEnrol = () => {
@@ -93,10 +99,12 @@ const confirmDisable = async () => {
   disablePassword.value = "";
   disableCode.value = "";
   if (!ok) return say(data.error || "Could not turn two-factor off.", "error");
-  disabling.value = false;
-  recoveryCodes.value = [];
-  say("Two-factor authentication is off.", "ok");
-  await loadAll();
+  await returnToSignIn();
+};
+
+const returnToSignIn = () => {
+  clearSession();
+  return router.replace({ name: "login", query: { next: "/security" } });
 };
 
 const revokeSession = async (id) => {
@@ -157,9 +165,24 @@ onMounted(loadAll);
           A one-time code from an authenticator app, required alongside your
           password. It keeps working even if your password leaks.
         </p>
-        <button class="btn" type="button" :disabled="busy" @click="beginEnrol">
-          Set up two-factor
-        </button>
+        <form class="stack" @submit.prevent="beginEnrol">
+          <div>
+            <label class="label" for="enrol-password">Current password</label>
+            <input
+              id="enrol-password"
+              v-model="enrolPassword"
+              class="field"
+              type="password"
+              autocomplete="current-password"
+              required
+            />
+          </div>
+          <div>
+            <button class="btn" type="submit" :disabled="busy">
+              Set up two-factor
+            </button>
+          </div>
+        </form>
       </template>
 
       <!-- Enrolling -->
@@ -207,7 +230,7 @@ onMounted(loadAll);
       </template>
 
       <!-- Enrolled -->
-      <template v-else>
+      <template v-else-if="!recoveryCodes.length">
         <p class="muted body">
           {{ totp.recovery_codes_remaining }} unused recovery code{{
             totp.recovery_codes_remaining === 1 ? "" : "s"
@@ -282,18 +305,20 @@ onMounted(loadAll);
         <ul class="codes__list mono">
           <li v-for="c in recoveryCodes" :key="c">{{ c }}</li>
         </ul>
-        <button
-          class="btn btn--secondary btn--sm"
-          type="button"
-          @click="copyCodes"
-        >
-          Copy all
-        </button>
+        <p class="muted">All devices were signed out. Sign in again after saving your codes.</p>
+        <div class="row">
+          <button class="btn btn--secondary" type="button" @click="copyCodes">
+            Copy all
+          </button>
+          <button class="btn" type="button" @click="returnToSignIn">
+            Sign in again
+          </button>
+        </div>
       </div>
     </section>
 
     <!-- ── Sessions ────────────────────────────────────────────────────── -->
-    <section class="card" aria-labelledby="sessions-heading">
+    <section v-if="!recoveryCodes.length" class="card" aria-labelledby="sessions-heading">
       <div class="head">
         <h2 id="sessions-heading" class="section-title">Signed-in devices</h2>
         <button class="btn btn--ghost btn--sm" type="button" @click="loadAll">

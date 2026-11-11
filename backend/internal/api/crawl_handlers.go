@@ -12,7 +12,7 @@ import (
 func (d *deps) handleCrawl(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	ip := ClientIP(r)
-	if !IsAdmin(r) && !d.crawlLim.Allow(RequestKey(r)) {
+	if !HasAdminAccess(r) && !d.crawlLim.Allow(RequestKey(r)) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Too many requests. Please try again in a few minutes.")
 		return
 	}
@@ -53,7 +53,7 @@ func (d *deps) handleCrawl(w http.ResponseWriter, r *http.Request) {
 func (d *deps) handleRecrawl(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	ip := ClientIP(r)
-	if !IsAdmin(r) && !d.crawlLim.Allow(RequestKey(r)) {
+	if !HasAdminAccess(r) && !d.crawlLim.Allow(RequestKey(r)) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Too many requests. Please try again in a few minutes.")
 		return
 	}
@@ -95,7 +95,7 @@ func (d *deps) handleRecrawl(w http.ResponseWriter, r *http.Request) {
 func (d *deps) handleCrawlBulk(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	ip := ClientIP(r)
-	if !IsAdmin(r) && !d.crawlLim.Allow(RequestKey(r)) {
+	if !HasAdminAccess(r) && !d.crawlLim.Allow(RequestKey(r)) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Too many requests. Please try again in a few minutes.")
 		return
 	}
@@ -116,7 +116,7 @@ func (d *deps) handleCrawlBulk(w http.ResponseWriter, r *http.Request) {
 	// Charge the batch for every URL it carries. Charging it as a single
 	// request let one caller submit twenty URLs for the price of one, turning
 	// the twenty-per-minute limit into four hundred.
-	if !IsAdmin(r) && !d.crawlLim.AllowN(RequestKey(r), len(req.URLs)) {
+	if !HasAdminAccess(r) && !d.crawlLim.AllowN(RequestKey(r), len(req.URLs)) {
 		WriteJSONError(w, http.StatusTooManyRequests, "Too many URLs submitted. Please try again in a few minutes.")
 		return
 	}
@@ -158,7 +158,7 @@ func (d *deps) handleCrawlBulk(w http.ResponseWriter, r *http.Request) {
 
 func (d *deps) handleQueue(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	summary, err := d.cfg.DB.GetQueueSummary(GetUserID(r), IsAdmin(r))
+	summary, err := d.cfg.DB.GetQueueSummary(GetUserID(r), HasAdminAccess(r))
 	if err != nil {
 		slog.ErrorContext(r.Context(), "get_queue_failed", "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")

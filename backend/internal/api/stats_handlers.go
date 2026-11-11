@@ -23,7 +23,7 @@ func (d *deps) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.Status = "online"
 	resp.ActiveWorkers = d.cfg.Workers
-	stats, err := d.cfg.DB.GetStats(GetUserID(r), IsAdmin(r))
+	stats, err := d.cfg.DB.GetStats(GetUserID(r), HasAdminAccess(r))
 	if err == nil {
 		resp.DBConnected = true
 		resp.NodesCrawled = stats.NodesCrawled
@@ -38,7 +38,7 @@ func (d *deps) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 func (d *deps) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	stats, err := d.cfg.DB.GetTimelineStats(GetUserID(r), IsAdmin(r))
+	stats, err := d.cfg.DB.GetTimelineStats(GetUserID(r), HasAdminAccess(r))
 	if err != nil {
 		slog.ErrorContext(r.Context(), "get_timeline_failed", "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")

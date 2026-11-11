@@ -402,7 +402,7 @@ func TestPasswordReset_Flow(t *testing.T) {
 	db := newTestDB(t)
 	uid := mustUser(t, db, "u@example.com")
 
-	_, _, v0, found, err := db.GetUserAuthInfo(uid)
+	_, _, v0, _, found, err := db.GetUserAuthInfo(uid)
 	if err != nil || !found {
 		t.Fatalf("GetUserAuthInfo: found=%v err=%v", found, err)
 	}
@@ -425,7 +425,7 @@ func TestPasswordReset_Flow(t *testing.T) {
 	}
 
 	// token_version must be bumped (all sessions revoked).
-	_, _, v1, _, _ := db.GetUserAuthInfo(uid)
+	_, _, v1, _, _, _ := db.GetUserAuthInfo(uid)
 	if v1 != v0+1 {
 		t.Errorf("token_version not bumped: %d -> %d", v0, v1)
 	}

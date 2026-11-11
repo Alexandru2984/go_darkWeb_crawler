@@ -10,6 +10,9 @@ import (
 // last one already accepted for this account.
 var ErrTOTPReplay = errors.New("one-time code already used")
 
+// ErrTOTPStateChanged means the credentials or enrolment changed before the write.
+var ErrTOTPStateChanged = errors.New("two-factor enrolment state changed")
+
 // TOTPState is the second-factor configuration for one account.
 type TOTPState struct {
 	Secret    string
@@ -40,11 +43,11 @@ func (db *DB) GetTOTPState(userID int) (TOTPState, error) {
 // StageTOTPSecret stores a secret for an enrolment that has not been confirmed
 // yet. It refuses to touch an account whose second factor is already active, so
 // a stolen session cannot quietly swap the authenticator for its own.
-func (db *DB) StageTOTPSecret(userID int, secret string) error {
+func (db *DB) StageTOTPSecret(userID, tokenVersion int, secret string) error {
 	res, err := db.Conn.Exec(
 		`UPDATE users SET totp_secret = $1, totp_confirmed_at = NULL
-		 WHERE id = $2 AND totp_enabled = FALSE`,
-		secret, userID,
+		 WHERE id = $2 AND totp_enabled = FALSE AND token_version = $3`,
+		secret, userID, tokenVersion,
 	)
 	if err != nil {
 		return err
@@ -54,7 +57,7 @@ func (db *DB) StageTOTPSecret(userID int, secret string) error {
 		return err
 	}
 	if n == 0 {
-		return errors.New("two-factor authentication is already enabled")
+		return ErrTOTPStateChanged
 	}
 	return nil
 }
@@ -63,7 +66,7 @@ func (db *DB) StageTOTPSecret(userID int, secret string) error {
 // one transaction, so an account can never end up enrolled with no way back in.
 // step is the counter of the code that proved enrolment and is recorded
 // immediately, so that same code cannot then be replayed at login.
-func (db *DB) ConfirmTOTP(userID int, step int64, codeHashes []string) error {
+func (db *DB) ConfirmTOTP(userID, tokenVersion int, secret string, step int64, codeHashes []string) error {
 	tx, err := db.Conn.Begin()
 	if err != nil {
 		return err
@@ -72,9 +75,10 @@ func (db *DB) ConfirmTOTP(userID int, step int64, codeHashes []string) error {
 
 	res, err := tx.Exec(
 		`UPDATE users
-		 SET totp_enabled = TRUE, totp_confirmed_at = CURRENT_TIMESTAMP, totp_last_step = $1
-		 WHERE id = $2 AND totp_enabled = FALSE AND totp_secret IS NOT NULL`,
-		step, userID,
+		 SET totp_enabled = TRUE, totp_confirmed_at = clock_timestamp(),
+		     totp_last_step = $1, token_version = token_version + 1
+		 WHERE id = $2 AND totp_enabled = FALSE AND totp_secret = $3 AND token_version = $4`,
+		step, userID, secret, tokenVersion,
 	)
 	if err != nil {
 		return err
@@ -84,7 +88,7 @@ func (db *DB) ConfirmTOTP(userID int, step int64, codeHashes []string) error {
 		return err
 	}
 	if n == 0 {
-		return errors.New("no pending two-factor enrolment for this account")
+		return ErrTOTPStateChanged
 	}
 
 	if _, err := tx.Exec(`DELETE FROM recovery_codes WHERE user_id = $1`, userID); err != nil {
@@ -97,6 +101,9 @@ func (db *DB) ConfirmTOTP(userID int, step int64, codeHashes []string) error {
 			return err
 		}
 	}
+	if err := revokeTOTPSessions(tx, userID); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -107,10 +114,10 @@ func (db *DB) ConfirmTOTP(userID int, step int64, codeHashes []string) error {
 // the same code concurrently cannot both find it unused. A read-then-write
 // would let both pass: the second factor would stop being single-use exactly
 // when someone is racing it.
-func (db *DB) ConsumeTOTPStep(userID int, step int64) error {
+func (db *DB) ConsumeTOTPStep(userID int, secret string, step int64) error {
 	res, err := db.Conn.Exec(
-		`UPDATE users SET totp_last_step = $1 WHERE id = $2 AND totp_last_step < $1`,
-		step, userID,
+		`UPDATE users SET totp_last_step = $1 WHERE id = $2 AND totp_last_step < $1 AND totp_enabled AND totp_secret = $3`,
+		step, userID, secret,
 	)
 	if err != nil {
 		return err
@@ -156,22 +163,40 @@ func (db *DB) CountUnusedRecoveryCodes(userID int) (int, error) {
 // DisableTOTP removes the second factor and every recovery code. The caller is
 // responsible for re-authenticating the user first: disabling is as sensitive
 // as enrolling.
-func (db *DB) DisableTOTP(userID int) error {
+func (db *DB) DisableTOTP(userID, tokenVersion int) error {
 	tx, err := db.Conn.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(
+	res, err := tx.Exec(
 		`UPDATE users SET totp_secret = NULL, totp_enabled = FALSE,
-		 totp_confirmed_at = NULL, totp_last_step = 0 WHERE id = $1`, userID,
-	); err != nil {
+		 totp_confirmed_at = NULL, totp_last_step = 0, token_version = token_version + 1
+		 WHERE id = $1 AND token_version = $2 AND totp_enabled`, userID, tokenVersion,
+	)
+	if err != nil {
 		return fmt.Errorf("clear totp: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrTOTPStateChanged
 	}
 	if _, err := tx.Exec(`DELETE FROM recovery_codes WHERE user_id = $1`, userID); err != nil {
 		return fmt.Errorf("clear recovery codes: %w", err)
 	}
+	if err := revokeTOTPSessions(tx, userID); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+func revokeTOTPSessions(tx *sql.Tx, userID int) error {
+	_, err := tx.Exec(`UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP
+		WHERE user_id = $1 AND revoked_at IS NULL`, userID)
+	return err
 }
 
 // RecoveryCodeHash is the only representation of a recovery code that may be

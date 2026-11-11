@@ -133,7 +133,8 @@ func TestAccountDeletionIsScheduledAndReversible(t *testing.T) {
 func TestDeletionRequiresTheSecondFactorWhenEnrolled(t *testing.T) {
 	h, db := newAPI(t)
 	_, token := mkVerifiedUser(t, db, "mfa-delete@example.com", privacyPassword, "user")
-	secret, recovery := enrolTOTP(t, h, token)
+	_, recovery := enrolTOTP(t, h, token, privacyPassword)
+	token = loginTOTPToken(t, h, "mfa-delete@example.com", privacyPassword, recovery[1])
 
 	rr := postJSON(t, h, "/api/privacy/account/delete", token,
 		`{"password":"`+privacyPassword+`"}`)
@@ -152,7 +153,6 @@ func TestDeletionRequiresTheSecondFactorWhenEnrolled(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("deletion with a recovery code returned %d: %s", rr.Code, rr.Body.String())
 	}
-	_ = secret
 }
 
 // The personal-data export is the account's own record, not an administrative

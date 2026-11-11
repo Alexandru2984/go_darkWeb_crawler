@@ -416,11 +416,19 @@ paths:
     post:
       summary: Begin second-factor enrolment
       description: >-
-        Stages a new secret and returns it once, with the otpauth:// URI an
-        authenticator app scans. Nothing is enforced until /confirm proves the
+        Verifies the current password, then stages a secret and returns it
+        with the otpauth:// URI an authenticator app can open. Nothing is enforced until /confirm proves the
         user can generate codes from it, so an abandoned enrolment cannot lock
         the account. Refused while a second factor is already active.
       security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties: { password: { type: string } }
       responses:
         '200':
           description: Enrolment staged
@@ -432,7 +440,9 @@ paths:
                   secret: { type: string }
                   provisioning_uri: { type: string }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '409': { description: Already enabled — disable first to re-enrol }
+        '403': { description: Incorrect password }
+        '409': { description: Already enabled or security settings changed }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
 
   /api/auth/totp/confirm:
     post:
@@ -440,7 +450,8 @@ paths:
       description: >-
         The recovery codes are returned exactly once; only their digests are
         stored. The confirming code's step is recorded immediately so it cannot
-        then be replayed at login.
+        then be replayed at login. All sessions are revoked. Sign in again
+        with the new factor after saving the recovery codes.
       security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       requestBody:
         required: true
@@ -463,13 +474,15 @@ paths:
                   message: { type: string }
         '400': { description: Invalid code, or no enrolment in progress }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { description: Security settings changed }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
 
   /api/auth/totp/disable:
     post:
       summary: Turn the second factor off
       description: >-
         Requires the account password and a current code (or a recovery code),
-        so a stolen session cannot remove the control intended to survive it.
+        then revokes all sessions. Sign in again to continue.
       security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       requestBody:
         required: true
@@ -484,7 +497,10 @@ paths:
       responses:
         '200': { description: Disabled, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
         '400': { description: Not enabled }
-        '401': { description: Wrong password or code }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { description: Wrong password or code }
+        '409': { description: Security settings changed }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
 
   /api/status:
     get:

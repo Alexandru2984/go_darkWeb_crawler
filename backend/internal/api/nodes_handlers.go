@@ -10,7 +10,7 @@ import (
 func (d *deps) handleNodes(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	limit, offset := ParsePagination(r)
-	nodes, err := d.cfg.DB.GetNodes(limit, offset, GetUserID(r), IsAdmin(r))
+	nodes, err := d.cfg.DB.GetNodes(limit, offset, GetUserID(r), HasAdminAccess(r))
 	if err != nil {
 		slog.ErrorContext(r.Context(), "get_nodes_failed", "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
@@ -36,7 +36,7 @@ func (d *deps) handleNode(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusBadRequest, "A valid onion URL is required")
 		return
 	}
-	node, err := d.cfg.DB.GetNodeByURL(nodeURL, GetUserID(r), IsAdmin(r))
+	node, err := d.cfg.DB.GetNodeByURL(nodeURL, GetUserID(r), HasAdminAccess(r))
 	if err != nil {
 		slog.ErrorContext(r.Context(), "get_node_failed", "url", nodeURL, "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
@@ -52,7 +52,7 @@ func (d *deps) handleNode(w http.ResponseWriter, r *http.Request) {
 func (d *deps) handleEdges(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	limit, offset := ParsePagination(r)
-	edges, err := d.cfg.DB.GetEdges(limit, offset, GetUserID(r), IsAdmin(r))
+	edges, err := d.cfg.DB.GetEdges(limit, offset, GetUserID(r), HasAdminAccess(r))
 	if err != nil {
 		slog.ErrorContext(r.Context(), "get_edges_failed", "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
@@ -92,7 +92,7 @@ func (d *deps) handleSearch(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusBadRequest, "Category too long")
 		return
 	}
-	nodes, err := d.cfg.DB.SearchNodes(q, category, GetUserID(r), IsAdmin(r))
+	nodes, err := d.cfg.DB.SearchNodes(q, category, GetUserID(r), HasAdminAccess(r))
 	if err != nil {
 		slog.ErrorContext(r.Context(), "search_failed", "q", q, "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")

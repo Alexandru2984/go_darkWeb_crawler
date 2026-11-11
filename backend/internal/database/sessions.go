@@ -33,9 +33,10 @@ func (db *DB) SessionActive(userID int, tokenID string) (bool, error) {
 	var exists bool
 	err := db.Conn.QueryRow(
 		`SELECT EXISTS (
-			SELECT 1 FROM sessions
-			WHERE token_id = $1 AND user_id = $2
-			  AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+			SELECT 1 FROM sessions s JOIN users u ON u.id = s.user_id
+			WHERE s.token_id = $1 AND s.user_id = $2
+			  AND s.revoked_at IS NULL AND s.expires_at > CURRENT_TIMESTAMP
+			  AND (NOT u.totp_enabled OR s.created_at >= u.totp_confirmed_at)
 		)`, tokenID, userID,
 	).Scan(&exists)
 	return exists, err

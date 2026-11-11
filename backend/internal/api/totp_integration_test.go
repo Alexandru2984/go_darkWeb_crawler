@@ -15,10 +15,10 @@ import (
 
 // enrolTOTP walks an account through setup and confirmation, returning the
 // secret and the recovery codes handed out once at the end.
-func enrolTOTP(t *testing.T, h http.Handler, token string) (secret string, recovery []string) {
+func enrolTOTP(t *testing.T, h http.Handler, token, password string) (secret string, recovery []string) {
 	t.Helper()
 
-	rr := doWithBody(t, h, http.MethodPost, "/api/auth/totp/setup", token, nil)
+	rr := doWithBody(t, h, http.MethodPost, "/api/auth/totp/setup", token, strings.NewReader(`{"password":"`+password+`"}`))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("totp setup: got %d, body=%s", rr.Code, rr.Body.String())
 	}
@@ -90,6 +90,25 @@ func loginJSON(t *testing.T, h http.Handler, body string) *httptest.ResponseReco
 	return rr
 }
 
+func loginTOTPToken(t *testing.T, h http.Handler, email, password, code string) string {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{
+		"email": email, "password": password, "code": code, "mode": "bearer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr := loginJSON(t, h, string(body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("MFA login: got %d, body=%s", rr.Code, rr.Body.String())
+	}
+	var result struct{ Token string }
+	if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil || result.Token == "" {
+		t.Fatalf("MFA login did not issue a bearer token: %v", err)
+	}
+	return result.Token
+}
+
 // mkVerifiedUser creates a verified account with a known password.
 func mkVerifiedUser(t *testing.T, db *database.DB, email, password, role string) (int, string) {
 	t.Helper()
@@ -128,7 +147,7 @@ func TestTOTPLoginRequiresTheSecondFactor(t *testing.T) {
 		password     = "Correct-Horse-9!"
 	)
 	_, token := mkVerifiedUser(t, db, emailAddress, password, "user")
-	secret, _ := enrolTOTP(t, h, token)
+	secret, _ := enrolTOTP(t, h, token, password)
 
 	// Correct password alone is no longer enough, and the response says so
 	// without spending a login-failure budget.
@@ -172,7 +191,7 @@ func TestTOTPCodeCannotBeReplayed(t *testing.T) {
 		password     = "Correct-Horse-9!"
 	)
 	_, token := mkVerifiedUser(t, db, emailAddress, password, "user")
-	secret, _ := enrolTOTP(t, h, token)
+	secret, _ := enrolTOTP(t, h, token, password)
 
 	code := nextTOTP(t, secret)
 	body := `{"email":"` + emailAddress + `","password":"` + password + `","code":"` + code + `"}`
@@ -193,8 +212,8 @@ func TestRecoveryCodeWorksOnceAndOnlyForItsOwner(t *testing.T) {
 	)
 	_, ownerToken := mkVerifiedUser(t, db, ownerEmail, password, "user")
 	_, otherToken := mkVerifiedUser(t, db, otherEmail, password, "user")
-	_, recovery := enrolTOTP(t, h, ownerToken)
-	enrolTOTP(t, h, otherToken)
+	_, recovery := enrolTOTP(t, h, ownerToken, password)
+	enrolTOTP(t, h, otherToken, password)
 
 	// Another account cannot spend this account's recovery code.
 	stolen := `{"email":"` + otherEmail + `","password":"` + password + `","code":"` + recovery[0] + `"}`
@@ -223,24 +242,33 @@ func TestAdminEndpointsRequireEnrolledSecondFactor(t *testing.T) {
 		password   = "Correct-Horse-9!"
 	)
 	_, adminToken := mkVerifiedUser(t, db, adminEmail, password, "admin")
+	other, _ := mkVerifiedUser(t, db, "other-tenant@example.com", password, "user")
+	const privateURL = "http://pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion/"
+	if err := db.EnqueueURL(privateURL, 0, other, 0); err != nil {
+		t.Fatal(err)
+	}
 
-	// Administrative action is refused while the second factor is missing.
-	rr := do(t, h, http.MethodGet, "/api/blacklist", adminToken)
-	if rr.Code != http.StatusForbidden {
+	if rr := do(t, h, http.MethodGet, "/api/blacklist", adminToken); rr.Code != http.StatusForbidden {
 		t.Fatalf("admin without MFA: got %d, want 403", rr.Code)
 	}
+	if rr := do(t, h, http.MethodGet, "/api/nodes", adminToken); rr.Code != http.StatusOK || strings.Contains(rr.Body.String(), privateURL) {
+		t.Fatalf("admin without MFA received another tenant's data: %d %s", rr.Code, rr.Body)
+	}
+	if rr := postJSON(t, h, "/api/auth/totp/setup", adminToken, `{"password":"wrong-password"}`); rr.Code != http.StatusForbidden {
+		t.Fatalf("enrolment without password: got %d, want 403", rr.Code)
+	}
+	secret, _ := enrolTOTP(t, h, adminToken, password)
+	if rr := do(t, h, http.MethodGet, "/api/blacklist", adminToken); rr.Code != http.StatusUnauthorized {
+		t.Fatalf("pre-enrolment session: got %d, want 401", rr.Code)
+	}
 
-	// Enrolment itself must stay reachable, or the requirement is a lockout.
-	enrolTOTP(t, h, adminToken)
-
+	adminToken = loginTOTPToken(t, h, adminEmail, password, nextTOTP(t, secret))
 	if rr := do(t, h, http.MethodGet, "/api/blacklist", adminToken); rr.Code != http.StatusOK {
-		t.Fatalf("admin after enrolling: got %d, body=%s", rr.Code, rr.Body.String())
+		t.Fatalf("admin with MFA session: got %d, body=%s", rr.Code, rr.Body.String())
 	}
-	// Ordinary authenticated endpoints were never gated.
-	if rr := do(t, h, http.MethodGet, "/api/nodes", adminToken); rr.Code != http.StatusOK {
-		t.Fatalf("non-admin endpoint was gated: got %d", rr.Code)
+	if rr := do(t, h, http.MethodGet, "/api/nodes", adminToken); rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), privateURL) {
+		t.Fatalf("admin with MFA session did not receive global data: %d %s", rr.Code, rr.Body)
 	}
-	_ = db
 }
 
 func TestTOTPCannotBeDisabledWithoutPasswordAndCode(t *testing.T) {
@@ -252,17 +280,18 @@ func TestTOTPCannotBeDisabledWithoutPasswordAndCode(t *testing.T) {
 		password     = "Correct-Horse-9!"
 	)
 	_, token := mkVerifiedUser(t, db, emailAddress, password, "user")
-	secret, _ := enrolTOTP(t, h, token)
+	secret, recovery := enrolTOTP(t, h, token, password)
+	token = loginTOTPToken(t, h, emailAddress, password, recovery[0])
 
 	rr := doWithBody(t, h, http.MethodPost, "/api/auth/totp/disable", token,
 		strings.NewReader(`{"password":"wrong-password","code":"000000"}`))
-	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("disable with wrong password: got %d, want 401", rr.Code)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("disable with wrong password: got %d, want 403", rr.Code)
 	}
 	rr = doWithBody(t, h, http.MethodPost, "/api/auth/totp/disable", token,
 		strings.NewReader(`{"password":"`+password+`","code":"000000"}`))
-	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("disable with wrong code: got %d, want 401", rr.Code)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("disable with wrong code: got %d, want 403", rr.Code)
 	}
 
 	rr = doWithBody(t, h, http.MethodPost, "/api/auth/totp/disable", token,
@@ -280,10 +309,12 @@ func TestEnrolmentCannotBeHijackedWhileActive(t *testing.T) {
 	// Re-running setup on an account that already has a second factor would let
 	// a stolen session swap in an authenticator it controls.
 	h, db := newAPI(t)
-	_, token := mkVerifiedUser(t, db, "hijack@example.com", "Correct-Horse-9!", "user")
-	enrolTOTP(t, h, token)
+	const emailAddress, password = "hijack@example.com", "Correct-Horse-9!"
+	_, token := mkVerifiedUser(t, db, emailAddress, password, "user")
+	_, recovery := enrolTOTP(t, h, token, password)
+	token = loginTOTPToken(t, h, emailAddress, password, recovery[0])
 
-	if rr := doWithBody(t, h, http.MethodPost, "/api/auth/totp/setup", token, nil); rr.Code != http.StatusConflict {
+	if rr := doWithBody(t, h, http.MethodPost, "/api/auth/totp/setup", token, strings.NewReader(`{"password":"`+password+`"}`)); rr.Code != http.StatusConflict {
 		t.Fatalf("re-enrolment while active: got %d, want 409", rr.Code)
 	}
 }

@@ -1296,13 +1296,13 @@ func (db *DB) GlobalStatusCounts() (map[string]int, error) {
 // (bypassing JWT claims), plus whether the user still exists. Used by the auth
 // middleware to (a) invalidate role demotions immediately and (b) reject tokens
 // whose version is stale (revoked via reset/logout-all) or whose user is gone.
-func (db *DB) GetUserAuthInfo(userID int) (email, role string, tokenVersion int, found bool, err error) {
-	err = db.Conn.QueryRow(`SELECT email, role, token_version FROM users WHERE id = $1`, userID).Scan(&email, &role, &tokenVersion)
+func (db *DB) GetUserAuthInfo(userID int) (email, role string, tokenVersion int, mfaEnabled, found bool, err error) {
+	err = db.Conn.QueryRow(`SELECT email, role, token_version, totp_enabled FROM users WHERE id = $1`, userID).Scan(&email, &role, &tokenVersion, &mfaEnabled)
 	if err == sql.ErrNoRows {
-		return "", "", 0, false, nil
+		return "", "", 0, false, false, nil
 	}
 	if err != nil {
-		return "", "", 0, false, err
+		return "", "", 0, false, false, err
 	}
-	return email, role, tokenVersion, true, nil
+	return email, role, tokenVersion, mfaEnabled, true, nil
 }

@@ -163,10 +163,10 @@ func TestAccountDeletionRemovesEveryTraceOfTheAccount(t *testing.T) {
 	if _, err := db.CreateSession(bystander, "tok-bystander", "Firefox on Linux", time.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("CreateSession(bystander): %v", err)
 	}
-	if err := db.StageTOTPSecret(doomed, "JBSWY3DPEHPK3PXP"); err != nil {
+	if err := db.StageTOTPSecret(doomed, 0, "JBSWY3DPEHPK3PXP"); err != nil {
 		t.Fatalf("StageTOTPSecret: %v", err)
 	}
-	if err := db.ConfirmTOTP(doomed, 1, []string{RecoveryCodeHash("aaaa-aaaaa")}); err != nil {
+	if err := db.ConfirmTOTP(doomed, 0, "JBSWY3DPEHPK3PXP", 1, []string{RecoveryCodeHash("aaaa-aaaaa")}); err != nil {
 		t.Fatalf("ConfirmTOTP: %v", err)
 	}
 	db.LogAuthEvent("login_ok", "ref-doomed", "ip-ref")

@@ -84,7 +84,7 @@ func (d *deps) handleExport(w http.ResponseWriter, r *http.Request) {
 	rc := http.NewResponseController(w)
 	rc.SetWriteDeadline(time.Now().Add(10 * time.Minute))
 
-	isAdmin := IsAdmin(r)
+	isAdmin := HasAdminAccess(r)
 	switch format {
 	case "json":
 		d.exportJSON(w, r, uid, isAdmin)

@@ -75,12 +75,12 @@ func New(cfg Config) http.Handler {
 
 	// Public-ish: shows only that the server is running; private counts gated
 	// behind LoadDBRole so admin sees globals, others see only their own.
-	r.With(LoadDBRole(cfg.DB)).Get("/api/status", d.handleStatus)
+	r.With(LoadDBRole(cfg.DB, cfg.RequireAdminMFA)).Get("/api/status", d.handleStatus)
 
 	// Authenticated: any logged-in user.
 	r.Group(func(r chi.Router) {
 		r.Use(RequireAuth)
-		r.Use(LoadDBRole(cfg.DB))
+		r.Use(LoadDBRole(cfg.DB, cfg.RequireAdminMFA))
 
 		r.Get("/api/auth/me", d.handleMe)
 		r.Post("/api/auth/logout", d.handleLogout)
@@ -136,8 +136,8 @@ func New(cfg Config) http.Handler {
 	// Admin-only: blacklist management.
 	r.Group(func(r chi.Router) {
 		r.Use(RequireAuth)
-		r.Use(LoadDBRole(cfg.DB))
-		r.Use(RequireAdminDB(cfg.DB, cfg.RequireAdminMFA))
+		r.Use(LoadDBRole(cfg.DB, cfg.RequireAdminMFA))
+		r.Use(RequireAdminDB)
 
 		r.Get("/api/blacklist", d.handleBlacklistList)
 		r.Post("/api/blacklist", d.handleBlacklistAdd)

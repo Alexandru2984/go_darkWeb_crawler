@@ -14,11 +14,12 @@ import (
 type contextKey string
 
 const (
-	userContextKey       contextKey = "user"
-	dbRoleContextKey     contextKey = "db_role"
-	dbEmailContextKey    contextKey = "db_email"
-	authSourceContextKey contextKey = "auth_source"
-	networkContextKey    contextKey = "client_network"
+	userContextKey        contextKey = "user"
+	dbRoleContextKey      contextKey = "db_role"
+	adminAccessContextKey contextKey = "admin_access"
+	dbEmailContextKey     contextKey = "db_email"
+	authSourceContextKey  contextKey = "auth_source"
+	networkContextKey     contextKey = "client_network"
 )
 
 // How a request proved its identity. CSRFProtect keys off this: only
@@ -94,7 +95,7 @@ func RequireAuth(next http.Handler) http.Handler {
 //   - a token for a since-deleted user is rejected with 401.
 //
 // The role from JWT claims is NEVER used for authz.
-func LoadDBRole(db *database.DB) func(http.Handler) http.Handler {
+func LoadDBRole(db *database.DB, requireAdminMFA bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			uid := GetUserID(r)
@@ -102,7 +103,7 @@ func LoadDBRole(db *database.DB) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			email, role, tokenVersion, found, err := db.GetUserAuthInfo(uid)
+			email, role, tokenVersion, mfaEnabled, found, err := db.GetUserAuthInfo(uid)
 			if err != nil {
 				slog.ErrorContext(r.Context(), "load_db_role_failed", "uid", uid, "err", err)
 				WriteJSONError(w, http.StatusInternalServerError, "Internal error")
@@ -125,7 +126,12 @@ func LoadDBRole(db *database.DB) func(http.Handler) http.Handler {
 			// are honoured until they expire rather than rejected: the
 			// alternative is signing every user out on deploy to enforce a
 			// capability none of their tokens could have had.
-			if claims != nil && claims.SessionID != "" {
+			if mfaEnabled && claims.SessionID == "" {
+				clearSessionCookies(w, r)
+				WriteJSONError(w, http.StatusUnauthorized, "Sign in again with two-factor authentication")
+				return
+			}
+			if claims.SessionID != "" {
 				active, err := db.SessionActive(uid, claims.SessionID)
 				if err != nil {
 					slog.ErrorContext(r.Context(), "session_lookup_failed", "uid", uid, "err", err)
@@ -145,6 +151,7 @@ func LoadDBRole(db *database.DB) func(http.Handler) http.Handler {
 			}
 			ctx := context.WithValue(r.Context(), dbRoleContextKey, role)
 			ctx = context.WithValue(ctx, dbEmailContextKey, email)
+			ctx = context.WithValue(ctx, adminAccessContextKey, role == "admin" && (!requireAdminMFA || mfaEnabled))
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -155,40 +162,31 @@ func LoadDBRole(db *database.DB) func(http.Handler) http.Handler {
 // update behind every read in the API for a value nobody needs to the second.
 const sessionTouchInterval = 5 * time.Minute
 
-// RequireAdminDB blocks requests whose DB-loaded role (set by LoadDBRole) is
-// not 'admin'. MUST be preceded by LoadDBRole in the middleware chain.
-//
-// When requireMFA is set it additionally refuses administrators who have not
-// enrolled a second factor. The gate is on administrative endpoints only: the
-// account still works, and the enrolment endpoints are deliberately outside
-// this middleware, so the way to satisfy the requirement is always reachable.
-func RequireAdminDB(db *database.DB, requireMFA bool) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if GetUserID(r) == 0 {
-				WriteJSONError(w, http.StatusUnauthorized, "Authentication required")
-				return
-			}
-			if !IsAdmin(r) {
-				WriteJSONError(w, http.StatusForbidden, "Admin role required")
-				return
-			}
-			if requireMFA {
-				state, err := db.GetTOTPState(GetUserID(r))
-				if err != nil {
-					slog.ErrorContext(r.Context(), "admin_mfa_check_failed", "uid", GetUserID(r), "err", err)
-					WriteJSONError(w, http.StatusInternalServerError, "Internal error")
-					return
-				}
-				if !state.Enabled {
-					WriteJSONError(w, http.StatusForbidden,
-						"Administrative actions require two-factor authentication. Enrol at /api/auth/totp/setup.")
-					return
-				}
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
+// RequireAdminDB enforces the administrative privileges loaded by LoadDBRole.
+func RequireAdminDB(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !IsAdmin(r) {
+			WriteJSONError(w, http.StatusForbidden, "Admin role required")
+			return
+		}
+		if !HasAdminAccess(r) {
+			WriteJSONError(w, http.StatusForbidden,
+				"Administrative actions require two-factor authentication. Enrol at /api/auth/totp/setup.")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// HasAdminAccess includes the configured second-factor policy. Use it when
+// selecting global data or exempting the caller from user limits.
+func HasAdminAccess(r *http.Request) bool {
+	allowed, _ := r.Context().Value(adminAccessContextKey).(bool)
+	return allowed
+}
+
+func sessionVersion(r *http.Request) int {
+	return r.Context().Value(userContextKey).(*auth.Claims).TokenVersion
 }
 
 // GetUserID returns the authenticated user's ID, or 0 if no valid JWT was provided.
