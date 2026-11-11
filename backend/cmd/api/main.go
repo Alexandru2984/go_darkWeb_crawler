@@ -316,6 +316,7 @@ func main() {
 			for status, n := range counts {
 				metrics.QueueNodes.WithLabelValues(status).Set(float64(n))
 			}
+			metrics.QueueLastRefresh.SetToCurrentTime()
 		}
 		refresh()
 		ticker := time.NewTicker(30 * time.Second)

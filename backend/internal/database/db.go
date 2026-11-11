@@ -1293,7 +1293,9 @@ func (db *DB) GlobalStatusCounts() (map[string]int, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	counts := make(map[string]int)
+	counts := map[string]int{
+		"pending": 0, "crawling": 0, "completed": 0, "failed": 0, "blocked": 0,
+	}
 	for rows.Next() {
 		var status string
 		var n int

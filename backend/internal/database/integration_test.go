@@ -747,3 +747,30 @@ func TestEnqueueURLWithoutAQuotaIsUnbounded(t *testing.T) {
 		}
 	}
 }
+
+func TestQueueStatusCountsIncludeEmptyStates(t *testing.T) {
+	db := newTestDB(t)
+	uid := mustUser(t, db, "queue-counts@example.com")
+	if err := db.EnqueueURL(testURLA, 0, uid, 0); err != nil {
+		t.Fatal(err)
+	}
+	counts, err := db.GlobalStatusCounts()
+	if err != nil || counts["pending"] != 1 {
+		t.Fatalf("pending queue: %v, %v", counts, err)
+	}
+	if _, err := db.Conn.Exec(`UPDATE nodes SET processing_status = 'completed' WHERE user_id = $1`, uid); err != nil {
+		t.Fatal(err)
+	}
+	counts, err = db.GlobalStatusCounts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []string{"pending", "crawling", "failed", "blocked"} {
+		if count, exists := counts[status]; !exists || count != 0 {
+			t.Errorf("empty status %q: count=%d exists=%v", status, count, exists)
+		}
+	}
+	if counts["completed"] != 1 {
+		t.Errorf("completed count=%d, want 1", counts["completed"])
+	}
+}

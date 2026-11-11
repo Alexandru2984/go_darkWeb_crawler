@@ -47,6 +47,11 @@ var (
 		Help: "Number of nodes by processing_status (refreshed periodically).",
 	}, []string{"status"})
 
+	QueueLastRefresh = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "onionspider_queue_last_refresh_timestamp_seconds",
+		Help: "Unix time of the last successful queue-depth refresh.",
+	})
+
 	// RetentionDeleted counts rows the automatic lifecycle jobs removed.
 	// kind ∈ {nodes, accounts}. These jobs destroy data on a timer with nobody
 	// watching, so what they did has to be observable after the fact — a
