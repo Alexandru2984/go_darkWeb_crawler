@@ -1,11 +1,5 @@
 <script setup>
-import {
-  ref,
-  onMounted,
-  onUnmounted,
-  watch,
-  defineAsyncComponent,
-} from "vue";
+import { ref, onMounted, onUnmounted, watch, defineAsyncComponent } from "vue";
 import { apiFetch, apiJSON, readJSON } from "../lib/api.js";
 import { isAdmin } from "../stores/session.js";
 import {
@@ -14,6 +8,7 @@ import {
   allCategories,
 } from "../lib/categories.js";
 import NodeList from "../components/NodeList.vue";
+import NodeInspector from "../components/NodeInspector.vue";
 import NodeAnnotator from "../components/NodeAnnotator.vue";
 import { refreshUnseenChanges } from "../stores/changes.js";
 
@@ -33,6 +28,7 @@ const graphError = ref("");
 
 // The site whose annotation sheet is open. Empty means closed; the dialog is
 // driven by this rather than a separate boolean so the two can never disagree.
+const inspecting = ref("");
 const annotating = ref({ url: "", title: "" });
 const openAnnotator = (node) => {
   annotating.value = { url: node.url, title: node.title };
@@ -414,6 +410,7 @@ onUnmounted(() => {
         :nodes="nodes"
         :loading="loading"
         @annotate="openAnnotator"
+        @inspect="inspecting = $event.url"
       />
       <nav v-if="page > 1 || hasMore" class="pager" aria-label="Results pages">
         <button
@@ -449,6 +446,8 @@ onUnmounted(() => {
         @notice="showToast"
       />
     </template>
+
+    <NodeInspector :url="inspecting" @close="inspecting = ''" />
 
     <NodeAnnotator
       :url="annotating.url"

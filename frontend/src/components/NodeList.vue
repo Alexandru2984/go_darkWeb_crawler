@@ -5,7 +5,7 @@ defineProps({
   nodes: { type: Array, required: true },
   loading: { type: Boolean, default: false },
 });
-const emit = defineEmits(["annotate"]);
+const emit = defineEmits(["annotate", "inspect"]);
 
 const categoryStyle = (category) => {
   const colour = CATEGORY_COLORS[category] || CATEGORY_COLORS.unknown;
@@ -37,7 +37,15 @@ const statusClass = (status) => `pill--${(status || "").replace("_", "-")}`;
             {{ node.processing_status }}
           </span>
         </div>
-        <h3 class="node-card__title">{{ node.title || "Untitled" }}</h3>
+        <h3 class="node-card__title">
+          <button
+            class="record-title"
+            type="button"
+            @click="emit('inspect', node)"
+          >
+            {{ node.title || "Untitled" }}
+          </button>
+        </h3>
         <p class="node-card__url mono">{{ node.url }}</p>
         <dl class="node-card__meta">
           <div>
@@ -88,7 +96,13 @@ const statusClass = (status) => `pill--${(status || "").replace("_", "-")}`;
             <td class="url mono">{{ node.url }}</td>
             <td>
               <div class="title-row">
-                <span class="title">{{ node.title || "Untitled" }}</span>
+                <button
+                  class="record-title title"
+                  type="button"
+                  @click="emit('inspect', node)"
+                >
+                  {{ node.title || "Untitled" }}
+                </button>
                 <span class="pill" :class="statusClass(node.processing_status)">
                   {{ node.processing_status }}
                 </span>
@@ -130,6 +144,21 @@ const statusClass = (status) => `pill--${(status || "").replace("_", "-")}`;
 </template>
 
 <style scoped>
+.record-title {
+  min-height: var(--tap);
+  padding: 0;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--link);
+  font: inherit;
+  cursor: pointer;
+}
+
+.record-title:hover {
+  text-decoration: underline;
+}
+
 /* ── Mobile: cards ──────────────────────────────────────────────────────── */
 .cards {
   display: grid;
