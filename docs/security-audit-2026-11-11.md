@@ -46,7 +46,7 @@ Both source and binary scanners now report no vulnerabilities.
 
 | Priority | Observation | Acceptance evidence |
 | --- | --- | --- |
-| High | No Onion Spider scrape target was present in either inspected Prometheus instance. The systemd monitoring services described by the existing runbook were inactive | A healthy scrape target, loaded project rules and verified alert routing to the operator |
+| Medium | Four dedicated scrape targets, 17 rules and operator email delivery are verified. Monitoring still shares the application's VPS | Add an independent external heartbeat and off-host notification path for complete VPS loss |
 | Medium | Google Drive publication and isolated database restore are verified. Independent recovery of the GPG passphrase and rclone crypt keys after total VPS loss remains an operator responsibility | Verify the external secret store, Google account recovery and a full host-recovery exercise |
 | High | TOTP seeds and live application data remain readable to a database administrator | Encryption of TOTP seeds using a separate managed key, rotation coverage and a documented recovery process |
 | Medium | Cloudflare processes clearnet TLS and its account-side privacy settings were not audited through an authenticated connector | Operator review of edge logging, browser reporting, analytics and retention settings |
@@ -76,8 +76,11 @@ Account counts and monetary loss were not estimated in this review.
 ## Detection and incident response
 
 The repository contains an incident-response runbook and aggregate application
-metrics. Operational alert delivery currently needs verification against the
-actual monitoring stack. A measured detection time cannot be asserted.
+metrics. The dedicated monitoring stack is deployed and the local notification
+pipeline was measured at 2.05 seconds with an immediate synthetic rule. The
+operator confirmed receipt of one authorized test email. Operator incident
+response time remains unverified. Production rules have
+longer configured holds; the synthetic result is not their detection latency.
 
 The automated session-abuse exercise used disposable accounts. It enrolled MFA,
 rejected an older copied session, authenticated with a one-use recovery code and
@@ -145,8 +148,9 @@ Authenticated account flows were exercised against the isolated fixture
 environment. Production user credentials were not used.
 
 The application release is deployed. Operational readiness remains dependent on
-alerting, external recovery-key custody and full host-recovery work listed above. GitHub-hosted CI has not been triggered
-by a push during this session.
+independent host-loss detection, external recovery-key custody and full
+host-recovery work listed above. GitHub-hosted CI has not been triggered by a
+push during this session.
 
 
 ## Google Drive backup and recovery stage
@@ -190,3 +194,71 @@ and removes the database password from the environment before offsite work.
 
 The backup provider and crypt remote reuse the operator's existing configuration.
 External key custody and full host recovery require the operator's verification.
+
+## Monitoring and HTTP runtime patch stage
+
+The API was updated to Go 1.26.11 after govulncheck's updated database identified
+GO-2026-6859 in Go 1.26.10. This addresses the HTTP/1 MaxBytesReader header race
+described by the advisory. The source and compiled release binary both passed
+govulncheck after rebuilding. CI and the API Docker build select the patched
+version. [Go release history](https://go.dev/doc/devel/release#go1.26.11),
+[Go vulnerability record](https://vuln.go.dev/ID/GO-2026-6859.json).
+
+Release `4044eb8` was published on 2026-11-11 at 15:42:37 UTC. The tested
+binary's SHA-256 is
+`d34b6ba29f3edf30e354a6b32c8b7957b92661cd8ff71b2868bb39431af29019`.
+The preceding binary and manifest are retained under the root-restricted path
+`/home/micu/.local/state/onion-spider/releases/20261111T154237Z-monitoring`.
+Readiness, public status, local status and the Tor vhost status passed. The API
+had zero automatic restarts after publication. No migration was required.
+
+Queue counts now explicitly include empty statuses with zero values, preventing
+stale gauges. The freshness gauge advances only after a successful query. A
+database regression covers a queue state disappearing after completion.
+
+Two previous PromQL rules compared series carrying different status/result
+labels, preventing the intended match. The replacement rules match labels
+explicitly and detect crawler inactivity even before a success counter exists.
+
+The deployed stack uses four healthy scrape targets and 17 rules for API and
+database readiness, crawler throughput, stale metrics, offsite backup age,
+restore-check age, invalid records, failed services, disabled timers, collector
+failure, disk space and notification infrastructure. Configuration belongs to
+this project and survives deployments of the other projects on the VPS.
+
+The private collector requires bearer authentication, receives its token with
+LoadCredential, exposes numeric aggregates and cannot access the Docker socket.
+Its live sandbox could read the four recovery units and valid success records.
+Prometheus and Alertmanager run with nonroot users, read-only roots, no
+capabilities and resource limits. Ports 9090, 9093 and 19190 are bound to
+127.0.0.1; Alertmanager's cluster listener is disabled.
+
+Verification completed:
+
+- All Go packages passed with the race detector and a disposable PostgreSQL
+  database under Go 1.26.11. Vet and golangci-lint passed.
+- All 24 rule scenarios and eight collector regressions passed, alongside the
+  ten existing backup regressions.
+- Config validation ran using the same pinned images as production. Shellcheck
+  and systemd unit validation passed. The monitoring checks are included in CI.
+- A temporary synthetic rule reached a localhost webhook through the actual
+  Prometheus/Alertmanager stack in 2.05 seconds. Temporary rules and routes were
+  removed afterward. The local webhook probe sent no external email.
+
+The operator authorized alerts and one email test to `984.alexmihai@proton.me`.
+The email route is installed with required STARTTLS on port 587. On activation,
+the remaining synthetic test alert generated the single authorized email.
+Alertmanager recorded one completed notification, zero failures and 1.51 seconds
+of notification latency. The test was resolved; resolution email is disabled.
+A fallback route suppresses leftover local webhook probe alerts after cleanup.
+The operator confirmed receipt; no second email test was sent. Read-only provider
+verification returned HTTP 401 with `restricted_api_key`, indicating a send-only
+credential. No additional API permission was requested. Monitoring on this VPS
+cannot independently report total VPS or network loss.
+
+Residual upstream finding: the current official Prometheus 3.16.0 and
+Alertmanager 0.35.0 images were built with Go 1.27.3. Binary scans report
+GO-2026-6859, fixed in Go 1.27.4. The HTTP services are restricted to loopback,
+which limits reachability but does not remove the vulnerable runtime. Replace
+these digest-pinned images when patched upstream builds are available. This
+finding does not apply to the newly patched Onion Spider API binary.
