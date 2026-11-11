@@ -1,57 +1,47 @@
 # Monitoring
 
-The API exposes Prometheus metrics on `/metrics`, served on the process root
-rather than under `/api/`. Production nginx proxies only `/api/`, so the
-endpoint is reachable on `127.0.0.1:8900` and never publicly.
+The API exposes aggregate Prometheus metrics on loopback port 8900. Public nginx
+proxies only `/api/`; the metrics endpoint is not publicly routed.
 
-## Scrape config
+The dedicated Onion Spider Prometheus instance collects the API, the private
+backup/readiness collector, Alertmanager and itself every 30 seconds. Rules
+evaluate every 30 seconds. Installation, credentials, email delivery and
+incident commands are in [the monitoring runbook](../deploy/prometheus/README.md).
 
-Rules and the notification path are documented in `deploy/prometheus/README.md`.
+## Operational signals
 
-Prometheus runs on this host. `/etc/prometheus/prometheus.yml` is host-wide and
-shared with the other services on the box, so it is not deployable from this
-repo — the job below has to be added there by hand:
+| Metric | Meaning |
+| --- | --- |
+| `onionspider_queue_nodes` | Queue counts by bounded status, including explicit zeroes |
+| `onionspider_queue_last_refresh_timestamp_seconds` | Last successful database refresh |
+| `onionspider_crawls_total` | Successful/failed crawl attempts |
+| `onionspider_links_discovered_total` | Links extracted from successful fetches |
+| `onionspider_api_ready` | Fixed local readiness request succeeds |
+| `onionspider_backup_state_valid` | Valid offsite/restore success record |
+| `onionspider_backup_last_success_timestamp_seconds` | Verified publication / isolated restore completion |
+| `onionspider_backup_unit_failed` | Last backup or restore service result indicates failure |
+| `onionspider_backup_timer_enabled` | Timer enabled and active |
+| `onionspider_backup_units_readable` | All four recovery units can be inspected |
+| `onionspider_host_disk_available_bytes` | Available root filesystem space |
 
-```yaml
-  - job_name: 'onion-spider'
-    scrape_interval: 30s
-    scrape_timeout: 10s
-    static_configs:
-      - targets: ['localhost:8900']
-```
+The collector exposes no archive names, remote paths, hashes, credentials, email
+addresses or account data.
 
-```bash
-sudo promtool check config /etc/prometheus/prometheus.yml
-sudo systemctl reload prometheus
-curl -s 'http://localhost:9090/api/v1/targets?state=active' | grep -o 'onion-spider'
-```
+## Detection behaviour
 
-## What to actually watch
+The crawler previously sat idle for months while health checks stayed green.
+Queue alerts inspect available work and completions, match labels deliberately
+and handle a success counter that does not exist yet. An idle, empty queue does
+not trigger the no-completions alert. Queue metrics reset disappearing states to
+zero and report refresh freshness.
 
-| Metric | Why it matters |
-|---|---|
-| `onionspider_queue_nodes{status="pending"}` | Work waiting. Flat at zero with a large `failed` count is the stall described below. |
-| `onionspider_queue_nodes{status="failed"}` | Climbing steadily means crawls are failing, usually Tor rather than the sites. |
-| `onionspider_queue_nodes{status="crawling"}` | Should track worker count. Pinned at the worker count with no completions means workers are wedged. |
-| `onionspider_crawls_total{result="..."}` | `success` vs `scrape_error` ratio — the clearest signal that Tor connectivity has degraded. |
-| `onionspider_links_discovered_total` | Flat while crawls succeed means pages are being fetched but not parsed. |
+Failed backup/restore jobs have a two-minute alert hold. Disabled timers, failed
+scrapes and API readiness failures have a five-minute hold. Offsite backup age
+above 26 hours and restore-check age above 40 days have a ten-minute hold.
+Scheduling, scraping, evaluation and notification grouping add delay. These are
+configured thresholds, not measured operator response times.
 
-## The failure this project has already had
-
-Between May and July the entire queue died: every one of 23,346 nodes ended in
-`failed`, nothing was left `pending`, and the crawler sat idle for over two
-months. Nothing alerted, because from the outside the service looked healthy —
-the API answered, `/readyz` was green, and the process was up. The only symptom
-was `onionspider_queue_nodes{status="pending"}` sitting at zero.
-
-Two things address it. The engine now revives long-failed nodes on an hourly
-sweep (see `REVIVE_FAILED_AFTER_DAYS`), so a transient outage no longer
-permanently kills the queue. And `OnionSpiderQueueStalled` now alerts on exactly
-this signature — nothing pending while failures accumulate — so if it recurs it
-is reported instead of discovered months later. The rule lives in
-`deploy/prometheus/onion-spider-rules.yml`; the notification path (Alertmanager
-to email, and how to test it) is in `deploy/prometheus/README.md`.
-
-A liveness check cannot catch this. `/healthz` reports that the process is
-running and `/readyz` that the database answers; neither has any opinion about
-whether the crawler is doing work, which is the thing that was broken.
+Email notifications are enabled for the operator-approved Proton address. One
+test completed without SMTP errors and the operator confirmed receipt.
+Monitoring on the same VPS does not provide an independent path for detecting
+complete host loss.

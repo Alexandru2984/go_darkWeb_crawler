@@ -1,98 +1,110 @@
-# Prometheus and alerting
+# Private monitoring and recovery alerts
 
-Metrics, alert rules, and the notification path for Onion Spider.
+Onion Spider owns a separate monitoring stack. Other projects on this VPS
+generate their monitoring configuration during deploy; direct edits there would
+be lost. This stack uses its own containers, configuration and data volumes.
 
-`/etc/prometheus/prometheus.yml` is **host-wide and shared** with the other
-services on this box, so this repo does not own it. The files here are copied
-into `/etc/prometheus/` and referenced from that config.
-
-## Files
-
-- `onion-spider-rules.yml` — alert rules (this repo owns them).
-- `alertmanager.yml` — routing and the email receiver. Host-wide; shared with
-  any other service that starts alerting.
-
-## Install
+## Install or update
 
 ```bash
-sudo cp deploy/prometheus/onion-spider-rules.yml /etc/prometheus/
-sudo cp deploy/prometheus/alertmanager.yml     /etc/prometheus/
-
-# prometheus.yml must reference the rules:
-#   rule_files:
-#     - "onion-spider-rules.yml"
-#   scrape_configs:
-#     - job_name: 'onion-spider'
-#       static_configs:
-#         - targets: ['localhost:8900']
-
-sudo promtool check rules /etc/prometheus/onion-spider-rules.yml
-sudo promtool check config /etc/prometheus/prometheus.yml
-sudo amtool check-config /etc/prometheus/alertmanager.yml
-sudo systemctl reload prometheus
-sudo systemctl restart prometheus-alertmanager
+sudo bash scripts/deploy_monitoring.sh
 ```
 
-## Why these alerts exist
+The installer validates both configurations and the systemd unit before applying
+changes, preserves existing credentials, atomically replaces configuration files,
+reloads containers and checks readiness. If deployment fails, it restores previous
+configuration files. The production preset assumes `/home/micu/go`, user `micu`
+and group ID 1001; adjust the installer, Compose user and unit together on another
+host. Docker Compose and systemd are required.
 
-Between 2026-05-05 and 2026-07-20 the crawler did no work at all — every node
-ended in `failed`, nothing was left pending, and the service sat idle for over
-two months. Nothing detected it, because nothing was *wrong* in a way a health
-check can see: the process was up, the database answered, the API returned 200.
+| Component | Private endpoint |
+| --- | --- |
+| API metrics | `127.0.0.1:8900/metrics` |
+| Backup/readiness collector | `127.0.0.1:19190/metrics` |
+| Prometheus | `127.0.0.1:9090` |
+| Alertmanager | `127.0.0.1:9093` |
 
-So the rules alert on the **absence of work**, not on liveness. `/healthz` says
-the process runs and `/readyz` says the database answers; neither has any
-opinion about whether the crawler is crawling, which was the part that broke.
+Containers use host networking to reach loopback services. HTTP listeners bind
+explicitly to loopback; Alertmanager's cluster listener is disabled. Containers
+run without capabilities, with read-only root filesystems and resource limits.
+Prometheus retains 30 days or 1 GB of time-series blocks; WAL/head data can
+exceed the block limit. Use SSH local forwarding to view the interfaces remotely.
+Do not add these endpoints to nginx, Cloudflare Tunnel or public firewall rules.
 
-`OnionSpiderQueueStalled` matches that exact signature — nothing pending while
-failures pile up. If it ever fires, the revive sweeper is broken or not running.
+Live YAML files reside in `/var/lib/onion-spider-monitoring/config`. Directory
+mounts make atomic file replacement visible to running containers. Apply source
+changes through the installer; direct runtime edits are temporary.
 
-## The SMTP password
+## Credentials and email delivery
 
-Not in `alertmanager.yml`, so the file is safe to commit. Alertmanager reads it
-from `/etc/prometheus/alertmanager-smtp.pass` (`root:prometheus`, `0640`) via
-`smtp_auth_password_file`.
+`/etc/onion-spider/monitoring` is root-only. Its `metrics-token` and `smtp-password`
+files are `root:micu`, mode 0640, for individual read-only container bind mounts.
+The installer generates the token once and copies `SMTP_PASS` from the application
+environment as data, without printing it, executing it or placing it in argv.
+Existing credentials survive repeated installs. Rotate them deliberately and
+recreate containers afterward to refresh individual secret-file bind mounts.
 
-## Alertmanager is bound to loopback
+The collector receives its token through systemd `LoadCredential`. `/metrics`
+returns 401 without bearer authentication; `/healthz` reveals only process
+liveness. Do not put the token into shell history or command arguments. The
+collector exposes aggregate numeric state and cannot access the Docker socket.
 
-`/etc/default/prometheus-alertmanager` pins `--web.listen-address=127.0.0.1:9093`.
-It listens on all interfaces by default, and its API can list every firing
-problem on the host and silence alerts — worth keeping off the network even
-though ufw already blocks 9093.
+Alerts go to the operator-approved `984.alexmihai@proton.me` through
+`smtp.resend.com:587`, with STARTTLS required, sender `noreply@micutu.com`,
+user `resend`, and `smtp_auth_password_file: /run/secrets/smtp-password`.
+Keep credentials out of YAML and commits. `send_resolved: false` suppresses
+resolution emails. Future local webhook tests require a temporary exact-match
+route above the `local-tests-only` fallback; that fallback prevents leftover
+local probe alerts from being emailed when the temporary route is removed.
 
-## Testing the pipeline
+One authorized test email completed successfully on 2026-11-11. Alertmanager
+recorded one email attempt, one completed notification and zero failures. The
+operator confirmed receipt. Read-only provider verification is unavailable with
+the send-only SMTP credential; no additional API permission was requested.
 
-An untested alert is worth as little as an untested backup. Post one by hand and
-confirm it is actually delivered — SMTP accepting a message is not the same as a
-mailbox receiving it:
+The top-level legacy `alertmanager.yml` and its operator-created backup are not
+used by this stack; their local changes are preserved.
+
+## Verify and diagnose
 
 ```bash
-curl -X POST http://127.0.0.1:9093/api/v2/alerts -H 'Content-Type: application/json' -d '[{
-  "labels": {"alertname":"PipelineTest","severity":"critical","service":"onion-spider"},
-  "annotations": {"summary":"test"},
-  "startsAt": "'$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'"
-}]'
-
-sudo amtool --alertmanager.url=http://127.0.0.1:9093 alert query
-sudo journalctl -u prometheus-alertmanager -n 20 | grep -i notify
+systemctl status onion-spider-monitoring-exporter.service
+journalctl -u onion-spider-monitoring-exporter.service --since '10 minutes ago'
+docker compose --env-file /dev/null -f deploy/prometheus/docker-compose.yml ps
+curl --fail --silent 'http://127.0.0.1:9090/api/v1/targets?state=active'
+curl --fail --silent 'http://127.0.0.1:9090/api/v1/rules'
+curl --fail --silent 'http://127.0.0.1:9090/api/v1/alerts'
+curl --fail --silent 'http://127.0.0.1:9093/api/v2/alerts'
 ```
 
-Verified 2026-07-21, end to end into the mailbox
-(`postfix/lmtp ... status=sent (250 2.0.0 ... Saved)`).
+All four targets must be up and all 17 rules must evaluate without errors.
 
-Resolve it afterwards by re-posting the same labels with an `endsAt` in the past.
+| Alert | First investigation |
+| --- | --- |
+| API down / readiness failing | API service, PostgreSQL connectivity |
+| Queue stalled / no successful crawling | Workers, Tor, failed-node revival |
+| Queue refresh stale | Database locks and queue-count query errors |
+| Offsite backup older than 26 hours | Backup service, rclone authorization |
+| Restore check older than 40 days | Restore timer and last service result |
+| Invalid backup record | Missing/corrupt success records, latest job results |
+| Recovery job failed / timer disabled | Both recovery services and timers |
+| Collector unavailable / units unreadable | Collector logs, credential, sandbox |
+| Disk below 10% / 5% available | PostgreSQL, backups, monitoring retention |
+| Alertmanager down / email failure | Container logs, SMTP TLS and provider status |
 
-## Recipient
+A service can fail while its last successful archive is fresh; job-result alerts
+catch that separately. A successful rerun clears the failure state. Do not fake
+success timestamps or delete records to silence an alert.
 
-Alerts go to `postmaster@micutu.com`.
+CI runs collector tests, installer checks, config validation and rule regressions.
+The recovery tests simulate more than 40 days without waiting in real time.
 
-The first attempt used `micu@micutu.com` — the value of `ADMIN_EMAIL` in the
-app's config — and was rejected with `550 5.1.1 ... User unknown in virtual
-mailbox table`. That address is not a mailbox. (`ADMIN_EMAIL` is only compared
-against a registering user's address for the admin bootstrap, so the app itself
-never sends mail there and is unaffected.)
+```bash
+python3 -m unittest discover -s scripts -p 'test_monitoring.py' -v
+promtool test rules deploy/prometheus/onion-spider-rules.test.yml deploy/prometheus/onion-spider-recovery.test.yml
+```
 
-**This only works if somebody reads that mailbox.** The failure being corrected
-here is a problem going unnoticed for two months; routing alerts to an inbox
-nobody opens reproduces it exactly. If `postmaster@` is not somewhere you look,
-change `to:` in `alertmanager.yml` to an address you actually read.
+This stack runs on the VPS it observes. Host loss, connectivity loss or stopped
+Prometheus cannot reliably notify through this same stack. An independent
+external heartbeat remains future work. Current upstream monitoring images also
+need replacement when Go runtime fixes for GO-2026-6859 ship; see the security audit.

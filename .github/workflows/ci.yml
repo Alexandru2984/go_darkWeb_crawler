@@ -15,6 +15,67 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  monitoring:
+    name: Monitoring regressions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test private metrics collector
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s scripts -p 'test_monitoring.py' -v
+
+      - name: Check monitoring installer
+        run: |
+          bash -n scripts/deploy_monitoring.sh
+          shellcheck scripts/deploy_monitoring.sh
+
+      - name: Validate monitoring configuration
+        run: |
+          stage="$(mktemp -d)"
+          trap 'rm -rf -- "$stage"' EXIT
+          cp deploy/prometheus/config/*.yml "$stage/"
+          cp deploy/prometheus/onion-spider-rules.yml "$stage/"
+          python3 -c 'import secrets,sys; print(secrets.token_hex(32), file=open(sys.argv[1], "w"))' "$stage/credential"
+          chmod 0755 "$stage"
+          chmod 0644 "$stage/credential"
+          docker compose --env-file /dev/null -f deploy/prometheus/docker-compose.yml config --quiet
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true --entrypoint /bin/promtool \
+            -v "$stage:/etc/prometheus/config:ro" \
+            -v "$stage/credential:/run/secrets/metrics-token:ro" \
+            prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06 \
+            check config /etc/prometheus/config/prometheus.yml
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true --entrypoint /bin/amtool \
+            -v "$stage:/etc/alertmanager/config:ro" \
+            -v "$stage/credential:/run/secrets/smtp-password:ro" \
+            prom/alertmanager:v0.35.0@sha256:e638797febd034838eca8b98cdbd46f951e9bf7f178777aa8669167406a9946c \
+            check-config /etc/alertmanager/config/alertmanager.yml
+
+      - name: Test alert conditions and recovery windows
+        run: |
+          docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --entrypoint /bin/promtool \
+            -v "$PWD/deploy/prometheus:/work:ro" -w /work \
+            prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06 \
+            test rules onion-spider-rules.test.yml onion-spider-recovery.test.yml
+
+      - name: Check production and local-test notification routing
+        run: |
+          check_route() {
+            docker run --rm --network none --read-only --cap-drop ALL \
+              --security-opt no-new-privileges:true --entrypoint /bin/amtool \
+              -v "$PWD/deploy/prometheus/config:/etc/alertmanager/config:ro" \
+              prom/alertmanager:v0.35.0@sha256:e638797febd034838eca8b98cdbd46f951e9bf7f178777aa8669167406a9946c \
+              config routes test --config.file=/etc/alertmanager/config/alertmanager.yml \
+              --verify.receivers="$1" service=onion-spider alertname="$2"
+          }
+          check_route operator-email OnionSpiderRecoveryJobFailed
+          check_route local-tests-only OnionSpiderMonitoringPipelineTestFixture
+
   backups:
     name: Backup safety checks
     runs-on: ubuntu-latest

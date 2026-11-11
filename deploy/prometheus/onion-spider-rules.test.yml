@@ -1,0 +1,319 @@
+rule_files:
+- onion-spider-rules.yml
+evaluation_interval: 1m
+tests:
+- name: API target down
+  interval: 1m
+  input_series:
+  - series: up{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider"}
+    values: 0+0x10
+  alert_rule_test:
+  - eval_time: 6m
+    alertname: OnionSpiderDown
+    exp_alerts:
+    - exp_labels:
+        job: onion-spider
+        instance: 127.0.0.1:8900
+        service: onion-spider
+        severity: critical
+      exp_annotations:
+        summary: Onion Spider API is not responding to scrapes
+        description: Check onion-spider.service and its loopback metrics endpoint.
+- name: API target absent
+  interval: 1m
+  input_series: []
+  alert_rule_test:
+  - eval_time: 6m
+    alertname: OnionSpiderDown
+    exp_alerts:
+    - exp_labels:
+        job: onion-spider
+        severity: critical
+        service: onion-spider
+      exp_annotations:
+        summary: Onion Spider API is not responding to scrapes
+        description: Check onion-spider.service and its loopback metrics endpoint.
+- name: Failed queue has no pending or active work
+  interval: 1m
+  input_series:
+  - series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="failed"}
+    values: 200+0x140
+  - series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="pending"}
+    values: 0+0x140
+  - series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="crawling"}
+    values: 0+0x140
+  alert_rule_test:
+  - eval_time: 125m
+    alertname: OnionSpiderQueueStalled
+    exp_alerts:
+    - exp_labels:
+        job: onion-spider
+        instance: 127.0.0.1:8900
+        service: onion-spider
+        status: failed
+        severity: critical
+      exp_annotations:
+        summary: Crawl queue is empty while 200 nodes sit failed
+        description: Check the failed-node revival sweeper and Tor connectivity.
+- name: Pending work avoids empty-queue alert
+  interval: 1m
+  input_series:
+  - series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="failed"}
+    values: 200+0x140
+  - series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="pending"}
+    values: 1+0x140
+  - series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="crawling"}
+    values: 0+0x140
+  alert_rule_test:
+  - eval_time: 125m
+    alertname: OnionSpiderQueueStalled
+    exp_alerts: []
+- name: Active work avoids empty-queue alert
+  interval: 1m
+  input_series:
+  - series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="failed"}
+    values: 200+0x140
+  - series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="pending"}
+    values: 0+0x140
+  - series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="crawling"}
+    values: 1+0x140
+  alert_rule_test:
+  - eval_time: 125m
+    alertname: OnionSpiderQueueStalled
+    exp_alerts: []
+- name: Workers never completed a first crawl
+  interval: 1m
+  input_series:
+  - &id001
+    series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="failed"}
+    values: 200+0x140
+  - &id002
+    series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="pending"}
+    values: 5+0x140
+  - &id003
+    series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="crawling"}
+    values: 0+0x140
+  alert_rule_test:
+  - eval_time: 65m
+    alertname: OnionSpiderNotCrawling
+    exp_alerts:
+    - exp_labels:
+        job: onion-spider
+        instance: 127.0.0.1:8900
+        service: onion-spider
+        severity: critical
+      exp_annotations:
+        summary: Crawl work is available without successful completions
+        description: Check worker activity and Tor connectivity.
+- name: A flat success counter with work is stalled
+  interval: 1m
+  input_series:
+  - *id001
+  - *id002
+  - *id003
+  - series: onionspider_crawls_total{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",result="success"}
+    values: 1+0x140
+  alert_rule_test:
+  - eval_time: 65m
+    alertname: OnionSpiderNotCrawling
+    exp_alerts:
+    - exp_labels:
+        job: onion-spider
+        instance: 127.0.0.1:8900
+        service: onion-spider
+        severity: critical
+      exp_annotations:
+        summary: Crawl work is available without successful completions
+        description: Check worker activity and Tor connectivity.
+- name: Successful progress avoids stalled-worker alert
+  interval: 1m
+  input_series:
+  - *id001
+  - *id002
+  - *id003
+  - series: onionspider_crawls_total{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",result="success"}
+    values: 1+1x140
+  alert_rule_test:
+  - eval_time: 65m
+    alertname: OnionSpiderNotCrawling
+    exp_alerts: []
+- name: An idle collection needs no worker alert
+  interval: 1m
+  input_series:
+  - series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="failed"}
+    values: 0+0x140
+  - series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="pending"}
+    values: 0+0x140
+  - series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="crawling"}
+    values: 0+0x140
+  alert_rule_test:
+  - eval_time: 65m
+    alertname: OnionSpiderNotCrawling
+    exp_alerts: []
+- name: Queue refresh absent while API is up
+  interval: 1m
+  input_series:
+  - series: up{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider"}
+    values: 1+0x10
+  alert_rule_test:
+  - eval_time: 6m
+    alertname: OnionSpiderQueueMetricsStale
+    exp_alerts:
+    - exp_labels:
+        job: onion-spider
+        instance: 127.0.0.1:8900
+        service: onion-spider
+        severity: warning
+      exp_annotations:
+        summary: Queue metrics are missing or stale
+        description: Check the queue-depth refresh query and database locks.
+- name: Fresh queue refresh does not alert
+  interval: 1m
+  input_series:
+  - series: up{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider"}
+    values: 1+0x10
+  - series: onionspider_queue_last_refresh_timestamp_seconds{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider"}
+    values: 0+60x10
+  alert_rule_test:
+  - eval_time: 6m
+    alertname: OnionSpiderQueueMetricsStale
+    exp_alerts: []
+- name: Disabled recovery timer alerts
+  interval: 1m
+  input_series:
+  - series: onionspider_backup_timer_enabled{job="onion-spider-backups",instance="127.0.0.1:19190",service="onion-spider",unit="onion-spider-backup.timer"}
+    values: 0+0x10
+  alert_rule_test:
+  - eval_time: 6m
+    alertname: OnionSpiderRecoveryTimerDisabled
+    exp_alerts:
+    - exp_labels:
+        job: onion-spider-backups
+        instance: 127.0.0.1:19190
+        service: onion-spider
+        unit: onion-spider-backup.timer
+        severity: critical
+      exp_annotations:
+        summary: An Onion Spider recovery timer is inactive or disabled
+        description: Enable and start the backup and restore-check timers.
+- name: Failed restore job alerts
+  interval: 1m
+  input_series:
+  - series: onionspider_backup_unit_failed{job="onion-spider-backups",instance="127.0.0.1:19190",service="onion-spider",unit="onion-spider-restore-check.service"}
+    values: 1+0x10
+  alert_rule_test:
+  - eval_time: 3m
+    alertname: OnionSpiderRecoveryJobFailed
+    exp_alerts:
+    - exp_labels:
+        job: onion-spider-backups
+        instance: 127.0.0.1:19190
+        service: onion-spider
+        unit: onion-spider-restore-check.service
+        severity: critical
+      exp_annotations:
+        summary: An Onion Spider recovery job has failed
+        description: Inspect the failed backup or restore service in the systemd journal.
+- name: Missing backup record alerts
+  interval: 1m
+  input_series:
+  - series: onionspider_backup_state_valid{job="onion-spider-backups",instance="127.0.0.1:19190",service="onion-spider",kind="offsite"}
+    values: 0+0x15
+  alert_rule_test:
+  - eval_time: 11m
+    alertname: OnionSpiderBackupStateInvalid
+    exp_alerts:
+    - exp_labels:
+        job: onion-spider-backups
+        instance: 127.0.0.1:19190
+        service: onion-spider
+        kind: offsite
+        severity: critical
+      exp_annotations:
+        summary: Backup verification state is missing or invalid
+        description: Check the offsite and restore success records and recent job results.
+- name: Unavailable recovery collector alerts
+  interval: 1m
+  input_series:
+  - series: up{job="onion-spider-backups",instance="127.0.0.1:19190",service="onion-spider"}
+    values: 0+0x10
+  alert_rule_test:
+  - eval_time: 6m
+    alertname: OnionSpiderBackupMetricsUnavailable
+    exp_alerts:
+    - exp_labels:
+        job: onion-spider-backups
+        instance: 127.0.0.1:19190
+        service: onion-spider
+        severity: critical
+      exp_annotations:
+        summary: Backup monitoring endpoint is unavailable
+        description: Check onion-spider-monitoring-exporter.service and the metrics credential.
+- name: Low disk capacity alerts
+  interval: 1m
+  input_series:
+  - series: onionspider_host_disk_available_bytes{job="onion-spider-backups",instance="127.0.0.1:19190",service="onion-spider"}
+    values: 3+0x10
+  - series: onionspider_host_disk_size_bytes{job="onion-spider-backups",instance="127.0.0.1:19190",service="onion-spider"}
+    values: 100+0x10
+  alert_rule_test:
+  - eval_time: 6m
+    alertname: OnionSpiderDiskSpaceCritical
+    exp_alerts:
+    - exp_labels:
+        job: onion-spider-backups
+        instance: 127.0.0.1:19190
+        service: onion-spider
+        severity: critical
+      exp_annotations:
+        summary: Less than 5% disk space is available on the host filesystem
+        description: Free space before PostgreSQL or backups exhaust the filesystem.
+- name: Readiness fails while API metrics respond
+  interval: 1m
+  input_series:
+  - series: up{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider"}
+    values: 1+0x10
+  - series: onionspider_api_ready{job="onion-spider-backups",instance="127.0.0.1:19190",service="onion-spider"}
+    values: 0+0x10
+  alert_rule_test:
+  - eval_time: 6m
+    alertname: OnionSpiderDatabaseUnavailable
+    exp_alerts:
+    - exp_labels:
+        job: onion-spider-backups
+        instance: 127.0.0.1:19190
+        service: onion-spider
+        severity: critical
+      exp_annotations:
+        summary: Onion Spider readiness check is failing
+        description: The API metrics endpoint responds while readiness fails. Check PostgreSQL connectivity.
+- name: Unavailable API does not produce duplicate readiness alert
+  interval: 1m
+  input_series:
+  - series: up{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider"}
+    values: 0+0x10
+  - series: onionspider_api_ready{job="onion-spider-backups",instance="127.0.0.1:19190",service="onion-spider"}
+    values: 0+0x10
+  alert_rule_test:
+  - eval_time: 6m
+    alertname: OnionSpiderDatabaseUnavailable
+    exp_alerts: []
+- name: Existing queue refresh timestamp expires
+  interval: 1m
+  input_series:
+  - series: up{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider"}
+    values: 1+0x12
+  - series: onionspider_queue_last_refresh_timestamp_seconds{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider"}
+    values: 1+0x12
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: OnionSpiderQueueMetricsStale
+    exp_alerts:
+    - exp_labels:
+        job: onion-spider
+        instance: 127.0.0.1:8900
+        service: onion-spider
+        severity: warning
+      exp_annotations:
+        summary: Queue metrics are missing or stale
+        description: Check the queue-depth refresh query and database locks.

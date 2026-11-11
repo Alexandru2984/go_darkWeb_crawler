@@ -1,0 +1,53 @@
+name: onion-spider-monitoring
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
+    user: '65534:1001'
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - --config.file=/etc/prometheus/config/prometheus.yml
+      - --web.listen-address=127.0.0.1:9090
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --storage.tsdb.retention.size=1GB
+    volumes:
+      - /var/lib/onion-spider-monitoring/config:/etc/prometheus/config:ro
+      - /etc/onion-spider/monitoring/metrics-token:/run/secrets/metrics-token:ro
+      - prometheus-data:/prometheus
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    mem_limit: 512m
+    cpus: 1
+    pids_limit: 128
+
+  alertmanager:
+    image: prom/alertmanager:v0.35.0@sha256:e638797febd034838eca8b98cdbd46f951e9bf7f178777aa8669167406a9946c
+    user: '65534:1001'
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - --config.file=/etc/alertmanager/config/alertmanager.yml
+      - --web.listen-address=127.0.0.1:9093
+      - --cluster.listen-address=
+      - --storage.path=/alertmanager
+    volumes:
+      - /var/lib/onion-spider-monitoring/config:/etc/alertmanager/config:ro
+      - /etc/onion-spider/monitoring/smtp-password:/run/secrets/smtp-password:ro
+      - alertmanager-data:/alertmanager
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 128
+
+volumes:
+  prometheus-data:
+  alertmanager-data:

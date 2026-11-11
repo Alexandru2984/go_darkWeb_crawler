@@ -1,0 +1,35 @@
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+rule_files:
+  - /etc/prometheus/config/onion-spider-rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['127.0.0.1:9093']
+
+scrape_configs:
+  - job_name: onion-spider
+    scrape_timeout: 10s
+    static_configs:
+      - targets: ['127.0.0.1:8900']
+        labels: {service: onion-spider}
+
+  - job_name: onion-spider-backups
+    scrape_timeout: 10s
+    authorization:
+      credentials_file: /run/secrets/metrics-token
+    static_configs:
+      - targets: ['127.0.0.1:19190']
+        labels: {service: onion-spider}
+
+  - job_name: onion-spider-prometheus
+    static_configs:
+      - targets: ['127.0.0.1:9090']
+
+  - job_name: onion-spider-alertmanager
+    static_configs:
+      - targets: ['127.0.0.1:9093']
+        labels: {service: onion-spider}

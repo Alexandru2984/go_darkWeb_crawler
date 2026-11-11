@@ -1,0 +1,77 @@
+rule_files:
+- onion-spider-rules.yml
+evaluation_interval: 1h
+tests:
+- name: Old offsite verification record alerts
+  interval: 1h
+  input_series:
+  - series: onionspider_backup_last_success_timestamp_seconds{job="onion-spider-backups",instance="127.0.0.1:19190",service="onion-spider",kind="offsite"}
+    values: 1+0x1000
+  - series: onionspider_backup_state_valid{job="onion-spider-backups",instance="127.0.0.1:19190",service="onion-spider",kind="offsite"}
+    values: 1+0x1000
+  alert_rule_test:
+  - eval_time: 28h
+    alertname: OnionSpiderOffsiteBackupStale
+    exp_alerts:
+    - exp_labels:
+        job: onion-spider-backups
+        instance: 127.0.0.1:19190
+        service: onion-spider
+        kind: offsite
+        severity: critical
+      exp_annotations:
+        summary: No verified Google Drive backup in over 26 hours
+        description: Check onion-spider-backup.service and rclone authorization.
+- name: Fresh offsite record avoids false alert
+  interval: 1h
+  input_series:
+  - series: onionspider_backup_last_success_timestamp_seconds{job="onion-spider-backups",instance="127.0.0.1:19190",service="onion-spider",kind="offsite"}
+    values: 1+3600x1000
+  - series: onionspider_backup_state_valid{job="onion-spider-backups",instance="127.0.0.1:19190",service="onion-spider",kind="offsite"}
+    values: 1+0x1000
+  alert_rule_test:
+  - eval_time: 28h
+    alertname: OnionSpiderOffsiteBackupStale
+    exp_alerts: []
+- name: Old restore verification record alerts
+  interval: 1h
+  input_series:
+  - series: onionspider_backup_last_success_timestamp_seconds{job="onion-spider-backups",instance="127.0.0.1:19190",service="onion-spider",kind="restore"}
+    values: 1+0x1000
+  - series: onionspider_backup_state_valid{job="onion-spider-backups",instance="127.0.0.1:19190",service="onion-spider",kind="restore"}
+    values: 1+0x1000
+  alert_rule_test:
+  - eval_time: 41d
+    alertname: OnionSpiderRestoreCheckStale
+    exp_alerts:
+    - exp_labels:
+        job: onion-spider-backups
+        instance: 127.0.0.1:19190
+        service: onion-spider
+        kind: restore
+        severity: warning
+      exp_annotations:
+        summary: No successful isolated restore in over 40 days
+        description: Check onion-spider-restore-check.timer and its latest service result.
+- name: Fresh restore record avoids false alert
+  interval: 1h
+  input_series:
+  - series: onionspider_backup_last_success_timestamp_seconds{job="onion-spider-backups",instance="127.0.0.1:19190",service="onion-spider",kind="restore"}
+    values: 1+3600x1000
+  - series: onionspider_backup_state_valid{job="onion-spider-backups",instance="127.0.0.1:19190",service="onion-spider",kind="restore"}
+    values: 1+0x1000
+  alert_rule_test:
+  - eval_time: 41d
+    alertname: OnionSpiderRestoreCheckStale
+    exp_alerts: []
+- name: Invalid record is handled by its own alert
+  interval: 1h
+  input_series:
+  - series: onionspider_backup_last_success_timestamp_seconds{job="onion-spider-backups",instance="127.0.0.1:19190",service="onion-spider",kind="offsite"}
+    values: 0+0x1000
+  - series: onionspider_backup_state_valid{job="onion-spider-backups",instance="127.0.0.1:19190",service="onion-spider",kind="offsite"}
+    values: 0+0x1000
+  alert_rule_test:
+  - eval_time: 28h
+    alertname: OnionSpiderOffsiteBackupStale
+    exp_alerts: []

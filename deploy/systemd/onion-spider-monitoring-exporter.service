@@ -1,0 +1,51 @@
+[Unit]
+Description=Private Onion Spider backup and readiness metrics
+After=network.target onion-spider.service
+
+[Service]
+Type=simple
+User=micu
+Group=micu
+WorkingDirectory=/
+ExecStart=/usr/bin/python3 /home/micu/go/scripts/monitoring_exporter.py
+LoadCredential=metrics-token:/etc/onion-spider/monitoring/metrics-token
+Restart=on-failure
+RestartSec=5
+ProtectHome=tmpfs
+BindReadOnlyPaths=/home/micu/go/scripts/monitoring_exporter.py
+ProtectSystem=strict
+ReadOnlyPaths=/var/lib/onion-spider-backup
+# The service account has Docker access for backup drills. This collector only
+# reads systemd state and must not acquire access to the host through Docker.
+InaccessiblePaths=-/run/docker.sock -/run/containerd/containerd.sock -/run/systemd/private
+PrivateTmp=true
+PrivateDevices=true
+PrivateIPC=true
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectClock=true
+ProtectHostname=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SocketBindDeny=any
+SocketBindAllow=tcp:19190
+IPAddressDeny=any
+IPAddressAllow=localhost
+UMask=0077
+MemoryMax=128M
+TasksMax=64
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

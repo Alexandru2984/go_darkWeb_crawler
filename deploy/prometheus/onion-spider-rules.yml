@@ -1,118 +1,182 @@
-# Alert rules for Onion Spider.
-#
-# Install (prometheus.yml is host-wide and shared, so this is referenced from
-# there rather than deployed over it):
-#
-#   sudo cp deploy/prometheus/onion-spider-rules.yml /etc/prometheus/
-#   # ensure prometheus.yml has:
-#   #   rule_files:
-#   #     - "onion-spider-rules.yml"
-#   sudo promtool check rules /etc/prometheus/onion-spider-rules.yml
-#   sudo systemctl reload prometheus
-#
-# These exist because of a specific failure: between 2026-05-05 and 2026-07-20
-# the crawler did no work at all. Every node ended in 'failed', nothing was left
-# pending, and the service sat idle for over two months without anyone noticing.
-# Nothing was wrong that a health check could see — the process was up, the
-# database answered, the API returned 200. The only visible symptom was a metric
-# nobody was collecting.
-#
-# So the rules below deliberately alert on *absence of work*, not on liveness.
-
 groups:
   - name: onion-spider
     rules:
-      # The exact signature of the two-month stall: no work queued, while a pile
-      # of nodes sits in the terminal 'failed' state. The revive sweeper should
-      # now prevent this from persisting, so if it fires the sweeper itself is
-      # broken or not running.
+      - alert: OnionSpiderDown
+        expr: up{job="onion-spider"} == 0 or absent(up{job="onion-spider"})
+        for: 5m
+        labels: { severity: critical, service: onion-spider }
+        annotations:
+          summary: Onion Spider API is not responding to scrapes
+          description: Check onion-spider.service and its loopback metrics endpoint.
+
+      - alert: OnionSpiderDatabaseUnavailable
+        expr: |
+          onionspider_api_ready{job="onion-spider-backups"} == 0
+          and on(service) up{job="onion-spider"} == 1
+        for: 5m
+        labels: { severity: critical, service: onion-spider }
+        annotations:
+          summary: Onion Spider readiness check is failing
+          description: The API metrics endpoint responds while readiness fails. Check PostgreSQL connectivity.
+
       - alert: OnionSpiderQueueStalled
         expr: |
-          onionspider_queue_nodes{status="pending"} == 0
-          and onionspider_queue_nodes{status="failed"} > 100
+          onionspider_queue_nodes{job="onion-spider",status="failed"} > 100
+          and on(job,instance)
+          sum by(job,instance) (
+            onionspider_queue_nodes{job="onion-spider",status=~"pending|crawling"}
+          ) == 0
         for: 2h
-        labels:
-          severity: critical
-          service: onion-spider
+        labels: { severity: critical, service: onion-spider }
         annotations:
-          summary: "Crawl queue is empty while {{ $value }} nodes sit failed"
-          description: >
-            Nothing is pending but failures have accumulated, so the crawler has
-            nothing to do and will stay idle. This is the state the service was
-            in, undetected, from May to July 2026. Check that the revive sweeper
-            is running: journalctl -u onion-spider -g 'revived failed nodes'.
+          summary: 'Crawl queue is empty while {{ $value }} nodes sit failed'
+          description: Check the failed-node revival sweeper and Tor connectivity.
 
-      # Work is queued but nothing is completing. Catches wedged workers, a dead
-      # Tor daemon, or a crawl loop that claims nodes and never finishes them —
-      # none of which affect /healthz or /readyz.
       - alert: OnionSpiderNotCrawling
         expr: |
-          rate(onionspider_crawls_total[30m]) == 0
-          and onionspider_queue_nodes{status="pending"} > 0
+          (
+            sum by(job,instance,service) (
+              increase(onionspider_crawls_total{job="onion-spider",result="success"}[30m])
+            )
+            or on(job,instance)
+            0 * sum by(job,instance,service) (
+              onionspider_queue_nodes{job="onion-spider",status=~"pending|crawling"}
+            )
+          ) == 0
+          and on(job,instance)
+          sum by(job,instance,service) (
+            onionspider_queue_nodes{job="onion-spider",status=~"pending|crawling"}
+          ) > 0
         for: 1h
-        labels:
-          severity: critical
-          service: onion-spider
+        labels: { severity: critical, service: onion-spider }
         annotations:
-          summary: "Nodes are queued but no crawl has completed in 30m"
-          description: >
-            Work is available and workers are producing no results. Usually Tor:
-            check `systemctl status tor@default` and the scrape_error rate.
+          summary: Crawl work is available without successful completions
+          description: Check worker activity and Tor connectivity.
 
-      # Sustained failures point at the transport (Tor down, circuits failing)
-      # rather than at individual sites being gone.
       - alert: OnionSpiderHighFailureRate
         expr: |
-          sum(rate(onionspider_crawls_total{result="scrape_error"}[1h]))
+          sum by(job,instance,service) (
+            rate(onionspider_crawls_total{job="onion-spider",result="scrape_error"}[1h])
+          )
           /
-          clamp_min(sum(rate(onionspider_crawls_total[1h])), 0.001)
-          > 0.8
+          clamp_min(sum by(job,instance,service) (
+            rate(onionspider_crawls_total{job="onion-spider"}[1h])
+          ), 0.001) > 0.8
         for: 1h
-        labels:
-          severity: warning
-          service: onion-spider
+        labels: { severity: warning, service: onion-spider }
         annotations:
-          summary: "Over 80% of crawls are failing"
-          description: >
-            A high sustained error ratio is normally Tor connectivity, not the
-            crawled sites. Left alone long enough, every node exhausts its retry
-            budget and the whole queue goes terminal.
+          summary: Over 80% of crawl attempts are failing
+          description: Check Tor connectivity and recent crawler errors.
 
-      - alert: OnionSpiderDown
-        expr: up{job="onion-spider"} == 0
+      - alert: OnionSpiderQueueMetricsStale
+        expr: |
+          (
+            time() - onionspider_queue_last_refresh_timestamp_seconds{job="onion-spider"} > 180
+            or
+            up{job="onion-spider"} == 1
+            unless on(job,instance)
+            onionspider_queue_last_refresh_timestamp_seconds{job="onion-spider"}
+          )
+          and on(job,instance) up{job="onion-spider"} == 1
         for: 5m
-        labels:
-          severity: critical
-          service: onion-spider
+        labels: { severity: warning, service: onion-spider }
         annotations:
-          summary: "Onion Spider API is not responding to scrapes"
+          summary: Queue metrics are missing or stale
+          description: Check the queue-depth refresh query and database locks.
 
-  - name: host
+  - name: onion-spider-recovery
     rules:
-      # Disk is the failure that takes the database with it: Postgres stops
-      # accepting writes when it cannot extend a file, and the crawler, the API
-      # and the backups all fail together. Warn with enough headroom to act.
-      - alert: DiskSpaceLow
-        expr: |
-          node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"}
-          / node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"}
-          < 0.10
-        for: 30m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Less than 10% disk free on /"
-          description: >
-            Postgres stops accepting writes on a full disk. Was at 83% used when
-            these rules were written, so the margin here is not large.
-
-      - alert: DiskSpaceCritical
-        expr: |
-          node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"}
-          / node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"}
-          < 0.05
+      - alert: OnionSpiderBackupMetricsUnavailable
+        expr: up{job="onion-spider-backups"} == 0 or absent(up{job="onion-spider-backups"})
         for: 5m
-        labels:
-          severity: critical
+        labels: { severity: critical, service: onion-spider }
         annotations:
-          summary: "Less than 5% disk free on / — database at risk"
+          summary: Backup monitoring endpoint is unavailable
+          description: Check onion-spider-monitoring-exporter.service and the metrics credential.
+
+      - alert: OnionSpiderBackupStateInvalid
+        expr: onionspider_backup_state_valid{job="onion-spider-backups"} == 0
+        for: 10m
+        labels: { severity: critical, service: onion-spider }
+        annotations:
+          summary: Backup verification state is missing or invalid
+          description: Check the offsite and restore success records and recent job results.
+
+      - alert: OnionSpiderOffsiteBackupStale
+        expr: |
+          time() - onionspider_backup_last_success_timestamp_seconds{job="onion-spider-backups",kind="offsite"} > 26 * 3600
+          and on(job,instance,kind)
+          onionspider_backup_state_valid{job="onion-spider-backups",kind="offsite"} == 1
+        for: 10m
+        labels: { severity: critical, service: onion-spider }
+        annotations:
+          summary: No verified Google Drive backup in over 26 hours
+          description: Check onion-spider-backup.service and rclone authorization.
+
+      - alert: OnionSpiderRestoreCheckStale
+        expr: |
+          time() - onionspider_backup_last_success_timestamp_seconds{job="onion-spider-backups",kind="restore"} > 40 * 24 * 3600
+          and on(job,instance,kind)
+          onionspider_backup_state_valid{job="onion-spider-backups",kind="restore"} == 1
+        for: 10m
+        labels: { severity: warning, service: onion-spider }
+        annotations:
+          summary: No successful isolated restore in over 40 days
+          description: Check onion-spider-restore-check.timer and its latest service result.
+
+      - alert: OnionSpiderRecoveryJobFailed
+        expr: onionspider_backup_unit_failed{job="onion-spider-backups"} == 1
+        for: 2m
+        labels: { severity: critical, service: onion-spider }
+        annotations:
+          summary: An Onion Spider recovery job has failed
+          description: Inspect the failed backup or restore service in the systemd journal.
+
+      - alert: OnionSpiderRecoveryTimerDisabled
+        expr: onionspider_backup_timer_enabled{job="onion-spider-backups"} == 0
+        for: 5m
+        labels: { severity: critical, service: onion-spider }
+        annotations:
+          summary: An Onion Spider recovery timer is inactive or disabled
+          description: Enable and start the backup and restore-check timers.
+
+      - alert: OnionSpiderRecoveryUnitsUnreadable
+        expr: onionspider_backup_units_readable{job="onion-spider-backups"} == 0
+        for: 5m
+        labels: { severity: warning, service: onion-spider }
+        annotations:
+          summary: Backup monitoring cannot read the expected systemd units
+          description: Check unit installation and the collector sandbox.
+
+      - alert: OnionSpiderDiskSpaceLow
+        expr: onionspider_host_disk_available_bytes / onionspider_host_disk_size_bytes < 0.10
+        for: 30m
+        labels: { severity: warning, service: onion-spider }
+        annotations:
+          summary: Less than 10% disk space is available on the host filesystem
+          description: Check PostgreSQL, local backups and monitoring retention.
+
+      - alert: OnionSpiderDiskSpaceCritical
+        expr: onionspider_host_disk_available_bytes / onionspider_host_disk_size_bytes < 0.05
+        for: 5m
+        labels: { severity: critical, service: onion-spider }
+        annotations:
+          summary: Less than 5% disk space is available on the host filesystem
+          description: Free space before PostgreSQL or backups exhaust the filesystem.
+
+      - alert: OnionSpiderAlertmanagerDown
+        expr: up{job="onion-spider-alertmanager"} == 0 or absent(up{job="onion-spider-alertmanager"})
+        for: 5m
+        labels: { severity: critical, service: onion-spider }
+        annotations:
+          summary: Onion Spider Alertmanager is unavailable
+          description: Check the dedicated Alertmanager container and its logs.
+
+      - alert: OnionSpiderNotificationFailed
+        expr: |
+          sum(increase(alertmanager_notifications_failed_total{job="onion-spider-alertmanager",integration="email"}[10m])) > 0
+        for: 5m
+        labels: { severity: critical, service: onion-spider }
+        annotations:
+          summary: Onion Spider email notifications are failing
+          description: Check SMTP credentials, TLS and provider delivery status.
