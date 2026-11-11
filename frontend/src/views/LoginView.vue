@@ -124,6 +124,12 @@ const switchMode = () => {
   message.value = "";
 };
 onMounted(async () => {
+  if (route.query.notice === "password-updated") {
+    say(
+      "Password updated. Every device was signed out. Sign in with your new password.",
+      "ok",
+    );
+  }
   const { ok, data } = await apiJSON("/api/config");
   if (ok) registrationOpen.value = Boolean(data.registration_open);
 });

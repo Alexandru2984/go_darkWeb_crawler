@@ -3,6 +3,7 @@ import { ref, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { apiJSON } from "../lib/api.js";
 import { clearSession, session } from "../stores/session.js";
+import PasswordChangeForm from "../components/PasswordChangeForm.vue";
 
 const router = useRouter();
 const totp = ref({
@@ -12,6 +13,7 @@ const totp = ref({
 });
 const sessions = ref([]);
 const loading = ref(true);
+const securityReady = ref(false);
 
 // Enrolment state. The secret and the recovery codes exist in memory only, for
 // as long as the user needs to record them — they are never written to storage.
@@ -41,7 +43,13 @@ const loadAll = async () => {
     apiJSON("/api/auth/totp"),
     apiJSON("/api/auth/sessions"),
   ]);
+  securityReady.value = t.ok;
   if (t.ok) totp.value = t.data;
+  else
+    say(
+      t.data.error || "Could not load security settings. Try refreshing.",
+      "error",
+    );
   if (s.ok) sessions.value = s.data || [];
   loading.value = false;
 };
@@ -107,6 +115,14 @@ const returnToSignIn = () => {
   return router.replace({ name: "login", query: { next: "/security" } });
 };
 
+const passwordChanged = () => {
+  clearSession();
+  return router.replace({
+    name: "login",
+    query: { next: "/security", notice: "password-updated" },
+  });
+};
+
 const revokeSession = async (id) => {
   const { ok, data } = await apiJSON(`/api/auth/sessions/${id}`, {
     method: "DELETE",
@@ -139,6 +155,14 @@ onMounted(loadAll);
       {{ message }}
     </p>
 
+    <PasswordChangeForm
+      v-if="!recoveryCodes.length"
+      :mfa-enabled="totp.enabled"
+      :disabled="loading || !securityReady || busy || enrolling || disabling"
+      @busy="busy = $event"
+      @changed="passwordChanged"
+    />
+
     <!-- ── Two-factor ──────────────────────────────────────────────────── -->
     <section class="card" aria-labelledby="mfa-heading">
       <div class="head">
@@ -158,6 +182,10 @@ onMounted(loadAll);
       <template v-if="loading">
         <p class="muted">Loading…</p>
       </template>
+
+      <p v-else-if="!securityReady" class="muted">
+        Security settings could not be loaded. Use Refresh below to try again.
+      </p>
 
       <!-- Not enrolled -->
       <template v-else-if="!totp.enabled && !enrolling">
@@ -305,7 +333,9 @@ onMounted(loadAll);
         <ul class="codes__list mono">
           <li v-for="c in recoveryCodes" :key="c">{{ c }}</li>
         </ul>
-        <p class="muted">All devices were signed out. Sign in again after saving your codes.</p>
+        <p class="muted">
+          All devices were signed out. Sign in again after saving your codes.
+        </p>
         <div class="row">
           <button class="btn btn--secondary" type="button" @click="copyCodes">
             Copy all
@@ -318,7 +348,11 @@ onMounted(loadAll);
     </section>
 
     <!-- ── Sessions ────────────────────────────────────────────────────── -->
-    <section v-if="!recoveryCodes.length" class="card" aria-labelledby="sessions-heading">
+    <section
+      v-if="!recoveryCodes.length"
+      class="card"
+      aria-labelledby="sessions-heading"
+    >
       <div class="head">
         <h2 id="sessions-heading" class="section-title">Signed-in devices</h2>
         <button class="btn btn--ghost btn--sm" type="button" @click="loadAll">

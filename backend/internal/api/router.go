@@ -94,6 +94,7 @@ func New(cfg Config) http.Handler {
 		r.Get("/api/auth/me", d.handleMe)
 		r.Post("/api/auth/logout", d.handleLogout)
 		r.Post("/api/auth/logout-all", d.handleLogoutAll)
+		r.Post("/api/auth/password", d.handleChangePassword)
 
 		// Second-factor management. Outside the admin group on purpose: an
 		// admin who must enrol has to be able to reach these.
