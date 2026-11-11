@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -324,4 +325,19 @@ func TestPasswordWorkIsBoundedAndSlotsAreReusable(t *testing.T) {
 		t.Fatal("released slot was not reusable")
 	}
 	release()
+}
+
+func TestRegistrationAvailabilityIsPublic(t *testing.T) {
+	for _, open := range []bool{false, true} {
+		h := New(Config{AllowRegistration: open})
+		recorder := httptest.NewRecorder()
+		h.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+		want := fmt.Sprintf(`{"registration_open":%t}`, open)
+		if recorder.Code != http.StatusOK || strings.TrimSpace(recorder.Body.String()) != want {
+			t.Fatalf("registration setting %v: %d %s", open, recorder.Code, recorder.Body)
+		}
+		if recorder.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("registration configuration is cacheable")
+		}
+	}
 }

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, nextTick, useTemplateRef } from "vue";
+import { ref, nextTick, useTemplateRef, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { apiJSON } from "../lib/api.js";
 import { setSession } from "../stores/session.js";
@@ -8,6 +8,7 @@ import { passwordStrengthError } from "../lib/password.js";
 const route = useRoute();
 const router = useRouter();
 
+const registrationOpen = ref(false);
 const mode = ref("login"); // 'login' | 'register'
 const email = ref("");
 const password = ref("");
@@ -122,6 +123,10 @@ const switchMode = () => {
   code.value = "";
   message.value = "";
 };
+onMounted(async () => {
+  const { ok, data } = await apiJSON("/api/config");
+  if (ok) registrationOpen.value = Boolean(data.registration_open);
+});
 </script>
 
 <template>
@@ -197,13 +202,21 @@ const switchMode = () => {
 
       <div class="auth__links">
         <a class="linkish" href="/about/">Explore the product and demo</a>
-        <button class="linkish" type="button" @click="switchMode">
+        <button
+          v-if="registrationOpen || mode !== 'login'"
+          class="linkish"
+          type="button"
+          @click="switchMode"
+        >
           {{
             mode === "login"
               ? "Need an account? Register"
               : "Already registered? Sign in"
           }}
         </button>
+        <p v-if="!registrationOpen" class="hint">
+          Account registration is currently closed.
+        </p>
         <button
           v-if="mode === 'login'"
           class="linkish"

@@ -170,6 +170,19 @@ components:
         application/json: { schema: { $ref: '#/components/schemas/Error' } }
 
 paths:
+  /api/config:
+    get:
+      summary: Public registration availability
+      responses:
+        '200':
+          description: Workspace registration availability
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  registration_open: { type: boolean }
+
   /api/auth/register:
     post:
       summary: Register a new account (disabled unless ALLOW_REGISTRATION=true)

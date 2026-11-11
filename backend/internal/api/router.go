@@ -67,6 +67,13 @@ func New(cfg Config) http.Handler {
 		MaxAge:         300,
 	}))
 
+	// Public UI capability. Account and infrastructure configuration stay private.
+	r.Get("/api/config", func(w http.ResponseWriter, r *http.Request) {
+		writeNoStoreJSON(w, http.StatusOK, map[string]bool{
+			"registration_open": cfg.AllowRegistration,
+		})
+	})
+
 	// Public: auth endpoints (rate-limited, audit-logged).
 	r.Post("/api/auth/register", d.handleRegister)
 	r.Post("/api/auth/login", d.handleLogin)
