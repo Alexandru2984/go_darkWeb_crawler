@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Onion Spider — Tor research workspace</title>
+    <meta
+      name="description"
+      content="Organize Tor research with searchable crawl records, private notes, tags, change watching, a network map and controls for retention and account security."
+    />
+    <meta name="robots" content="index, follow" />
+    <meta name="referrer" content="no-referrer" />
+    <link rel="canonical" href="https://go.micutu.com/about/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Onion Spider — Tor research workspace" />
+    <meta
+      property="og:description"
+      content="Search records, organize private notes and follow changes in one workspace."
+    />
+    <meta property="og:url" content="https://go.micutu.com/about/" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/about/style.css" />
+    <script src="/about/demo.js" defer></script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="site-header wrap">
+      <a class="brand" href="/about/">Onion Spider</a>
+      <nav aria-label="Main navigation">
+        <a href="#demo">Try the demo</a>
+        <a class="button button-secondary" href="/login">Sign in</a>
+      </nav>
+    </header>
+    <main id="main" class="wrap">
+      <section class="hero" aria-labelledby="hero-heading">
+        <div>
+          <h1 id="hero-heading">A workspace for your Tor research.</h1>
+          <p class="lead">
+            Keep track of discovered sites, organize your findings and follow
+            changes over time. Search your collection and explore how pages
+            connect.
+          </p>
+          <div class="actions">
+            <a class="button" href="#demo">Explore the demo</a>
+            <a class="button button-secondary" href="/login"
+              >Open your workspace</a
+            >
+          </div>
+          <p class="small muted">
+            The demo uses fictional records and runs in your browser.
+          </p>
+        </div>
+        <aside class="preview" aria-label="Workspace capabilities">
+          <div class="preview-top">
+            <span class="indicator" aria-hidden="true"></span> Your research
+            workspace
+          </div>
+          <div class="preview-row">
+            <span>Find a record</span><strong>Full-text search</strong>
+          </div>
+          <div class="preview-row">
+            <span>Organize findings</span
+            ><strong>Private notes &amp; tags</strong>
+          </div>
+          <div class="preview-row">
+            <span>Follow updates</span><strong>Change feed</strong>
+          </div>
+          <div class="preview-row">
+            <span>Manage your data</span><strong>Retention &amp; export</strong>
+          </div>
+        </aside>
+      </section>
+
+      <section id="demo" aria-labelledby="demo-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="demo-heading">Explore a sample collection</h2>
+            <p class="muted">
+              Search records, filter by category and save a watch in this demo.
+            </p>
+          </div>
+          <button
+            id="demo-reset"
+            class="button button-secondary"
+            type="button"
+            hidden
+          >
+            Reset demo
+          </button>
+        </div>
+        <noscript
+          ><p class="notice">
+            Enable JavaScript to use the interactive demo. The workspace
+            features are described below.
+          </p></noscript
+        >
+        <div class="demo-controls">
+          <div>
+            <label for="demo-query">Search sample records</label
+            ><input
+              id="demo-query"
+              type="search"
+              maxlength="200"
+              placeholder="Try documentation or community"
+            />
+          </div>
+          <div>
+            <label for="demo-category">Category</label
+            ><select id="demo-category">
+              <option value="">All categories</option>
+              <option value="Documentation">Documentation</option>
+              <option value="Research">Research</option>
+              <option value="Community">Community</option>
+            </select>
+          </div>
+        </div>
+        <p
+          id="demo-summary"
+          class="small muted"
+          role="status"
+          aria-live="polite"
+        ></p>
+        <div id="demo-records" class="demo-records"></div>
+        <template id="record-template">
+          <article class="demo-record">
+            <div class="record-heading">
+              <span class="category"></span
+              ><span class="sample-status">Sample record</span>
+            </div>
+            <h3></h3>
+            <p class="record-description muted"></p>
+            <p class="record-address small muted"></p>
+            <button
+              class="button button-secondary watch-button"
+              type="button"
+              aria-pressed="false"
+            >
+              Watch changes
+            </button>
+            <details>
+              <summary>Read sample notes</summary>
+              <p class="sample-note"></p>
+            </details>
+          </article>
+        </template>
+      </section>
+
+      <section class="features" aria-labelledby="features-heading">
+        <h2 id="features-heading">From a crawl to an organized collection</h2>
+        <div class="feature-grid">
+          <article>
+            <h3>Find what you need</h3>
+            <p>
+              Search titles and stored text. Combine category and crawl-status
+              filters, browse results by page and inspect individual records.
+            </p>
+          </article>
+          <article>
+            <h3>Keep your context</h3>
+            <p>
+              Add private notes and tags, set a watch interval and review page
+              changes in an in-app feed.
+            </p>
+          </article>
+          <article>
+            <h3>See connections</h3>
+            <p>
+              Open the interactive network map to explore relationships between
+              discovered pages.
+            </p>
+          </article>
+          <article>
+            <h3>Control your data</h3>
+            <p>
+              Choose metadata-only storage, configure retention, export your
+              account data and schedule account deletion with a cancellation
+              window.
+            </p>
+          </article>
+          <article>
+            <h3>Secure your account</h3>
+            <p>
+              Enable authenticator-based two-factor authentication, keep
+              recovery codes and sign out individual devices.
+            </p>
+          </article>
+          <article>
+            <h3>Follow the queue</h3>
+            <p>
+              Check crawl totals and see the next scheduled addresses in a
+              layout that works on phones and larger screens.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="faq" aria-labelledby="faq-heading">
+        <h2 id="faq-heading">Before you start</h2>
+        <details>
+          <summary>Does the demo visit any sites?</summary>
+          <p>
+            All sample records are fictional. Searching and watching them
+            changes only the demo in this tab. Reloading resets the demo.
+          </p>
+        </details>
+        <details>
+          <summary>Do I need an account?</summary>
+          <p>
+            The research workspace requires a verified account. Account
+            registration is managed by the operator. You can explore this demo
+            without signing in.
+          </p>
+        </details>
+        <details>
+          <summary>What information does the service hold?</summary>
+          <p>
+            The workspace stores account information and your crawl records. You
+            can choose whether new crawls retain page text, review retention
+            settings and download your account data. The clearnet domain uses
+            Cloudflare to process HTTPS connections.
+          </p>
+        </details>
+      </section>
+    </main>
+    <footer class="wrap site-footer">
+      <a class="brand" href="/about/">Onion Spider</a
+      ><a href="/login">Sign in to your workspace</a>
+    </footer>
+  </body>
+</html>

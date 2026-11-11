@@ -196,6 +196,7 @@ const switchMode = () => {
       </p>
 
       <div class="auth__links">
+        <a class="linkish" href="/about/">Explore the product and demo</a>
         <button class="linkish" type="button" @click="switchMode">
           {{
             mode === "login"
