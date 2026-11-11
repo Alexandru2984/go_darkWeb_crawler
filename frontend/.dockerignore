@@ -1,0 +1,11 @@
+# Compose uses ./frontend as an independent build context.
+**
+!package.json
+!package-lock.json
+!index.html
+!vite.config.js
+!nginx.conf
+!src/
+!src/**
+!public/
+!public/**

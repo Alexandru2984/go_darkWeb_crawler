@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -41,6 +42,15 @@ func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8900"
+	}
+
+	bindAddress := os.Getenv("BIND_ADDRESS")
+	if bindAddress == "" {
+		bindAddress = "127.0.0.1"
+	}
+	if net.ParseIP(bindAddress) == nil {
+		logger.Error("BIND_ADDRESS must be an IP address")
+		os.Exit(1)
 	}
 
 	workers := 3
@@ -354,7 +364,7 @@ func main() {
 	mux.Handle("/", apiHandler)
 
 	srv := &http.Server{
-		Addr:         "127.0.0.1:" + port,
+		Addr:         net.JoinHostPort(bindAddress, port),
 		Handler:      mux,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,

@@ -49,6 +49,8 @@ services:
     environment:
       DATABASE_URL: "postgres://${POSTGRES_USER:-spider_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-onion_spider}?sslmode=disable"
       PORT: "8900"
+      # Reachable by frontend on the Docker network. The API has no host port.
+      BIND_ADDRESS: "0.0.0.0"
       TOR_PROXY: "tor:9050"
       WORKERS: "${WORKERS:-3}"
       MAX_DEPTH: "${MAX_DEPTH:-2}"

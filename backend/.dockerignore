@@ -1,0 +1,9 @@
+# Only application source is needed in this build context.
+# Compose uses ./backend, so the repository-root ignore file does not apply.
+**
+!go.mod
+!go.sum
+!cmd/
+!cmd/**
+!internal/
+!internal/**
