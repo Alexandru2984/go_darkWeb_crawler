@@ -15,6 +15,27 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  backups:
+    name: Backup safety checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install backup test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes rclone gnupg shellcheck
+
+      - name: Check backup shell script
+        run: |
+          bash -n scripts/backup.sh
+          shellcheck scripts/backup.sh
+
+      - name: Test backup and offsite failure handling
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s scripts -p 'test_backup.py' -v
+
   secrets:
     name: Secret history (Gitleaks)
     runs-on: ubuntu-latest

@@ -1,0 +1,11 @@
+[Unit]
+Description=Monthly restore verification for the Onion Spider Google Drive backup
+
+[Timer]
+OnCalendar=*-*-01 04:15:00 UTC
+RandomizedDelaySec=900
+Persistent=true
+Unit=onion-spider-restore-check.service
+
+[Install]
+WantedBy=timers.target

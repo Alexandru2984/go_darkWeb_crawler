@@ -23,6 +23,11 @@ Group=micu
 WorkingDirectory=/home/micu/go
 ExecStart=/home/micu/go/scripts/backup.sh
 
+EnvironmentFile=-/etc/onion-spider/backup.env
+StateDirectory=onion-spider-backup
+StateDirectoryMode=0700
+TimeoutStartSec=45min
+
 LoadCredential=backup-passphrase:/etc/onion-spider/backup.passphrase
 
 # Sandboxing. The script needs to read the app's .env and write the backup
@@ -31,6 +36,8 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/home/micu/onion-spider-backups
+# rclone atomically refreshes its existing OAuth token in this directory.
+ReadWritePaths=-/home/micu/.config/rclone
 PrivateTmp=true
 PrivateDevices=true
 ProtectClock=true

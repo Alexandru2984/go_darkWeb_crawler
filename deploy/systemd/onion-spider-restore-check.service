@@ -1,0 +1,42 @@
+[Unit]
+Description=Verify the Onion Spider Google Drive backup by restoring an isolated database
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=micu
+Group=micu
+WorkingDirectory=/home/micu/go
+EnvironmentFile=/etc/onion-spider/backup.env
+LoadCredential=backup-passphrase:/etc/onion-spider/backup.passphrase
+StateDirectory=onion-spider-backup
+StateDirectoryMode=0700
+ExecStart=/usr/bin/python3 /home/micu/go/scripts/backup_offsite.py restore-check
+# Docker containers are owned by the daemon. Clean the labelled drill
+# container even if this service was interrupted or timed out.
+ExecStopPost=/usr/bin/python3 /home/micu/go/scripts/backup_offsite.py cleanup
+TimeoutStartSec=30min
+TimeoutStopSec=90s
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/micu/.config/rclone
+PrivateTmp=true
+PrivateDevices=true
+ProtectClock=true
+ProtectHostname=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+UMask=0077
+MemoryMax=512M
+CPUQuota=200%

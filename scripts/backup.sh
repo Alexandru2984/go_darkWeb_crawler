@@ -21,10 +21,12 @@
 # credential `backup-passphrase`; for a manual run, point
 # BACKUP_PASSPHRASE_FILE at the same file.
 #
-#   Restore:  gpg --decrypt onion_spider-<stamp>.sql.gz.gpg | gunzip | psql "$DATABASE_URL"
+#   Restore verification: systemctl start onion-spider-restore-check.service
+#   Manual recovery: see docs/backup-restore.md
 #
 # Exit codes:
-#   0 — backup written and verified, rotation complete (or another run held the lock)
+#   0 — local backup verified and configured offsite publication completed
+#       (or another run held the lock)
 #   1 — fatal (missing env/passphrase, dump failure, verification failure)
 
 set -euo pipefail
@@ -172,6 +174,8 @@ pg_dump --no-owner --no-privileges --format=plain \
         --s2k-mode 3 --s2k-digest-algo SHA512 --compress-algo none \
         --output "$TMP"
 
+unset PGPASSWORD
+
 # Prove the file is restorable before it joins the retained set: decrypt it and
 # run the result through `gzip --test`. An unverified backup is a guess, and the
 # moment you find out otherwise is the worst possible one.
@@ -198,4 +202,9 @@ if (( COUNT > RETENTION )); then
     done
 fi
 
-echo "backup: complete (${SIZE} bytes, $(( COUNT > RETENTION ? RETENTION : COUNT )) kept)"
+echo "backup: local complete (${SIZE} bytes, $(( COUNT > RETENTION ? RETENTION : COUNT )) kept)"
+
+if [[ -n "${BACKUP_REMOTE:-}" ]]; then
+    SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+    python3 "${SCRIPT_DIR}/backup_offsite.py" upload "$(basename -- "$OUT")"
+fi
