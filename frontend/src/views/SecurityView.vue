@@ -116,7 +116,7 @@ const returnToSignIn = () => {
 };
 
 const passwordChanged = () => {
-  clearSession();
+  clearSession("password-updated");
   return router.replace({
     name: "login",
     query: { next: "/security", notice: "password-updated" },

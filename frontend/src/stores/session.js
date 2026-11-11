@@ -15,6 +15,7 @@ const state = reactive({
   /** False until the first /api/auth/me answer, so the UI can avoid flashing
    *  the login form at somebody who is in fact still signed in. */
   checked: false,
+  signInNotice: "",
   /** Set when the account is scheduled for erasure. Carried in session state
    *  rather than fetched by the Privacy page alone, so the warning reaches
    *  someone who never opens that page — including the case that matters, where
@@ -46,11 +47,13 @@ export function setSession({ email, role }) {
   state.email = email || "";
   state.role = role || "";
   state.checked = true;
+  state.signInNotice = "";
 }
 
 /** Clears local state only. The cookie is HttpOnly and only the server can
  *  actually expire it — see signOut. */
-export function clearSession() {
+export function clearSession(notice = "") {
+  state.signInNotice = notice;
   state.email = "";
   state.role = "";
   state.deletionScheduledFor = "";

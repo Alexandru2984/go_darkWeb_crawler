@@ -28,7 +28,13 @@ watch(
     else {
       setUnseenChanges(0);
       if (route.meta.requiresAuth) {
-        router.replace({ name: "login", query: { next: route.fullPath } });
+        router.replace({
+          name: "login",
+          query: {
+            next: route.fullPath,
+            ...(session.signInNotice ? { notice: session.signInNotice } : {}),
+          },
+        });
       }
     }
   },
