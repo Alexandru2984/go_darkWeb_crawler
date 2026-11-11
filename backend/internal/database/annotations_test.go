@@ -440,8 +440,11 @@ func TestAccountDeletionRemovesAnnotationsAndWatches(t *testing.T) {
 		t.Fatalf("observe: %v", err)
 	}
 
-	if err := db.DeleteAccount(uid, ""); err != nil {
-		t.Fatalf("DeleteAccount: %v", err)
+	if _, err := db.RequestAccountDeletion(uid, 0); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := db.DeleteDueAccount(uid, ""); !deleted || err != nil {
+		t.Fatalf("DeleteDueAccount: %v, %v", deleted, err)
 	}
 	for _, table := range []string{"node_tags", "node_notes", "watches", "watch_events"} {
 		var n int

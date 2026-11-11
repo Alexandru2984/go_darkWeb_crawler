@@ -148,31 +148,38 @@ func (db *DB) DueAccountDeletions(limit int) ([]DueDeletion, error) {
 	return due, rows.Err()
 }
 
-// DeleteAccount erases an account and everything attached to it.
-//
-// nodes, edges, sessions and recovery_codes all carry an ON DELETE CASCADE
-// reference to users, so removing the row removes them. auth_audit does not: it
-// is keyed by a keyed reference of the address rather than by user_id, precisely
-// so that table never becomes a directory of who logged in from where. That
-// makes it invisible to the cascade, so the caller supplies the same reference
-// and it is purged in the same transaction — an account is not deleted while its
-// login history survives.
-func (db *DB) DeleteAccount(userID int, auditEmailRef string) error {
+// DeleteDueAccount erases an account only if its grace period is still over.
+// The conditional delete and the cancellation update serialize on the user
+// row. A cancelled or rescheduled deletion can never erase the account from
+// a sweeper's stale list. The user's audit records are removed in the same
+// transaction as the account and its foreign-key cascades.
+func (db *DB) DeleteDueAccount(userID int, auditEmailRef string) (bool, error) {
 	tx, err := db.Conn.Begin()
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback()
 
+	res, err := tx.Exec(`
+		DELETE FROM users WHERE id = $1 AND deletion_scheduled_for <= CURRENT_TIMESTAMP
+	`, userID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil || n == 0 {
+		return false, err
+	}
+
 	if auditEmailRef != "" {
 		if _, err := tx.Exec(`DELETE FROM auth_audit WHERE email = $1`, auditEmailRef); err != nil {
-			return err
+			return false, err
 		}
 	}
-	if _, err := tx.Exec(`DELETE FROM users WHERE id = $1`, userID); err != nil {
-		return err
+	if err := tx.Commit(); err != nil {
+		return false, err
 	}
-	return tx.Commit()
+	return true, nil
 }
 
 // DeleteCrawlHistory removes every node an account owns, and with them (by

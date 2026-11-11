@@ -275,12 +275,15 @@ func main() {
 				// same reference here is what lets the login history go with the
 				// account it belongs to.
 				ref := auth.AuditReference("email", database.NormalizeEmail(d.Email))
-				if err := dbConn.DeleteAccount(d.UserID, ref); err != nil {
+				deleted, err := dbConn.DeleteDueAccount(d.UserID, ref)
+				if err != nil {
 					logger.Error("account deletion failed", "uid", d.UserID, "err", err)
 					continue
 				}
-				metrics.RetentionDeleted.WithLabelValues("accounts").Add(1)
-				logger.Info("account deleted after grace period", "uid", d.UserID)
+				if deleted {
+					metrics.RetentionDeleted.WithLabelValues("accounts").Add(1)
+					logger.Info("account deleted after grace period", "uid", d.UserID)
+				}
 			}
 		}
 		run()

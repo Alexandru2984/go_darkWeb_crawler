@@ -172,8 +172,36 @@ func TestAccountDeletionRemovesEveryTraceOfTheAccount(t *testing.T) {
 	db.LogAuthEvent("login_ok", "ref-doomed", "ip-ref")
 	db.LogAuthEvent("login_ok", "ref-bystander", "ip-ref")
 
-	if err := db.DeleteAccount(doomed, "ref-doomed"); err != nil {
-		t.Fatalf("DeleteAccount: %v", err)
+	if _, err := db.RequestAccountDeletion(doomed, 0); err != nil {
+		t.Fatal(err)
+	}
+	due, err := db.DueAccountDeletions(50)
+	if err != nil || len(due) != 1 || due[0].UserID != doomed {
+		t.Fatalf("due accounts: %v, %v", due, err)
+	}
+	if cancelled, err := db.CancelAccountDeletion(doomed); !cancelled || err != nil {
+		t.Fatalf("cancel deletion: %v, %v", cancelled, err)
+	}
+	if deleted, err := db.DeleteDueAccount(due[0].UserID, "ref-doomed"); deleted || err != nil {
+		t.Fatalf("stale sweeper deletion: %v, %v", deleted, err)
+	}
+	if n, err := db.CountRecentAuthEvents("login_ok", "ref-doomed", 10); n != 1 || err != nil {
+		t.Fatalf("cancelled deletion removed audit events: %d, %v", n, err)
+	}
+	if _, err := db.RequestAccountDeletion(doomed, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := db.DeleteDueAccount(due[0].UserID, "ref-doomed"); deleted || err != nil {
+		t.Fatalf("stale sweeper deleted a rescheduled account: %v, %v", deleted, err)
+	}
+	if _, err := db.CancelAccountDeletion(doomed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.RequestAccountDeletion(doomed, 0); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := db.DeleteDueAccount(doomed, "ref-doomed"); !deleted || err != nil {
+		t.Fatalf("DeleteDueAccount: %v, %v", deleted, err)
 	}
 
 	for _, c := range []struct {
