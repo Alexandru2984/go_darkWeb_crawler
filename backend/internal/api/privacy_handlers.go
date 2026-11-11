@@ -61,6 +61,12 @@ func (d *deps) requireReauth(w http.ResponseWriter, r *http.Request, action, pas
 		WriteJSONError(w, http.StatusTooManyRequests, "Too many attempts. Please try again later.")
 		return nil
 	}
+	release, ok := d.acquirePasswordSlot(w)
+	if !ok {
+		return nil
+	}
+	defer release()
+
 	user, err := d.reauthenticate(r, password, code)
 	if err != nil {
 		if errors.Is(err, errReauthFailed) {

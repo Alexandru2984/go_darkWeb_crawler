@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net/http"
 	"sync"
 	"time"
 
@@ -45,6 +46,9 @@ type deps struct {
 	// equivalent of the account lockout that guards the login path.
 	sensitiveLim *CrawlLimiter
 
+	// Password verification and hashing share a process-wide memory budget.
+	passwordSlots chan struct{}
+
 	// Pre-authentication endpoints have no account to charge, so they are
 	// limited per address on clearnet and in aggregate on the onion path.
 	loginLim    *AnonLimiter
@@ -56,4 +60,16 @@ type deps struct {
 	// the sync.Map) AND a global cap (exportGlobalSem) so we never OOM.
 	exportGlobalSem chan struct{}
 	exportPerUser   *sync.Map
+}
+
+// acquirePasswordSlot bounds concurrent memory-hard hashes across accounts.
+func (d *deps) acquirePasswordSlot(w http.ResponseWriter) (release func(), ok bool) {
+	select {
+	case d.passwordSlots <- struct{}{}:
+		return func() { <-d.passwordSlots }, true
+	default:
+		w.Header().Set("Retry-After", "1")
+		WriteJSONError(w, http.StatusServiceUnavailable, "Authentication is busy. Try again shortly.")
+		return nil, false
+	}
 }

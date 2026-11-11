@@ -32,7 +32,8 @@ func New(cfg Config) http.Handler {
 
 		// Ten re-authentications an hour is far more than anyone deleting their
 		// own data needs, and far fewer than online password guessing requires.
-		sensitiveLim: NewCrawlLimiter(10, time.Hour),
+		sensitiveLim:  NewCrawlLimiter(10, time.Hour),
+		passwordSlots: make(chan struct{}, 4),
 
 		// Onion limits are aggregates over the whole front door, not per
 		// visitor, so they are sized well above the clearnet per-address limit.

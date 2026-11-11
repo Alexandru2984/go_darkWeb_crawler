@@ -48,6 +48,12 @@ func (d *deps) handleTOTPSetup(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, 1024, &req) || !d.allowTOTPChange(w, r) {
 		return
 	}
+	release, ok := d.acquirePasswordSlot(w)
+	if !ok {
+		return
+	}
+	defer release()
+
 	user, err := d.cfg.DB.GetUserByEmail(GetDBEmail(r))
 	if err != nil || user == nil {
 		slog.ErrorContext(r.Context(), "totp_setup_user_lookup_failed", "uid", uid, "err", err)
@@ -146,6 +152,12 @@ func (d *deps) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, 1024, &req) || !d.allowTOTPChange(w, r) {
 		return
 	}
+
+	release, ok := d.acquirePasswordSlot(w)
+	if !ok {
+		return
+	}
+	defer release()
 
 	user, err := d.cfg.DB.GetUserByEmail(GetDBEmail(r))
 	if err != nil || user == nil {

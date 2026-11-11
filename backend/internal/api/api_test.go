@@ -305,3 +305,23 @@ func TestNormalizeOnionURL_EmptyHost(t *testing.T) {
 		t.Errorf("invalid input should return empty, got %q", got)
 	}
 }
+
+func TestPasswordWorkIsBoundedAndSlotsAreReusable(t *testing.T) {
+	d := &deps{passwordSlots: make(chan struct{}, 1)}
+	release, ok := d.acquirePasswordSlot(httptest.NewRecorder())
+	if !ok {
+		t.Fatal("first slot was refused")
+	}
+
+	busy := httptest.NewRecorder()
+	if _, ok := d.acquirePasswordSlot(busy); ok || busy.Code != http.StatusServiceUnavailable || busy.Header().Get("Retry-After") == "" {
+		t.Fatalf("busy response: accepted=%v status=%d", ok, busy.Code)
+	}
+
+	release()
+	release, ok = d.acquirePasswordSlot(httptest.NewRecorder())
+	if !ok {
+		t.Fatal("released slot was not reusable")
+	}
+	release()
+}

@@ -66,6 +66,12 @@ func (d *deps) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	release, ok := d.acquirePasswordSlot(w)
+	if !ok {
+		return
+	}
+	defer release()
+
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {
 		WriteJSONError(w, http.StatusBadRequest, "Password cannot be processed")
@@ -135,6 +141,12 @@ func (d *deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusBadRequest, "Mode must be 'cookie' or 'bearer'")
 		return
 	}
+
+	release, ok := d.acquirePasswordSlot(w)
+	if !ok {
+		return
+	}
+	defer release()
 
 	// Account lockout: after 5 login_fail in 15min for the same email → 15min
 	// timeout. Protects against distributed brute-force across multiple IPs.
@@ -464,6 +476,12 @@ func (d *deps) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	release, ok := d.acquirePasswordSlot(w)
+	if !ok {
+		return
+	}
+	defer release()
+
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {
 		WriteJSONError(w, http.StatusBadRequest, "Password cannot be processed")
