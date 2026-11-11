@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch as vueWatch, nextTick } from "vue";
+import { ref, watch as vueWatch, nextTick, onUnmounted } from "vue";
 import { apiJSON } from "../lib/api.js";
 
 const props = defineProps({
@@ -21,20 +21,27 @@ const watchInterval = ref(1);
 const loading = ref(false);
 const busy = ref(false);
 const error = ref("");
+let request;
 
 const load = async () => {
+  const controller = new AbortController();
+  request = controller;
   loading.value = true;
   error.value = "";
-  const { ok, data } = await apiJSON("/api/annotations", {
-    method: "POST",
-    json: { url: props.url },
-  });
-  loading.value = false;
-  if (!ok) {
-    error.value = data.error || "Could not load your notes for this site.";
-    return;
+  try {
+    const { ok, data } = await apiJSON("/api/annotations", {
+      method: "POST",
+      json: { url: props.url },
+      signal: controller.signal,
+    });
+    if (request !== controller) return;
+    if (ok) apply(data);
+    else error.value = data.error || "Could not load your notes for this site.";
+  } catch (err) {
+    if (err.name !== "AbortError") error.value = "Could not load your notes.";
+  } finally {
+    if (request === controller) loading.value = false;
   }
-  apply(data);
 };
 
 const apply = (data) => {
@@ -44,16 +51,30 @@ const apply = (data) => {
 };
 
 const send = async (path, json) => {
+  if (busy.value) return null;
+  const controller = new AbortController();
+  request = controller;
   busy.value = true;
   error.value = "";
-  const { ok, data } = await apiJSON(path, { method: "POST", json });
-  busy.value = false;
-  if (!ok) {
-    error.value = data.error || "That did not work.";
+  try {
+    const { ok, data } = await apiJSON(path, {
+      method: "POST",
+      json,
+      signal: controller.signal,
+    });
+    if (request !== controller) return null;
+    if (!ok) {
+      error.value = data.error || "That did not work.";
+      return null;
+    }
+    emit("changed");
+    return data;
+  } catch (err) {
+    if (err.name !== "AbortError") error.value = "Could not save your changes.";
     return null;
+  } finally {
+    if (request === controller) busy.value = false;
   }
-  emit("changed");
-  return data;
 };
 
 const addTag = async () => {
@@ -101,17 +122,25 @@ const close = () => emit("close");
 vueWatch(
   () => props.url,
   async (url) => {
+    request?.abort();
+    request = null;
+    busy.value = false;
+    error.value = "";
+    newTag.value = "";
+    noteDraft.value = "";
     if (!url) {
       dialogEl.value?.close();
       return;
     }
     annotation.value = { tags: [], note: "", watch: null };
     await nextTick();
+    if (props.url !== url) return;
     if (!dialogEl.value?.open) dialogEl.value?.showModal();
     load();
   },
   { immediate: true },
 );
+onUnmounted(() => request?.abort());
 </script>
 
 <template>

@@ -49,7 +49,9 @@ onUnmounted(() => clearInterval(timer));
         queued</span
       >
       <span class="stat"
-        ><strong>{{ status.active_workers }}</strong> workers</span
+        ><strong>{{ status.active_workers }}</strong> worker{{
+          status.active_workers === 1 ? "" : "s"
+        }}</span
       >
     </div>
   </div>
