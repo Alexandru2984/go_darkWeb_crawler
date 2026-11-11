@@ -47,7 +47,7 @@ Both source and binary scanners now report no vulnerabilities.
 | Priority | Observation | Acceptance evidence |
 | --- | --- | --- |
 | High | No Onion Spider scrape target was present in either inspected Prometheus instance. The systemd monitoring services described by the existing runbook were inactive | A healthy scrape target, loaded project rules and verified alert routing to the operator |
-| High | The encrypted backup service completed successfully. Recovery onto an isolated database and loss of the entire VPS were not exercised | Timed restore of an encrypted backup, integrity checks and a recoverable offsite copy |
+| Medium | Google Drive publication and isolated database restore are verified. Independent recovery of the GPG passphrase and rclone crypt keys after total VPS loss remains an operator responsibility | Verify the external secret store, Google account recovery and a full host-recovery exercise |
 | High | TOTP seeds and live application data remain readable to a database administrator | Encryption of TOTP seeds using a separate managed key, rotation coverage and a documented recovery process |
 | Medium | Cloudflare processes clearnet TLS and its account-side privacy settings were not audited through an authenticated connector | Operator review of edge logging, browser reporting, analytics and retention settings |
 | Medium | Distribution coverage for upstream nginx advisories was not verified | Match installed Ubuntu package patches to applicable advisories before treating upstream version comparisons as a vulnerability finding |
@@ -87,7 +87,7 @@ credential rotation, containment and restoration remains outstanding.
 Legal applicability, vendor contracts and notification obligations require the
 operator's assessment. This technical review does not establish a compliance
 certification. The relevant vendor boundaries include Cloudflare, SMTP, the VPS
-provider, software registries, GitHub and the Tor network. No new external
+provider, Google Drive, software registries, GitHub and the Tor network. No new external
 telemetry service was introduced.
 
 ## Verification
@@ -145,5 +145,48 @@ Authenticated account flows were exercised against the isolated fixture
 environment. Production user credentials were not used.
 
 The application release is deployed. Operational readiness remains dependent on
-alerting and recovery work listed above. GitHub-hosted CI has not been triggered
+alerting, external recovery-key custody and full host-recovery work listed above. GitHub-hosted CI has not been triggered
 by a push during this session.
+
+
+## Google Drive backup and recovery stage
+
+The installed backup job publishes archives to the existing
+`gdrive-vps-crypt:onion-spider` destination. GPG encryption is applied before the
+rclone crypt transport. Verification downloads and compares the encrypted
+archives before updating the recovery pointer or rotating the remote set.
+
+The daily run completed automatically on 2026-11-11 at 03:15:38 UTC. It kept
+seven local archives and eight active offsite archives. Offsite retention is
+configured for thirty active archives. The existing Drive trash policy remains
+part of the account-side retention boundary. Client-side immutable upload guards
+against accidental overwrite. Server-enforced object locking was not configured.
+
+The recovery record identifies a verified filename, byte length and SHA-256
+digest. A monthly timer restores that archive inside a container with no
+external network or host mounts. Database files are held in a bounded tmpfs.
+Interrupted drills have a labelled-container cleanup path protected by a lock.
+
+The first end-to-end remote restore completed on 2026-11-11 at 02:55:44 UTC in
+247.43 seconds. A second drill restored the latest scheduled archive,
+`onion_spider-2026-11-11_03-14-48.sql.gz.gpg`, at 14:39:57 UTC in 362.5 seconds.
+Both restored schemas were version 8 with dirty=false and no unvalidated
+constraints. These durations cover the database drills.
+
+The latest archive's downloaded SHA-256 matched the verified recovery record.
+The final success record was written after container cleanup completed. No
+restore container or pending cleanup marker remained. Both timers were enabled,
+the installed units matched their repository versions and the application
+readiness check remained successful.
+
+Ten local regression tests cover retention, retry, read-back failure, invalid
+destinations, archive tampering, cleanup ownership and failure, atomic success
+records and keeping connection credentials out of process arguments. Shellcheck
+and systemd unit validation passed. The same regression suite is included in CI.
+
+The backup connection parser now reads the environment file directly. It keeps
+the PostgreSQL URI out of Python's arguments, preserves configured TLS options
+and removes the database password from the environment before offsite work.
+
+The backup provider and crypt remote reuse the operator's existing configuration.
+External key custody and full host recovery require the operator's verification.

@@ -38,7 +38,7 @@ Tor browser ----------------> onion service -> nginx -> Go API -> PostgreSQL
                                                    |
                                                    +-> Tor SOCKS -> onion sites
                                                    +-> SMTP server -> account email
-Prometheus <- localhost /metrics                  backups -> encrypted local files
+Prometheus <- localhost /metrics                  backups -> GPG -> rclone crypt -> Google Drive
 ```
 
 Trust boundaries:
@@ -55,8 +55,9 @@ Trust boundaries:
 6. Go to Tor: all crawler egress must use SOCKS; redirects to clearnet or to a
    different onion service are rejected.
 7. Go to SMTP: reset and verification links cross the mail provider boundary.
-8. Host to backup storage: backups are encrypted, but are currently retained
-   only on the same VPS.
+8. Host to backup storage: GPG-encrypted archives are retained locally and
+   uploaded through the existing rclone crypt remote to Google Drive. Recovery
+   requires the GPG passphrase, crypt keys and Google account access.
 
 ## Assets and data classification
 
@@ -67,7 +68,7 @@ Trust boundaries:
 | User intent | submitted onion URLs, paths, query strings, searches, graph edges | Critical | authenticated access; no application/nginx request-value logging after current fixes; `no-store` |
 | Crawled material | titles, page text, metadata, extracted emails/keys/crypto addresses | High | DB access control and export limits; not yet encrypted at application layer or automatically expired |
 | Operational data | request route/status/duration, HMAC audit references, aggregate metrics | Medium | bounded/pseudonymized telemetry; API metrics loopback-only |
-| Recovery data | encrypted SQL dumps containing all classes above | Critical | GPG AES256/AEAD, root-held passphrase, mode 0600, seven local copies; no automated offsite copy yet |
+| Recovery data | encrypted SQL dumps containing all classes above | Critical | GPG AES256/AEAD, root-held passphrase, mode 0600, seven local copies, thirty active Google Drive copies through rclone crypt, monthly isolated restore |
 
 Production snapshot on 2026-08-09: three verified users (one admin), about
 31,700 tenant-owned nodes and 88,000 edges. A complete DB or backup compromise
@@ -207,7 +208,7 @@ Do not call the release production-final until all items below are evidenced:
   events have an owner and target MTTD.
 - [ ] Historical sensitive journals and redundant secret copies are handled
   under an evidence/rotation plan.
-- [ ] Encrypted offsite backup and isolated restore drill succeed.
+- [x] Encrypted Google Drive backup and isolated restore drill succeed.
 - [ ] Cloudflare NEL/browser analytics and vendor privacy settings are reviewed.
 - [ ] Data retention, account deletion/export and privacy notice are shipped
   before opening registration broadly.

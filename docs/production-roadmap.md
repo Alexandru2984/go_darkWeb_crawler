@@ -26,12 +26,15 @@ describe their original release dates.
 - [x] Add a public product page with an interactive fictional-data demo.
 - [x] Add canonical metadata, a public sitemap and local robots policy.
 - [x] Enforce npm security auditing, strict lint and source/binary Go scanning.
+- [x] Deploy encrypted daily Google Drive backups with 7 local and 30 active
+  offsite archives, verified recovery metadata and a monthly isolated restore
+  drill. Ten backup regressions also run in CI.
 
 ### Next implementation stages
 
 | Order | Stage | Capabilities and completion criteria |
 | --- | --- | --- |
-| 1 | Operational recovery and detection | Restore a healthy project scrape target, load the project alert rules, verify operator alert routing, exercise encrypted restore and add offsite recovery. Record measured detection and restoration times |
+| 1 | Operational recovery and detection | Restore a healthy project scrape target, load the project alert rules and verify operator alert routing. Google Drive publication and isolated restore are deployed. Verify external recovery-key custody and exercise full host recovery. Record measured detection and restoration times |
 | 2 | Account hardening | Encrypt TOTP seeds with key rotation, add password change with session invalidation, add passkeys per origin, improve recovery-code management and review privilege changes. Cover replay and concurrent credential updates |
 | 3 | Collections and search | Add private saved searches, collections built from tags, host/date/title filters, user-selected sorting and clear filter reset. Keep sensitive terms out of request URLs and shareable links |
 | 4 | Research workflow | Add a private bookmarks view, note search, tag management, configurable change-feed filters and explicit review state. Support the same URL under separate accounts throughout |
