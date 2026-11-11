@@ -100,31 +100,51 @@ if [[ ! -f "$ENV_FILE" ]]; then
     exit 1
 fi
 
-DSN="$(grep -m1 '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2-)"
-DSN="${DSN%\"}"; DSN="${DSN#\"}"
-DSN="${DSN%\'}"; DSN="${DSN#\'}"
-if [[ -z "$DSN" ]]; then
-    echo "backup: DATABASE_URL not set in $ENV_FILE." >&2
-    exit 1
-fi
+# Only the configuration file path enters argv. Connection credentials are
+# read inside Python and returned as shell-quoted environment assignments.
+PG_SETTINGS="$(python3 - "$ENV_FILE" <<'PYENV'
+import pathlib
+import shlex
+import sys
+import urllib.parse
 
-# Split the DSN rather than handing it to pg_dump as an argument: argv is
-# world-readable through /proc/<pid>/cmdline, so a URI containing the password
-# would expose it to every user on the box for the life of the dump. The
-# password goes via PGPASSWORD (visible only to the same user and root), and
-# the rest as ordinary flags.
-eval "$(python3 - "$DSN" <<'PY'
-import sys, urllib.parse as u
-p = u.urlparse(sys.argv[1])
-def q(s): return "'" + (s or '').replace("'", "'\\''") + "'"
-print(f"PGHOST={q(p.hostname or 'localhost')}")
-print(f"PGPORT={q(str(p.port or 5432))}")
-print(f"PGUSER={q(u.unquote(p.username or ''))}")
-print(f"PGPASSWORD={q(u.unquote(p.password or ''))}")
-print(f"PGDATABASE={q((p.path or '').lstrip('/'))}")
-PY
+try:
+    lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+    value = next(line.partition("=")[2].strip() for line in lines
+                 if line.startswith("DATABASE_URL="))
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        value = value[1:-1]
+    parsed = urllib.parse.urlparse(value)
+    if parsed.scheme not in ("postgres", "postgresql") or not parsed.hostname:
+        raise ValueError("invalid connection")
+    settings = {
+        "PGHOST": parsed.hostname,
+        "PGPORT": str(parsed.port or 5432),
+        "PGUSER": urllib.parse.unquote(parsed.username or ""),
+        "PGPASSWORD": urllib.parse.unquote(parsed.password or ""),
+        "PGDATABASE": urllib.parse.unquote(parsed.path.lstrip("/")),
+    }
+    parameters = urllib.parse.parse_qs(parsed.query)
+    for option, variable in (("sslmode", "PGSSLMODE"),
+                             ("connect_timeout", "PGCONNECT_TIMEOUT"),
+                             ("sslrootcert", "PGSSLROOTCERT"),
+                             ("sslcert", "PGSSLCERT"),
+                             ("sslkey", "PGSSLKEY")):
+        if option in parameters:
+            settings[variable] = parameters[option][-1]
+    if not settings["PGDATABASE"]:
+        raise ValueError("missing database")
+except (OSError, StopIteration, ValueError):
+    sys.exit("backup: invalid or missing DATABASE_URL in the environment file")
+
+for key, value in settings.items():
+    print(key + "=" + shlex.quote(value))
+PYENV
 )"
+eval "$PG_SETTINGS"
+unset PG_SETTINGS
 export PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE
+export PGSSLMODE PGCONNECT_TIMEOUT PGSSLROOTCERT PGSSLCERT PGSSLKEY
 : "${PGDATABASE:?backup: could not parse a database name out of DATABASE_URL}"
 
 STAMP="$(date -u +%Y-%m-%d_%H-%M-%S)"
