@@ -6,3 +6,5 @@ c77bed2a542548078c2d431a550d5c13f91b5d77:backend/internal/email/email_test.go:ge
 d49232fd7a3962a00cd7eb1f6313b72b6a9b5469:backend/internal/database/db_test.go:generic-api-key:87
 858f975a3dc70a6b579d25da7b9a5e8b4f74f59d:backend/internal/api/integration_test.go:generic-api-key:20
 717538f9e31a55349b29d49fd16a919dff90013a:backend/internal/auth/auth_test.go:generic-api-key:13
+# Public, fixed password used exclusively by disposable privacy integration fixtures.
+9de3d3c58f8f3c7f89884ee677944e0363f0cf49:backend/internal/api/privacy_integration_test.go:generic-api-key:14

@@ -104,7 +104,7 @@ func (c Claims) Validate() error {
 	if c.IssuedAt == nil || c.NotBefore == nil {
 		return errors.New("missing required temporal claims")
 	}
-	if c.ExpiresAt != nil && c.ExpiresAt.Time.Sub(c.IssuedAt.Time) > TokenTTL {
+	if c.ExpiresAt != nil && c.ExpiresAt.Sub(c.IssuedAt.Time) > TokenTTL {
 		return errors.New("token lifetime exceeds maximum")
 	}
 	return nil

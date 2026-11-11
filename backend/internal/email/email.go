@@ -197,7 +197,7 @@ func deliverSMTP(cfg *smtpConfig, recipient string, message []byte) error {
 	if err != nil {
 		return fmt.Errorf("SMTP connect: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if err := conn.SetDeadline(deadline); err != nil {
 		return fmt.Errorf("SMTP deadline: %w", err)
 	}
@@ -206,7 +206,7 @@ func deliverSMTP(cfg *smtpConfig, recipient string, message []byte) error {
 	if err != nil {
 		return fmt.Errorf("SMTP greeting: %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	if cfg.tlsMode == "starttls" {
 		if ok, _ := client.Extension("STARTTLS"); !ok {

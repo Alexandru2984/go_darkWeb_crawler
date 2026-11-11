@@ -26,6 +26,7 @@ linters:
         # Deferred / cleanup closes — the error is not actionable at the point
         # of defer.
         - (*database/sql.Rows).Close
+        - (*database/sql.Tx).Rollback
         - (io.Closer).Close
 
         # excelize streaming exports — per-cell SetCellValue errors are not

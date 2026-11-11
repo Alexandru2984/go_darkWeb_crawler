@@ -104,7 +104,7 @@ func newPrivacyFilter() func([]string, slog.Attr) slog.Attr {
 			mac := hmac.New(sha256.New, key)
 			_, _ = mac.Write([]byte(strings.ToLower(a.Key)))
 			_, _ = mac.Write([]byte{0})
-			_, _ = mac.Write([]byte(fmt.Sprint(a.Value.Any())))
+			_, _ = fmt.Fprint(mac, a.Value.Any())
 			return slog.String(a.Key, "ref:"+hex.EncodeToString(mac.Sum(nil)[:12]))
 		}
 

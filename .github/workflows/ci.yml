@@ -162,8 +162,11 @@ jobs:
       - name: npm ci
         run: npm ci --no-audit --no-fund
 
+      - name: Dependency security audit
+        run: npm audit --audit-level=moderate
+
       - name: lint
-        run: npm run lint
+        run: npm run lint -- --max-warnings=0
 
       - name: unit tests
         run: npm run test:unit

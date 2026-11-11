@@ -2,14 +2,13 @@ package onion
 
 import (
 	"bytes"
+	"crypto/sha3"
 	"encoding/base32"
 	"net"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
-
-	"golang.org/x/crypto/sha3"
 )
 
 var v3HostnameRE = regexp.MustCompile(`^[a-z2-7]{56}\.onion$`)
