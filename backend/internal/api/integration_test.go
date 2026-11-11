@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"onion-spider/internal/auth"
 	"onion-spider/internal/crawler"
 	"onion-spider/internal/database"
+	"onion-spider/internal/secrets"
 )
 
 // TestMain initializes the JWT secret once for the whole api test binary so
@@ -97,6 +99,17 @@ func newAPI(t *testing.T, overrides ...func(*Config)) (http.Handler, *database.D
 		t.Fatalf("truncate: %v", err)
 	}
 	t.Cleanup(func() { db.Conn.Close() })
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := secrets.New("fixture", map[string][]byte{"fixture": key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ConfigureTOTPEncryption(keys); err != nil {
+		t.Fatal(err)
+	}
 
 	eng := crawler.NewEngine(db, "127.0.0.1:9050", 1, 1) // not Start()ed
 	cfg := Config{

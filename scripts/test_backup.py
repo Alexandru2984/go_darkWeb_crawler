@@ -14,6 +14,7 @@ from unittest.mock import patch
 import uuid
 
 import backup_offsite
+import totp_keys
 
 SCRIPT = Path(__file__).with_name("backup.sh")
 
@@ -87,6 +88,50 @@ class BackupTests(unittest.TestCase):
         names = self.invoke_rclone("lsf", "fixture:onion-spider", "--files-only").splitlines()
         self.assertIn(older, names)
         self.assertNotIn(newer, names)
+
+    def test_keyring_companions_are_verified_and_rotated_with_their_databases(self):
+        oldest, newest = [self.snapshot(day) for day in (1, 2)]
+        for snapshot in (oldest, newest):
+            (self.source / backup_offsite.keyring_filename(snapshot)).write_bytes(os.urandom(128))
+        with patch.dict(os.environ, {"BACKUP_REMOTE_RETENTION": "1", "BACKUP_TOTP_KEYRING_REQUIRED": "true"}):
+            self.publish(newest)
+        names = self.invoke_rclone("lsf", "fixture:onion-spider", "--files-only").splitlines()
+        self.assertNotIn(backup_offsite.keyring_filename(oldest), names)
+        self.assertIn(backup_offsite.keyring_filename(newest), names)
+        metadata = json.loads(self.invoke_rclone("cat", "fixture:onion-spider/latest.json"))
+        self.assertEqual(metadata["keyring"]["filename"], backup_offsite.keyring_filename(newest))
+        self.assertEqual(metadata["keyring"]["sha256"], backup_offsite.file_digest(self.source / metadata["keyring"]["filename"]))
+
+    def test_missing_required_keyring_is_rejected_before_upload(self):
+        with patch.dict(os.environ, {"BACKUP_TOTP_KEYRING_REQUIRED": "true"}):
+            with patch.object(backup_offsite, "rclone") as command:
+                with self.assertRaises(ValueError):
+                    self.publish(self.snapshot(1))
+                command.assert_not_called()
+
+    def test_encrypted_restore_requires_its_keyring(self):
+        completed = subprocess.CompletedProcess([], 0, stdout=json.dumps([
+            {"user_id": 1, "value": "totp:v1:missing:invalid"},
+        ]))
+        with patch.object(backup_offsite.subprocess, "run", return_value=completed) as command:
+            with self.assertRaises(ValueError):
+                backup_offsite.verify_restored_totp("fixture-container", None, {})
+            self.assertEqual(command.call_count, 1)
+
+    def test_tampered_keyring_is_rejected_before_decryption(self):
+        snapshot = self.snapshot(1)
+        name = backup_offsite.keyring_filename(snapshot)
+        (self.source / name).write_bytes(os.urandom(128))
+        metadata = {"keyring": {"filename": name, "sha256": "0" * 64, "size_bytes": 128}}
+        work = self.root / "restore"
+        work.mkdir()
+        def command(*args, **kwargs):
+            shutil.copyfile(self.source / name, args[2])
+        with patch.object(backup_offsite, "rclone", side_effect=command):
+            with patch.object(backup_offsite.subprocess, "run") as decrypt:
+                with self.assertRaises(ValueError):
+                    backup_offsite.download_keyring(metadata, snapshot, "fixture:onion-spider", work, self.root / "passphrase")
+                decrypt.assert_not_called()
 
     def test_failed_readback_does_not_rotate_remote_backups_or_publish_success(self):
         filename = self.snapshot(1)
@@ -178,10 +223,12 @@ class BackupTests(unittest.TestCase):
         restored = {
             "schema_dirty": False, "schema_version": 8, "unvalidated_constraints": 0,
         }
-        completed = subprocess.CompletedProcess([], 0, stdout=json.dumps(restored))
+        def run(*args, **kwargs):
+            output = [] if "json_agg" in args[0][-1] else restored
+            return subprocess.CompletedProcess([], 0, stdout=json.dumps(output))
         with patch.dict(os.environ, {"BACKUP_PASSPHRASE_FILE": str(passphrase)}):
             with patch.object(backup_offsite, "rclone", side_effect=command):
-                with patch.object(backup_offsite.subprocess, "run", return_value=completed):
+                with patch.object(backup_offsite.subprocess, "run", side_effect=run):
                     with patch.object(backup_offsite, "restore_sql"):
                         with patch.object(backup_offsite, "cleanup_container",
                                           side_effect=[None, RuntimeError("cleanup failed")]):
@@ -201,6 +248,8 @@ class BackupTests(unittest.TestCase):
         passphrase = self.root / "passphrase"
         passphrase.write_text(uuid.uuid4().hex + "\n")
         passphrase.chmod(0o600)
+        keyring = self.root / "keyring.json"
+        totp_keys.update(keyring, "init")
 
         python = tools / "python3"
         python.write_text(
@@ -230,6 +279,7 @@ class BackupTests(unittest.TestCase):
                 **os.environ, "PATH": str(tools) + os.pathsep + os.environ["PATH"],
                 "BACKUP_REMOTE": "", "BACKUP_ENV_FILE": str(environment_file),
                 "BACKUP_PASSPHRASE_FILE": str(passphrase),
+                "BACKUP_TOTP_KEYRING_FILE": str(keyring), "BACKUP_TOTP_KEYRING_REQUIRED": "true",
                 "EXPECTED_PASSWORD": password, "REAL_PYTHON": real_python,
                 "ARGUMENT_TRACE": str(trace),
             },
@@ -242,6 +292,10 @@ class BackupTests(unittest.TestCase):
         archives = list(self.source.glob("*.sql.gz.gpg"))
         self.assertEqual(len(archives), 1)
         self.assertEqual(archives[0].stat().st_mode & 0o777, 0o600)
+        keyring_archives = list(self.source.glob("onion_spider-keyring-*.json.gpg"))
+        self.assertEqual(len(keyring_archives), 1)
+        self.assertEqual(keyring_archives[0].stat().st_mode & 0o777, 0o600)
+        self.assertNotIn(keyring.read_bytes(), keyring_archives[0].read_bytes())
 
 
 if __name__ == "__main__":

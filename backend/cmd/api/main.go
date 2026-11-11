@@ -17,12 +17,27 @@ import (
 	"onion-spider/internal/logging"
 	"onion-spider/internal/metrics"
 	"onion-spider/internal/proxy"
+	"onion-spider/internal/secrets"
 
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--verify-totp-backup" {
+		if err := secrets.CheckBackup(os.Stdin); err != nil {
+			// The payload includes recovery keys. Never print it or parser errors.
+			_, _ = os.Stderr.WriteString("backup: TOTP credential verification failed\n")
+			os.Exit(1)
+		}
+		_, _ = os.Stdout.WriteString("backup: restored TOTP credentials verified\n")
+		return
+	}
+	compatibility := len(os.Args) == 2 && os.Args[1] == "--totp-compatibility"
+	if len(os.Args) > 1 && !compatibility {
+		_, _ = os.Stderr.WriteString("Unsupported API option\n")
+		os.Exit(2)
+	}
 	// godotenv MUST run before logger init so LOG_LEVEL / LOG_FORMAT are
 	// picked up from .env on dev boxes.
 	_ = godotenv.Load() // missing .env is fine in prod (systemd EnvironmentFile)
@@ -38,6 +53,11 @@ func main() {
 
 	// Force-load JWT_SECRET at startup — log.Fatal if missing or weak.
 	auth.MustInitSecrets()
+	totpKeys, err := secrets.FromEnvironment()
+	if err != nil {
+		logger.Error("totp_keyring_unavailable", "err", err)
+		os.Exit(1)
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -76,6 +96,14 @@ func main() {
 	dbConn, err := database.InitDB(dsn)
 	if err != nil {
 		logger.Error("db connection failed", "err", err)
+		os.Exit(1)
+	}
+	configureTOTP := dbConn.ConfigureTOTPEncryption
+	if compatibility {
+		configureTOTP = dbConn.ConfigureTOTPCompatibility
+	}
+	if err := configureTOTP(totpKeys); err != nil {
+		logger.Error("totp_encryption_startup_failed", "err", err)
 		os.Exit(1)
 	}
 

@@ -1,5 +1,10 @@
 # Backups and restore
 
+New snapshots also include a separately encrypted TOTP keyring companion.
+Restore the matching keyring before starting the API against a recovered
+database. Publication, key rotation and the restore verifier are described in
+[account security and recovery](account-security.md).
+
 The production database is backed up daily by
 `onion-spider-backup.timer` at 03:10 UTC with up to ten minutes of jitter.
 The installed job uses the existing rclone Google Drive crypt remote.

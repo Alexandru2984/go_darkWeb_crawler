@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"onion-spider/internal/onion"
+	"onion-spider/internal/secrets"
 
 	"github.com/golang-migrate/migrate/v4"
 	pgdriver "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -45,7 +46,9 @@ var ErrEmailInUse = errors.New("email already in use")
 var ErrQueueQuotaExceeded = errors.New("crawl queue quota exceeded")
 
 type DB struct {
-	Conn *sql.DB
+	Conn            *sql.DB
+	totpKeys        *secrets.Keyring
+	totpLegacyReads bool
 }
 
 // InitDB initializes the PostgreSQL connection and runs schema migrations

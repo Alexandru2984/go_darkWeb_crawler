@@ -29,6 +29,7 @@ Restart=always
 RestartSec=5
 LimitNOFILE=65536
 EnvironmentFile=/home/micu/go/backend/.env
+LoadCredential=totp-keyring:/etc/onion-spider/totp-keyring.json
 
 # --- Filesystem isolation ---------------------------------------------------
 # ProtectHome=tmpfs replaces /home with an empty tmpfs inside the service's

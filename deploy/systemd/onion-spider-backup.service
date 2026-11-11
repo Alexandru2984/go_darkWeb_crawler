@@ -29,6 +29,8 @@ StateDirectoryMode=0700
 TimeoutStartSec=45min
 
 LoadCredential=backup-passphrase:/etc/onion-spider/backup.passphrase
+LoadCredential=totp-keyring:/etc/onion-spider/totp-keyring.json
+Environment=BACKUP_TOTP_KEYRING_REQUIRED=true
 
 # Sandboxing. The script needs to read the app's .env and write the backup
 # directory, and nothing else.

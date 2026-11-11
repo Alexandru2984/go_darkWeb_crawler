@@ -151,12 +151,20 @@ export PGSSLMODE PGCONNECT_TIMEOUT PGSSLROOTCERT PGSSLCERT PGSSLKEY
 
 STAMP="$(date -u +%Y-%m-%d_%H-%M-%S)"
 OUT="${BACKUP_DIR}/onion_spider-${STAMP}.sql.gz.gpg"
+KEYRING_OUT="${BACKUP_DIR}/onion_spider-keyring-${STAMP}.json.gpg"
+KEYRING_TMP=""
+KEYRING_SOURCE="${BACKUP_TOTP_KEYRING_FILE:-${CREDENTIALS_DIRECTORY:-/nonexistent}/totp-keyring}"
+if [[ "${BACKUP_TOTP_KEYRING_REQUIRED:-false}" == "true" && ! -f "$KEYRING_SOURCE" ]]; then
+    echo 'backup: required TOTP keyring credential is unavailable' >&2
+    exit 1
+fi
 [[ ! -e "$OUT" ]] || { echo "backup: refusing to overwrite $OUT" >&2; exit 1; }
 TMP="$(mktemp --tmpdir="$BACKUP_DIR" ".onion_spider-${STAMP}.partial.XXXXXX")"
 GNUPGHOME="$(mktemp -d "${TMPDIR:-/tmp}/onion-spider-backup.XXXXXX")"
 export GNUPGHOME
 cleanup() {
     rm -f -- "$TMP"
+    [[ -z "$KEYRING_TMP" ]] || rm -f -- "$KEYRING_TMP"
     rm -rf -- "$GNUPGHOME"
 }
 trap cleanup EXIT
@@ -185,6 +193,20 @@ gpg --homedir "$GNUPGHOME" --no-options --batch --yes \
     --decrypt "$TMP" 2>/dev/null \
     | gzip --test
 
+if [[ -f "$KEYRING_SOURCE" ]]; then
+    [[ ! -e "$KEYRING_OUT" ]] || { echo 'backup: refusing to overwrite keyring snapshot' >&2; exit 1; }
+    KEYRING_TMP="$(mktemp --tmpdir="$BACKUP_DIR" ".onion_spider-keyring-${STAMP}.partial.XXXXXX")"
+    gpg --homedir "$GNUPGHOME" --no-options --batch --yes \
+        --pinentry-mode loopback --no-symkey-cache --passphrase-file "$PASSPHRASE_FILE" \
+        --symmetric --force-aead --cipher-algo AES256 --s2k-mode 3 \
+        --s2k-digest-algo SHA512 --compress-algo none --output "$KEYRING_TMP" -- "$KEYRING_SOURCE"
+    gpg --homedir "$GNUPGHOME" --no-options --batch --yes \
+        --pinentry-mode loopback --no-symkey-cache --passphrase-file "$PASSPHRASE_FILE" \
+        --decrypt "$KEYRING_TMP" 2>/dev/null | cmp --silent "$KEYRING_SOURCE" -
+    mv "$KEYRING_TMP" "$KEYRING_OUT"
+    chmod 600 "$KEYRING_OUT"
+fi
+
 mv "$TMP" "$OUT"
 chmod 600 "$OUT"
 trap - EXIT
@@ -199,6 +221,8 @@ if (( COUNT > RETENTION )); then
     for old in "${ALL[@]:0:COUNT-RETENTION}"; do
         echo "backup: rotating out $old"
         rm -f -- "$old"
+        keyring_old="${old/onion_spider-/onion_spider-keyring-}"
+        rm -f -- "${keyring_old/.sql.gz.gpg/.json.gpg}"
     done
 fi
 

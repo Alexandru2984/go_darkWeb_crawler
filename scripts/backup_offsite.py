@@ -18,6 +18,7 @@ SNAPSHOT_NAME = re.compile(r"onion_spider-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.s
 CONTAINER_NAME = re.compile(r"onion-spider-restore-[a-f0-9]{12}")
 RESTORE_LABEL = "org.onion-spider.restore-check"
 RESTORE_MAX_BYTES = 2 * 1024 ** 3
+KEYRING_MAX_BYTES = 128 * 1024
 RCLONE_OPTIONS = [
     "--contimeout", "10s", "--timeout", "2m",
     "--retries", "3", "--low-level-retries", "5", "--log-level", "ERROR",
@@ -45,6 +46,12 @@ def atomic_json(path, value):
 def file_digest(path):
     with path.open("rb") as source:
         return hashlib.file_digest(source, "sha256").hexdigest()
+
+
+def keyring_filename(snapshot):
+    if not SNAPSHOT_NAME.fullmatch(snapshot):
+        raise ValueError("Invalid snapshot filename")
+    return snapshot.replace("onion_spider-", "onion_spider-keyring-", 1).replace(".sql.gz.gpg", ".json.gpg")
 
 
 def rclone(*args, capture=False):
@@ -89,11 +96,17 @@ def publish(latest_name):
     )
     if latest_name not in sources:
         raise ValueError("The new snapshot is missing from the backup directory")
+    keyrings = [keyring_filename(name) for name in sources
+                if (directory / keyring_filename(name)).is_file()
+                and not (directory / keyring_filename(name)).is_symlink()]
+    if (os.environ.get("BACKUP_TOTP_KEYRING_REQUIRED") == "true"
+            and keyring_filename(latest_name) not in keyrings):
+        raise ValueError("The required encrypted keyring snapshot is missing")
 
     state = state_directory()
     with tempfile.TemporaryDirectory(prefix="onion-spider-publish-") as work:
         files = Path(work) / "files.txt"
-        files.write_text("\n".join(sources) + "\n")
+        files.write_text("\n".join([*sources, *keyrings]) + "\n")
         rclone("copy", str(directory), remote, "--files-from", str(files), "--immutable")
         # Download comparison works with both ordinary and crypt remotes.
         # All bytes being compared are still the GPG-encrypted archive.
@@ -107,6 +120,14 @@ def publish(latest_name):
             "size_bytes": latest.stat().st_size,
             "verified_at": utc_now(),
         }
+        if keyring_filename(latest_name) in keyrings:
+            keyring = directory / keyring_filename(latest_name)
+            if not 0 < keyring.stat().st_size <= KEYRING_MAX_BYTES:
+                raise ValueError("Invalid encrypted keyring size")
+            metadata["keyring"] = {
+                "filename": keyring.name, "sha256": file_digest(keyring),
+                "size_bytes": keyring.stat().st_size,
+            }
         marker = Path(work) / "latest.json"
         atomic_json(marker, metadata)
         rclone("copyto", str(marker), remote + "/latest.json")
@@ -122,6 +143,9 @@ def publish(latest_name):
         keep = {latest_name, *others[:retention - 1]}
         for name in sorted(set(snapshots) - keep):
             rclone("deletefile", remote + "/" + name)
+            companion = keyring_filename(name)
+            if companion in listing.splitlines():
+                rclone("deletefile", remote + "/" + companion)
 
     atomic_json(state / "offsite-success.json", {
         "completed_at": utc_now(), "remote": remote,
@@ -239,6 +263,7 @@ def check_restore():
             if (archive.stat().st_size != metadata["size_bytes"]
                     or file_digest(archive) != metadata["sha256"]):
                 raise ValueError("Downloaded archive failed size or SHA-256 verification")
+            keyring = download_keyring(metadata, name, remote, work, passphrase)
 
             container = "onion-spider-restore-" + uuid.uuid4().hex[:12]
             atomic_json(state / "restore-container.json", {"name": container})
@@ -259,6 +284,9 @@ def check_restore():
 
                 for _ in range(60):
                     ready = subprocess.run(
+                        # The image's initialization server accepts Unix-socket
+                        # connections before its final restart. TCP becomes
+                        # ready only after initialization is complete.
                         ["docker", "exec", container, "pg_isready", "-h", "127.0.0.1", "-U", "restore",
                          "-d", "onion_spider_restore"],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
@@ -295,6 +323,7 @@ def check_restore():
                         or type(result["schema_version"]) is not int
                         or result["schema_version"] < 1 or result["unvalidated_constraints"] != 0):
                     raise ValueError("Restored schema or constraints failed validation")
+                verify_restored_totp(container, keyring, result)
                 result.update({
                     "completed_at": utc_now(), "remote": remote, "filename": name,
                     "sha256": metadata["sha256"], "elapsed_seconds": round(time.monotonic() - started, 2),
@@ -303,6 +332,55 @@ def check_restore():
                 cleanup_container(state)
             atomic_json(state / "restore-success.json", result)
             print("backup: remote archive restored and schema validated in isolation", flush=True)
+
+
+def download_keyring(metadata, snapshot, remote, work, passphrase):
+    item = metadata.get("keyring")
+    if item is None:
+        return None
+    if (not isinstance(item, dict) or item.get("filename") != keyring_filename(snapshot)
+            or not isinstance(item.get("sha256"), str)
+            or not re.fullmatch(r"[a-f0-9]{64}", item["sha256"])
+            or type(item.get("size_bytes")) is not int
+            or not 0 < item["size_bytes"] <= KEYRING_MAX_BYTES):
+        raise ValueError("Invalid keyring recovery metadata")
+    archive = work / item["filename"]
+    rclone("copyto", remote + "/" + item["filename"], str(archive), "--max-transfer", "128K")
+    if archive.stat().st_size != item["size_bytes"] or file_digest(archive) != item["sha256"]:
+        raise ValueError("Downloaded keyring failed verification")
+    home = work / "keyring-gnupg"
+    home.mkdir(mode=0o700)
+    opened = subprocess.run([
+        "gpg", "--homedir", str(home), "--no-options", "--batch", "--yes",
+        "--pinentry-mode", "loopback", "--no-symkey-cache", "--max-output", "65536",
+        "--passphrase-file", str(passphrase), "--decrypt", str(archive),
+    ], check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
+    return json.loads(opened.stdout)
+
+
+def verify_restored_totp(container, keyring, result):
+    query = """SELECT COALESCE(json_agg(json_build_object('user_id',id,'value',totp_secret)), '[]')
+               FROM users WHERE totp_secret IS NOT NULL;"""
+    checked = subprocess.run(
+        ["docker", "exec", container, "psql", "-X", "--tuples-only", "--no-align",
+         "--set", "ON_ERROR_STOP=1", "-U", "restore", "-d", "onion_spider_restore", "-c", query],
+        check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60,
+    )
+    seeds = json.loads(checked.stdout)
+    if not isinstance(seeds, list):
+        raise ValueError("Invalid restored credential records")
+    if keyring is None:
+        if any(item["value"].startswith("totp:") for item in seeds):
+            raise ValueError("Encrypted TOTP records require the paired recovery keyring")
+    else:
+        verifier = os.environ.get("BACKUP_TOTP_VERIFIER", "/home/micu/go/backend/onion-spider-api")
+        subprocess.run(
+            [verifier, "--verify-totp-backup"],
+            input=json.dumps({"keyring": keyring, "seeds": seeds}).encode(),
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60,
+        )
+    result["totp_keyring_verified"] = keyring is not None
+    result["totp_secrets_verified"] = len(seeds)
 
 
 def main():

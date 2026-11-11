@@ -56,6 +56,7 @@ services:
       MAX_DEPTH: "${MAX_DEPTH:-2}"
       MAX_PENDING_PER_USER: "${MAX_PENDING_PER_USER:-500}"
       JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is required (>=32 chars, openssl rand -hex 32)}"
+      TOTP_KEYRING_FILE: /run/secrets/totp-keyring
       CORS_ORIGIN: "${CORS_ORIGIN:-http://localhost:8080}"
       VERIFY_URL_BASE: "${VERIFY_URL_BASE:-http://localhost:8080}"
       ADMIN_EMAIL: "${ADMIN_EMAIL:-}"
@@ -81,6 +82,15 @@ services:
     # internal docker network. This avoids colliding with prod 8900.
     expose:
       - "8900"
+    group_add:
+      - "${TOTP_KEYRING_GID:-1001}"
+    volumes:
+      - type: bind
+        source: "${TOTP_KEYRING_PATH:?Generate a private TOTP keyring and set TOTP_KEYRING_PATH}"
+        target: /run/secrets/totp-keyring
+        read_only: true
+        bind:
+          create_host_path: false
 
   frontend:
     build:

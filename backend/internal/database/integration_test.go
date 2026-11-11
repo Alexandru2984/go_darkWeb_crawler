@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"onion-spider/internal/secrets"
 )
 
 // testDBAdvisoryLock is an arbitrary constant shared with internal/api. Both
@@ -74,7 +77,24 @@ func newTestDB(t *testing.T) *DB {
 		t.Fatalf("truncate: %v", err)
 	}
 	t.Cleanup(func() { conn.Close() })
-	return &DB{Conn: conn}
+	db := &DB{Conn: conn}
+	if err := db.ConfigureTOTPEncryption(testTOTPKeyring(t)); err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+func testTOTPKeyring(t *testing.T) *secrets.Keyring {
+	t.Helper()
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := secrets.New("fixture", map[string][]byte{"fixture": key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return keys
 }
 
 // mustUser creates a verified user and returns its ID.

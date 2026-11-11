@@ -15,7 +15,7 @@ var ErrTOTPStateChanged = errors.New("two-factor enrolment state changed")
 
 // TOTPState is the second-factor configuration for one account.
 type TOTPState struct {
-	Secret    string
+	Secret    string `json:"-"`
 	Enabled   bool
 	LastStep  int64
 	Confirmed bool
@@ -35,7 +35,15 @@ func (db *DB) GetTOTPState(userID int) (TOTPState, error) {
 	if err != nil {
 		return s, err
 	}
-	s.Secret = secret.String
+	if secret.Valid {
+		if db.totpKeys == nil {
+			return s, errTOTPEncryption
+		}
+		s.Secret, err = db.openTOTPSecret(userID, secret.String)
+		if err != nil {
+			return TOTPState{}, err
+		}
+	}
 	s.Confirmed = confirat.Valid
 	return s, nil
 }
@@ -44,10 +52,17 @@ func (db *DB) GetTOTPState(userID int) (TOTPState, error) {
 // yet. It refuses to touch an account whose second factor is already active, so
 // a stolen session cannot quietly swap the authenticator for its own.
 func (db *DB) StageTOTPSecret(userID, tokenVersion int, secret string) error {
+	if db.totpKeys == nil {
+		return errTOTPEncryption
+	}
+	sealed, err := db.totpKeys.Seal(userID, secret)
+	if err != nil {
+		return err
+	}
 	res, err := db.Conn.Exec(
 		`UPDATE users SET totp_secret = $1, totp_confirmed_at = NULL
 		 WHERE id = $2 AND totp_enabled = FALSE AND token_version = $3`,
-		secret, userID, tokenVersion,
+		sealed, userID, tokenVersion,
 	)
 	if err != nil {
 		return err
@@ -72,13 +87,17 @@ func (db *DB) ConfirmTOTP(userID, tokenVersion int, secret string, step int64, c
 		return err
 	}
 	defer tx.Rollback()
+	stored, err := db.matchingTOTPSecret(tx, userID, secret)
+	if err != nil {
+		return err
+	}
 
 	res, err := tx.Exec(
 		`UPDATE users
 		 SET totp_enabled = TRUE, totp_confirmed_at = clock_timestamp(),
 		     totp_last_step = $1, token_version = token_version + 1
 		 WHERE id = $2 AND totp_enabled = FALSE AND totp_secret = $3 AND token_version = $4`,
-		step, userID, secret, tokenVersion,
+		step, userID, stored, tokenVersion,
 	)
 	if err != nil {
 		return err
@@ -115,9 +134,21 @@ func (db *DB) ConfirmTOTP(userID, tokenVersion int, secret string, step int64, c
 // would let both pass: the second factor would stop being single-use exactly
 // when someone is racing it.
 func (db *DB) ConsumeTOTPStep(userID int, secret string, step int64) error {
-	res, err := db.Conn.Exec(
+	tx, err := db.Conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stored, err := db.matchingTOTPSecret(tx, userID, secret)
+	if errors.Is(err, ErrTOTPStateChanged) {
+		return ErrTOTPReplay
+	}
+	if err != nil {
+		return err
+	}
+	res, err := tx.Exec(
 		`UPDATE users SET totp_last_step = $1 WHERE id = $2 AND totp_last_step < $1 AND totp_enabled AND totp_secret = $3`,
-		step, userID, secret,
+		step, userID, stored,
 	)
 	if err != nil {
 		return err
@@ -129,7 +160,7 @@ func (db *DB) ConsumeTOTPStep(userID int, secret string, step int64) error {
 	if n == 0 {
 		return ErrTOTPReplay
 	}
-	return nil
+	return tx.Commit()
 }
 
 // ConsumeRecoveryCode marks a recovery code used and reports whether it was
