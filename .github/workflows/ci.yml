@@ -137,7 +137,10 @@ jobs:
 
       - name: Run govulncheck
         working-directory: backend
-        run: govulncheck ./...
+        run: |
+          govulncheck ./...
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "${RUNNER_TEMP}/onion-spider-api" ./cmd/api
+          govulncheck -mode=binary "${RUNNER_TEMP}/onion-spider-api"
 
   frontend:
     name: Frontend (Node ${{ matrix.node }})
