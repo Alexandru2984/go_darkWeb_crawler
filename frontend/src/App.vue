@@ -1,11 +1,12 @@
 <script setup>
 import { ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import AppHeader from "./components/AppHeader.vue";
 import { session, deletionPending, isLoggedIn } from "./stores/session.js";
 import { refreshUnseenChanges, setUnseenChanges } from "./stores/changes.js";
 
 const route = useRoute();
+const router = useRouter();
 const navOpen = ref(false);
 
 // Any navigation closes the drawer. Leaving it open over the new view is the
@@ -24,7 +25,12 @@ watch(
   isLoggedIn,
   (signedIn) => {
     if (signedIn) refreshUnseenChanges();
-    else setUnseenChanges(0);
+    else {
+      setUnseenChanges(0);
+      if (route.meta.requiresAuth) {
+        router.replace({ name: "login", query: { next: route.fullPath } });
+      }
+    }
   },
   { immediate: true },
 );

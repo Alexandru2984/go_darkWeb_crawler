@@ -36,8 +36,8 @@ func TestDestructivePrivacyActionsRequireThePasswordAgain(t *testing.T) {
 		{"delete the account", "/api/privacy/account/delete", `{"password":"wrong-password"}`},
 	} {
 		rr := postJSON(t, h, c.target, token, c.body)
-		if rr.Code != http.StatusUnauthorized {
-			t.Errorf("%s with a wrong password returned %d, want 401", c.name, rr.Code)
+		if rr.Code != http.StatusForbidden {
+			t.Errorf("%s with a wrong password returned %d, want 403", c.name, rr.Code)
 		}
 	}
 
@@ -138,13 +138,13 @@ func TestDeletionRequiresTheSecondFactorWhenEnrolled(t *testing.T) {
 
 	rr := postJSON(t, h, "/api/privacy/account/delete", token,
 		`{"password":"`+privacyPassword+`"}`)
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("deletion without a second factor returned %d, want 401", rr.Code)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("deletion without a second factor returned %d, want 403", rr.Code)
 	}
 	rr = postJSON(t, h, "/api/privacy/account/delete", token,
 		`{"password":"`+privacyPassword+`","code":"000000"}`)
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("deletion with a wrong code returned %d, want 401", rr.Code)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("deletion with a wrong code returned %d, want 403", rr.Code)
 	}
 
 	// A recovery code is a legitimate second factor here, as it is at login.

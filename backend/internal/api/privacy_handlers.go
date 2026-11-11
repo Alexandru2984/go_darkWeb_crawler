@@ -72,7 +72,7 @@ func (d *deps) requireReauth(w http.ResponseWriter, r *http.Request, action, pas
 		if errors.Is(err, errReauthFailed) {
 			d.logAuthEvent(action+"_denied", GetDBEmail(r), ClientIP(r))
 			slog.InfoContext(r.Context(), "reauth_denied", "uid", GetUserID(r), "action", action)
-			WriteJSONError(w, http.StatusUnauthorized, "Invalid credentials")
+			WriteJSONError(w, http.StatusForbidden, "Invalid credentials")
 			return nil
 		}
 		slog.ErrorContext(r.Context(), "reauth_failed", "uid", GetUserID(r), "action", action, "err", err)

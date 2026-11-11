@@ -62,10 +62,22 @@ export async function readJSON(response) {
  * repeating the same three lines.
  */
 export async function apiJSON(url, options = {}) {
-  const response = await apiFetch(url, options);
-  return {
-    ok: response.ok,
-    status: response.status,
-    data: await readJSON(response),
-  };
+  try {
+    const response = await apiFetch(url, options);
+    return {
+      ok: response.ok,
+      status: response.status,
+      data: await readJSON(response),
+    };
+  } catch (err) {
+    if (err.name === "AbortError") throw err;
+    return {
+      ok: false,
+      status: 0,
+      data: {
+        error:
+          "Could not reach the server. Check your connection and try again.",
+      },
+    };
+  }
 }

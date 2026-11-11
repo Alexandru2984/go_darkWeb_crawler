@@ -984,7 +984,8 @@ paths:
                   deleted: { type: integer }
                   message: { type: string }
         '400': { description: Unknown data category }
-        '401': { description: Wrong password or second factor }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { description: Wrong password or second factor }
         '429': { description: Too many re-authentication attempts }
 
   /api/privacy/account/delete:
@@ -1017,7 +1018,8 @@ paths:
                 properties:
                   deletion_scheduled_for: { type: string, format: date-time }
                   message: { type: string }
-        '401': { description: Wrong password or second factor }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { description: Wrong password or second factor }
         '409': { description: A deletion is already scheduled }
         '429': { description: Too many re-authentication attempts }
 
