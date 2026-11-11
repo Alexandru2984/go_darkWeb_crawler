@@ -23,6 +23,12 @@ const routes = [
     meta: { requiresAuth: true, title: "Account security" },
   },
   {
+    path: "/queue",
+    name: "queue",
+    component: () => import("./views/QueueView.vue"),
+    meta: { requiresAuth: true, title: "Crawl queue" },
+  },
+  {
     path: "/changes",
     name: "changes",
     component: () => import("./views/ChangesView.vue"),

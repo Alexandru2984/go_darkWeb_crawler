@@ -16,6 +16,7 @@ const open = computed({
 
 const links = [
   { to: "/", label: "Dashboard" },
+  { to: "/queue", label: "Queue" },
   { to: "/changes", label: "Changes", badge: unseenChanges },
   { to: "/security", label: "Security" },
   { to: "/privacy", label: "Privacy" },
