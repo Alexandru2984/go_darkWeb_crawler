@@ -110,20 +110,63 @@ func (db *DB) ConfirmTOTP(userID, tokenVersion int, secret string, step int64, c
 		return ErrTOTPStateChanged
 	}
 
-	if _, err := tx.Exec(`DELETE FROM recovery_codes WHERE user_id = $1`, userID); err != nil {
+	if err := replaceRecoveryCodes(tx, userID, codeHashes); err != nil {
 		return err
-	}
-	for _, h := range codeHashes {
-		if _, err := tx.Exec(
-			`INSERT INTO recovery_codes (user_id, code_hash) VALUES ($1, $2)`, userID, h,
-		); err != nil {
-			return err
-		}
 	}
 	if err := revokeTOTPSessions(tx, userID); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+// RegenerateRecoveryCodes consumes a fresh authenticator step and replaces all
+// fallback credentials in the same transaction. Version checks and row locking
+// serialize this against password/MFA changes and another regeneration.
+func (db *DB) RegenerateRecoveryCodes(userID, tokenVersion int, secret string, step int64, codeHashes []string) error {
+	tx, err := db.Conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stored, err := db.matchingTOTPSecret(tx, userID, secret)
+	if err != nil {
+		return err
+	}
+	result, err := tx.Exec(`UPDATE users SET totp_last_step=$1, token_version=token_version+1
+		WHERE id=$2 AND token_version=$3 AND totp_enabled AND totp_secret=$4 AND totp_last_step<$1`,
+		step, userID, tokenVersion, stored)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return ErrTOTPReplay
+	}
+	if err := replaceRecoveryCodes(tx, userID, codeHashes); err != nil {
+		return err
+	}
+	if err := revokeTOTPSessions(tx, userID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func replaceRecoveryCodes(tx *sql.Tx, userID int, codeHashes []string) error {
+	if len(codeHashes) == 0 {
+		return errors.New("a nonempty set of recovery-code hashes is required")
+	}
+	if _, err := tx.Exec(`DELETE FROM recovery_codes WHERE user_id=$1`, userID); err != nil {
+		return err
+	}
+	for _, hash := range codeHashes {
+		if _, err := tx.Exec(`INSERT INTO recovery_codes (user_id,code_hash) VALUES ($1,$2)`, userID, hash); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ConsumeTOTPStep records that a code was accepted, and reports ErrTOTPReplay if

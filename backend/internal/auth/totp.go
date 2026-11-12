@@ -14,6 +14,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/url"
 	"strings"
 	"time"
@@ -185,17 +186,20 @@ const RecoveryCodeCount = 10
 // pressure, which is the only circumstance in which one is ever used.
 func GenerateRecoveryCode() string {
 	const alphabet = "abcdefghjkmnpqrstuvwxyz23456789"
-	const length = 10
-	b := make([]byte, length)
-	if _, err := rand.Read(b); err != nil {
-		panic("crypto/rand unavailable: " + err.Error())
-	}
-	out := make([]byte, 0, length+1)
-	for i, v := range b {
-		if i == length/2 {
+	// 28 uniformly sampled characters from a 31-character alphabet carry
+	// more than 128 bits. Rejection sampling avoids byte-modulo bias.
+	const length = 28
+	bound := big.NewInt(int64(len(alphabet)))
+	out := make([]byte, 0, length+3)
+	for i := 0; i < length; i++ {
+		value, err := rand.Int(rand.Reader, bound)
+		if err != nil {
+			panic("crypto/rand unavailable: " + err.Error())
+		}
+		if i != 0 && i%7 == 0 {
 			out = append(out, '-')
 		}
-		out = append(out, alphabet[int(v)%len(alphabet)])
+		out = append(out, alphabet[value.Int64()])
 	}
 	return string(out)
 }

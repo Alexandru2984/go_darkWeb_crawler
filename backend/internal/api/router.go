@@ -105,6 +105,7 @@ func New(cfg Config) http.Handler {
 		r.Post("/api/auth/totp/setup", d.handleTOTPSetup)
 		r.Post("/api/auth/totp/confirm", d.handleTOTPConfirm)
 		r.Post("/api/auth/totp/disable", d.handleTOTPDisable)
+		r.Post("/api/auth/totp/recovery", d.handleRegenerateRecoveryCodes)
 
 		// Privacy centre. Like second-factor management, deliberately outside
 		// the admin group: an account must always be able to see, export and

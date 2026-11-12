@@ -169,6 +169,15 @@ func TestRecoveryCodesAreDistinctAndNormalizable(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 0; i < 200; i++ {
 		c := GenerateRecoveryCode()
+		parts := strings.Split(c, "-")
+		if len(c) != 31 || len(parts) != 4 {
+			t.Fatal("recovery code does not carry the required number of random characters")
+		}
+		for _, part := range parts {
+			if len(part) != 7 {
+				t.Fatal("invalid recovery-code grouping")
+			}
+		}
 		if seen[c] {
 			t.Fatalf("duplicate recovery code generated: %s", c)
 		}

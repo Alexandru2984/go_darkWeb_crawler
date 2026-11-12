@@ -188,7 +188,7 @@ onMounted(async () => {
             name="one-time-code"
             inputmode="numeric"
             autocomplete="one-time-code"
-            maxlength="14"
+            maxlength="64"
             placeholder="123456"
             aria-describedby="code-hint"
           />

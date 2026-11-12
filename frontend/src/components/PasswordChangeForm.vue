@@ -114,7 +114,7 @@ const submit = async () => {
             class="field"
             type="text"
             autocomplete="one-time-code"
-            maxlength="32"
+            maxlength="64"
             autocapitalize="none"
             spellcheck="false"
             required

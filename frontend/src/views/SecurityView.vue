@@ -27,6 +27,9 @@ const recoveryCodes = ref([]);
 const disabling = ref(false);
 const disablePassword = ref("");
 const disableCode = ref("");
+const regenerating = ref(false);
+const recoveryPassword = ref("");
+const recoveryAuthenticator = ref("");
 
 const message = ref("");
 const messageKind = ref("info");
@@ -110,6 +113,39 @@ const confirmDisable = async () => {
   await returnToSignIn();
 };
 
+const cancelRecoveryReplacement = () => {
+  regenerating.value = false;
+  recoveryPassword.value = "";
+  recoveryAuthenticator.value = "";
+};
+
+const replaceRecoveryCodes = async () => {
+  if (busy.value) return;
+  busy.value = true;
+  try {
+    const { ok, data } = await apiJSON("/api/auth/totp/recovery", {
+      method: "POST",
+      json: {
+        password: recoveryPassword.value,
+        code: recoveryAuthenticator.value.trim(),
+      },
+    });
+    if (!ok)
+      return say(data.error || "Could not replace recovery codes.", "error");
+    recoveryCodes.value = data.recovery_codes || [];
+    sessions.value = [];
+    regenerating.value = false;
+    say(
+      "Recovery codes replaced. Old codes no longer work. Save the new codes below now.",
+      "ok",
+    );
+  } finally {
+    recoveryPassword.value = "";
+    recoveryAuthenticator.value = "";
+    busy.value = false;
+  }
+};
+
 const returnToSignIn = () => {
   clearSession();
   return router.replace({ name: "login", query: { next: "/security" } });
@@ -158,7 +194,14 @@ onMounted(loadAll);
     <PasswordChangeForm
       v-if="!recoveryCodes.length"
       :mfa-enabled="totp.enabled"
-      :disabled="loading || !securityReady || busy || enrolling || disabling"
+      :disabled="
+        loading ||
+        !securityReady ||
+        busy ||
+        enrolling ||
+        disabling ||
+        regenerating
+      "
       @busy="busy = $event"
       @changed="passwordChanged"
     />
@@ -266,7 +309,23 @@ onMounted(loadAll);
           remaining.
         </p>
 
-        <template v-if="!disabling">
+        <p
+          v-if="totp.recovery_codes_remaining <= 2"
+          class="notice notice--warn"
+        >
+          Your recovery codes are running low. Replace them while you can still
+          use your authenticator.
+        </p>
+
+        <div v-if="!disabling && !regenerating" class="row">
+          <button
+            class="btn btn--secondary"
+            type="button"
+            :disabled="busy"
+            @click="regenerating = true"
+          >
+            Replace recovery codes
+          </button>
           <button
             class="btn btn--danger"
             type="button"
@@ -274,7 +333,66 @@ onMounted(loadAll);
           >
             Turn off two-factor
           </button>
-        </template>
+        </div>
+        <form
+          v-else-if="regenerating"
+          class="stack"
+          @submit.prevent="replaceRecoveryCodes"
+        >
+          <p id="recovery-replacement-effect" class="notice notice--warn">
+            Replacing codes invalidates every old recovery code and signs out
+            all devices. Your authenticator stays enabled. Have it ready to
+            confirm this change.
+          </p>
+          <div>
+            <label class="label" for="recovery-password"
+              >Current password</label
+            >
+            <input
+              id="recovery-password"
+              v-model="recoveryPassword"
+              class="field"
+              type="password"
+              autocomplete="current-password"
+              :disabled="busy"
+              required
+            />
+          </div>
+          <div>
+            <label class="label" for="recovery-authenticator"
+              >Authenticator code</label
+            >
+            <input
+              id="recovery-authenticator"
+              v-model="recoveryAuthenticator"
+              class="field field--code"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              maxlength="6"
+              pattern="[0-9]{6}"
+              :disabled="busy"
+              required
+            />
+          </div>
+          <div class="row">
+            <button
+              class="btn"
+              type="submit"
+              aria-describedby="recovery-replacement-effect"
+              :disabled="busy"
+            >
+              {{ busy ? "Replacing codes…" : "Confirm replacement" }}
+            </button>
+            <button
+              class="btn btn--ghost"
+              type="button"
+              :disabled="busy"
+              @click="cancelRecoveryReplacement"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
         <div v-else class="stack">
           <p class="notice notice--warn">
             Confirm with your password and a current code. Requiring both is
@@ -299,7 +417,7 @@ onMounted(loadAll);
               id="disable-code"
               v-model="disableCode"
               class="field field--code"
-              inputmode="numeric"
+              inputmode="text"
               autocomplete="one-time-code"
             />
           </div>
@@ -323,7 +441,7 @@ onMounted(loadAll);
         </div>
       </template>
 
-      <!-- Shown exactly once, right after enrolment. -->
+      <!-- Shown exactly once, after enrolment or recovery-code replacement. -->
       <div v-if="recoveryCodes.length" class="codes">
         <h3 class="codes__title">Recovery codes</h3>
         <p class="notice notice--warn">
@@ -493,7 +611,7 @@ onMounted(loadAll);
 }
 .codes__list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: var(--s-2);
   list-style: none;
   margin: 0 0 var(--s-4);
