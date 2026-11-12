@@ -15,7 +15,7 @@ export const tokenFromFragment = (href, expectedPath) => {
 };
 
 // Routes that receive a credential in the fragment.
-const tokenPaths = ["/reset-password", "/verify-account"];
+const tokenPaths = ["/reset-password", "/verify-account", "/activate-account"];
 
 // The token, held in memory only. Nothing writes it back into the URL, into
 // storage, or into a request line — it is sent in a POST body and nowhere else.

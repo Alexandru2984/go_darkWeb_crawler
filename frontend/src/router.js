@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
-import { session, loadSession, isLoggedIn } from "./stores/session.js";
+import { session, loadSession, isLoggedIn, isAdmin } from "./stores/session.js";
+import { consumeLinkToken } from "./lib/linkTokens.js";
 
 /**
  * Routes are lazily imported so the login screen does not carry the dashboard.
@@ -10,6 +11,18 @@ import { session, loadSession, isLoggedIn } from "./stores/session.js";
  * only when a signed-in user actually opens the graph.
  */
 const routes = [
+  {
+    path: "/admin",
+    name: "admin",
+    component: () => import("./views/AdminView.vue"),
+    meta: { requiresAuth: true, requiresAdmin: true, title: "Administration" },
+  },
+  {
+    path: "/activate-account",
+    name: "activate-account",
+    component: () => import("./views/ResetPasswordView.vue"),
+    meta: { public: true, title: "Activate your account" },
+  },
   {
     path: "/",
     name: "dashboard",
@@ -66,6 +79,11 @@ const routes = [
   },
 ];
 
+// createWebHistory snapshots the initial URL immediately. Scrub link secrets
+// before constructing it; doing this in main.js after importing the router
+// lets the first navigation restore the credential from that snapshot.
+consumeLinkToken();
+
 export const router = createRouter({
   history: createWebHistory(),
   routes,
@@ -84,6 +102,9 @@ router.beforeEach(async (to) => {
     };
   }
   if (to.meta.guestOnly && isLoggedIn.value) {
+    return { name: "dashboard" };
+  }
+  if (to.meta.requiresAdmin && !isAdmin.value) {
     return { name: "dashboard" };
   }
   return true;

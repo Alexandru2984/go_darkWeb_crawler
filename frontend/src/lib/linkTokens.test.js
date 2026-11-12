@@ -74,6 +74,20 @@ describe("consumeLinkToken", () => {
     expect(takeLinkToken()).toBe(token);
   });
 
+  it("captures an invitation once and removes its credential from history", () => {
+    const token = "e".repeat(64);
+    const replace = vi.fn();
+    expect(
+      consumeLinkToken(
+        `https://go.example.com/activate-account#token=${token}`,
+        replace,
+      ),
+    ).toBe(token);
+    expect(replace).toHaveBeenCalledWith("/activate-account");
+    expect(takeLinkToken()).toBe(token);
+    expect(takeLinkToken()).toBe("");
+  });
+
   it("ignores a token offered on an unrelated path", () => {
     const replace = vi.fn();
     expect(

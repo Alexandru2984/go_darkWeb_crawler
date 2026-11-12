@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from "vue";
 import { useRouter } from "vue-router";
-import { session, isLoggedIn, signOut } from "../stores/session.js";
+import { session, isLoggedIn, isAdmin, signOut } from "../stores/session.js";
 import { unseenChanges } from "../stores/changes.js";
 import StatusBar from "./StatusBar.vue";
 
@@ -14,13 +14,14 @@ const open = computed({
   set: (v) => emit("update:open", v),
 });
 
-const links = [
+const links = computed(() => [
   { to: "/", label: "Dashboard" },
   { to: "/queue", label: "Queue" },
   { to: "/changes", label: "Changes", badge: unseenChanges },
   { to: "/security", label: "Security" },
   { to: "/privacy", label: "Privacy" },
-];
+  ...(isAdmin.value ? [{ to: "/admin", label: "Admin" }] : []),
+]);
 
 const handleSignOut = async () => {
   await signOut();

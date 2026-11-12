@@ -1,12 +1,13 @@
 <script setup>
 import { ref, onMounted } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { apiJSON } from "../lib/api.js";
 import { takeLinkToken } from "../lib/linkTokens.js";
 import { validateNewPassword } from "../lib/password.js";
 import AuthShell from "../components/AuthShell.vue";
 
 const router = useRouter();
+const activation = useRoute().name === "activate-account";
 const token = ref(takeLinkToken());
 
 const password = ref("");
@@ -18,8 +19,9 @@ const busy = ref(false);
 
 onMounted(() => {
   if (!token.value) {
-    message.value =
-      "This reset link is missing or malformed. Request a new one from the sign-in page.";
+    message.value = activation
+      ? "This invitation is missing or malformed. Ask the administrator for a new invitation."
+      : "This reset link is missing or malformed. Request a new one from the sign-in page.";
     kind.value = "error";
   }
 });
@@ -32,10 +34,13 @@ const submit = async () => {
     return;
   }
   busy.value = true;
-  const { ok, data } = await apiJSON("/api/auth/reset", {
-    method: "POST",
-    json: { token: token.value, password: password.value },
-  });
+  const { ok, data } = await apiJSON(
+    activation ? "/api/auth/activate" : "/api/auth/reset",
+    {
+      method: "POST",
+      json: { token: token.value, password: password.value },
+    },
+  );
   busy.value = false;
   password.value = "";
   confirmValue.value = "";
@@ -44,19 +49,29 @@ const submit = async () => {
     token.value = "";
     message.value =
       data.message ||
-      "Password updated. Every existing session was signed out.";
+      (activation
+        ? "Account activated. You can now sign in."
+        : "Password updated. Every existing session was signed out.");
     kind.value = "ok";
   } else {
     message.value =
       data.error ||
-      "Could not reset the password. The link may be expired or already used.";
+      (activation
+        ? "Could not activate the account. Ask the administrator for a new invitation."
+        : "Could not reset the password. The link may be expired or already used.");
     kind.value = "error";
   }
 };
 </script>
 
 <template>
-  <AuthShell title="Choose a new password">
+  <AuthShell
+    :title="activation ? 'Activate your account' : 'Choose a new password'"
+  >
+    <p v-if="activation && !done" class="muted">
+      Choose your password to accept the invitation. Your administrator does not
+      receive this password.
+    </p>
     <form
       v-if="!done && token"
       class="stack"
@@ -86,7 +101,13 @@ const submit = async () => {
         />
       </div>
       <button class="btn btn--block" type="submit" :disabled="busy">
-        {{ busy ? "Saving…" : "Set new password" }}
+        {{
+          busy
+            ? "Saving…"
+            : activation
+              ? "Activate account"
+              : "Set new password"
+        }}
       </button>
     </form>
 
