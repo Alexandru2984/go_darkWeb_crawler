@@ -8,3 +8,5 @@ d49232fd7a3962a00cd7eb1f6313b72b6a9b5469:backend/internal/database/db_test.go:ge
 717538f9e31a55349b29d49fd16a919dff90013a:backend/internal/auth/auth_test.go:generic-api-key:13
 # Public, fixed password used exclusively by disposable privacy integration fixtures.
 9de3d3c58f8f3c7f89884ee677944e0363f0cf49:backend/internal/api/privacy_integration_test.go:generic-api-key:14
+# Verified executable SHA-256, matching the published binary and release manifest.
+8dd160df48f42c04fafafabb617625819a7e8097:docs/security-audit-2026-11-12.md:generic-api-key:35

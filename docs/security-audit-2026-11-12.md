@@ -32,7 +32,9 @@ re-authentication. Older open tabs should reload to update their input bounds.
 
 ## Publication
 
-Release `7daa6f2` was published at 01:23:38 UTC. API SHA-256:
+Release `7daa6f2` was published at 01:23:38 UTC.
+
+Executable SHA-256 digest:
 `2e70713fdb01750d64e0362c66f75babddfd3ba3ea4cd384a583c6e333e99536`.
 The previous crypto-capable API, previous frontend, compatible rollback frontend
 and manifest are retained under the root-restricted path
