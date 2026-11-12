@@ -72,6 +72,17 @@ func TestSendVerificationEmail_ValidDevModeNoError(t *testing.T) {
 	}
 }
 
+func TestInvitationRequiresSMTPAndUsesFragmentLink(t *testing.T) {
+	clearSMTP(t)
+	t.Setenv("VERIFY_URL_BASE", "https://go.example.com/")
+	if err := SendInvitationEmail("invited@example.com", "opaque-test-token"); !errors.Is(err, ErrSMTPConfig) {
+		t.Fatal("an invitation silently disappeared with SMTP disabled")
+	}
+	if link := invitationLink("opaque-test-token"); link != "https://go.example.com/activate-account#token=opaque-test-token" {
+		t.Fatal("invitation token entered a query string or wrong path")
+	}
+}
+
 func TestSendMailRejectsPartialConfiguration(t *testing.T) {
 	clearSMTP(t)
 	t.Setenv("SMTP_USER", "configured-without-a-host")

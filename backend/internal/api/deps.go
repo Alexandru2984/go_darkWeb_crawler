@@ -17,6 +17,10 @@ type Config struct {
 	AllowRegistration bool
 	AdminEmail        string
 
+	// SendInvitation is injectable so tests never send real mail. New uses the
+	// SMTP implementation when omitted; delivery failures remain visible.
+	SendInvitation func(to, token string) error
+
 	// RequireAdminMFA gates administrative endpoints on the admin having a
 	// second factor enrolled. It does not gate ordinary use, and enrolment
 	// itself is never gated, so turning this on cannot lock an admin out of

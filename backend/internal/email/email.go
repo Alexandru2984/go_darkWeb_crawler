@@ -263,6 +263,25 @@ func passwordResetLink(token string) string {
 	return verifyBaseURL() + "/reset-password#token=" + token
 }
 
+func invitationLink(token string) string {
+	return verifyBaseURL() + "/activate-account#token=" + token
+}
+
+// SendInvitationEmail requires configured SMTP; a dropped invitation would
+// otherwise look like a successfully provisioned account to the operator.
+func SendInvitationEmail(to, token string) error {
+	cfg, err := smtpConfigFromEnv()
+	if err != nil {
+		return err
+	}
+	if cfg == nil {
+		return ErrSMTPConfig
+	}
+	body := "Hello,\r\n\r\nThe Onion Spider administrator invited you to create an account. Choose your own password here:\r\n" +
+		stripCRLF(invitationLink(token)) + "\r\n\r\nThis link expires in 24 hours and works once. If you did not expect an invitation, ignore this message."
+	return sendMail(to, "Onion Spider account invitation", body)
+}
+
 // SendVerificationEmail sends an account-confirmation link (valid 24h).
 func SendVerificationEmail(to, token string) error {
 	link := verificationLink(token)

@@ -171,7 +171,7 @@ func RequireAdminDB(next http.Handler) http.Handler {
 		}
 		if !HasAdminAccess(r) {
 			WriteJSONError(w, http.StatusForbidden,
-				"Administrative actions require two-factor authentication. Enrol at /api/auth/totp/setup.")
+				"Administrative actions require two-factor authentication. Enable it in Account security.")
 			return
 		}
 		next.ServeHTTP(w, r)

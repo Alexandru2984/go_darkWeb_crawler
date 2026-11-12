@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -75,6 +76,10 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, maxBytes int64, dst 
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
+		WriteJSONError(w, http.StatusBadRequest, "Invalid body")
+		return false
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
 		WriteJSONError(w, http.StatusBadRequest, "Invalid body")
 		return false
 	}

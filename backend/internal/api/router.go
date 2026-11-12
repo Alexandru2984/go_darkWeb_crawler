@@ -5,6 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"onion-spider/internal/email"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -15,6 +17,9 @@ import (
 // goroutine background workers tied to the application lifecycle (engine
 // start, sweeper, audit retention) — those remain in main().
 func New(cfg Config) http.Handler {
+	if cfg.SendInvitation == nil {
+		cfg.SendInvitation = email.SendInvitationEmail
+	}
 	// A zero grace period would delete an account the moment it is requested,
 	// removing the window in which a hijacked session's deletion can be undone.
 	// Treat "unset" as the default rather than as "immediately": a caller that
@@ -81,6 +86,7 @@ func New(cfg Config) http.Handler {
 	r.Post("/api/auth/verify", d.handleVerifyPOST)
 	r.Post("/api/auth/forgot", d.handleForgotPassword)
 	r.Post("/api/auth/reset", d.handleResetPassword)
+	r.Post("/api/auth/activate", d.handleActivateAccount)
 
 	// Public-ish: shows only that the server is running; private counts gated
 	// behind LoadDBRole so admin sees globals, others see only their own.
@@ -144,11 +150,15 @@ func New(cfg Config) http.Handler {
 		r.Get("/api/export", d.handleExport)
 	})
 
-	// Admin-only: blacklist management.
+	// Admin-only: account invitations and blacklist management.
 	r.Group(func(r chi.Router) {
 		r.Use(RequireAuth)
 		r.Use(LoadDBRole(cfg.DB, cfg.RequireAdminMFA))
 		r.Use(RequireAdminDB)
+
+		r.Get("/api/admin/users", d.handleAdminUsers)
+		r.Post("/api/admin/users", d.handleAdminCreateUser)
+		r.Post("/api/admin/users/{id}/invitation", d.handleAdminResendInvitation)
 
 		r.Get("/api/blacklist", d.handleBlacklistList)
 		r.Post("/api/blacklist", d.handleBlacklistAdd)
