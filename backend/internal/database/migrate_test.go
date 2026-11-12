@@ -84,7 +84,7 @@ func TestMigrationsApplyAndIdempotent(t *testing.T) {
 	// schema_migrations should record the latest version, not dirty. Bump this
 	// alongside every new migration: it is what catches a migration file that
 	// was added but never actually applied.
-	const latestVersion = 8
+	const latestVersion = 9
 	var v int
 	var dirty bool
 	if err := db.QueryRow(`SELECT version, dirty FROM schema_migrations`).Scan(&v, &dirty); err != nil {
@@ -95,7 +95,7 @@ func TestMigrationsApplyAndIdempotent(t *testing.T) {
 	}
 
 	// Expected tables exist.
-	for _, tbl := range []string{"users", "nodes", "edges", "auth_audit", "blacklist"} {
+	for _, tbl := range []string{"users", "nodes", "edges", "auth_audit", "blacklist", "saved_searches"} {
 		if !tableExists(t, db, tbl) {
 			t.Errorf("expected table %q to exist after migration", tbl)
 		}

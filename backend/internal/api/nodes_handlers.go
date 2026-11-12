@@ -78,11 +78,7 @@ func (d *deps) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Category string `json:"category,omitempty"`
 		Status   string `json:"status,omitempty"`
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1024)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		WriteJSONError(w, http.StatusBadRequest, "Invalid body")
+	if !decodeJSONBody(w, r, 4096, &req) {
 		return
 	}
 	q := strings.TrimSpace(req.Query)
@@ -90,17 +86,14 @@ func (d *deps) handleSearch(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusBadRequest, "Search query is required")
 		return
 	}
-	if len(q) > 200 {
-		WriteJSONError(w, http.StatusBadRequest, "Query too long (max 200 characters)")
-		return
-	}
-	if !validateNodeFilters(w, req.Category, req.Status) {
+	if err := database.ValidateSearchCriteria(q, req.Category, req.Status); err != nil {
+		WriteJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	limit, offset := ParsePagination(r)
 	nodes, err := d.cfg.DB.SearchNodes(r.Context(), q, req.Category, req.Status, limit+1, offset, GetUserID(r), HasAdminAccess(r))
 	if err != nil {
-		slog.ErrorContext(r.Context(), "search_failed", "q", q, "err", err)
+		slog.ErrorContext(r.Context(), "search_failed", "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}

@@ -41,8 +41,9 @@ type deps struct {
 	cfg Config
 
 	// Authenticated endpoints are charged to the account (see RequestKey).
-	crawlLim  *CrawlLimiter
-	searchLim *CrawlLimiter
+	crawlLim       *CrawlLimiter
+	searchLim      *CrawlLimiter
+	savedSearchLim *CrawlLimiter
 
 	// sensitiveLim covers the endpoints that re-check the password before
 	// destroying data. They answer whether a password was correct, which makes

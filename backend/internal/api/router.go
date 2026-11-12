@@ -32,8 +32,9 @@ func New(cfg Config) http.Handler {
 	d := &deps{
 		cfg: cfg,
 
-		crawlLim:  NewCrawlLimiter(20, time.Minute),
-		searchLim: NewCrawlLimiter(60, time.Minute),
+		crawlLim:       NewCrawlLimiter(20, time.Minute),
+		searchLim:      NewCrawlLimiter(60, time.Minute),
+		savedSearchLim: NewCrawlLimiter(60, time.Minute),
 
 		// Ten re-authentications an hour is far more than anyone deleting their
 		// own data needs, and far fewer than online password guessing requires.
@@ -140,6 +141,13 @@ func New(cfg Config) http.Handler {
 		r.Post("/api/node", d.handleNode)
 		r.Get("/api/edges", d.handleEdges)
 		r.Post("/api/search", d.handleSearch)
+
+		// Preferences are private even for admins. Sensitive names and query
+		// terms are carried only in JSON bodies, never in resource paths.
+		r.Get("/api/saved-searches", d.handleSavedSearchList)
+		r.Post("/api/saved-searches", d.handleSavedSearchCreate)
+		r.Post("/api/saved-searches/{id}", d.handleSavedSearchRename)
+		r.Delete("/api/saved-searches/{id}", d.handleSavedSearchDelete)
 
 		r.Post("/api/crawl", d.handleCrawl)
 		r.Post("/api/recrawl", d.handleRecrawl)
