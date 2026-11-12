@@ -7,10 +7,15 @@ product. Security and privacy gates take precedence over feature count.
 
 The baseline audit is recorded in
 [the security review](security-audit-2026-11-11.md), with the latest
-[administrator access follow-up](security-audit-2026-11-12-admin.md). Earlier
+[saved-search follow-up](security-audit-2026-11-12-saved-searches.md). Earlier
 delivery notes below describe their original release dates.
 
 ### Delivered in the current implementation
+
+- [x] Add private named saved searches with apply/rename/delete, bounded storage,
+  concurrent quota enforcement and complete filter reset. Include saved queries
+  in personal export, reauthenticated bulk erasure and account deletion; verify
+  responsive display and a schema-compatible rollback.
 
 - [x] Repair operator-approved owner access while retaining the existing account
   and data. Add a responsive MFA-gated Admin page, paginated account inventory,
@@ -59,7 +64,7 @@ delivery notes below describe their original release dates.
 | --- | --- | --- |
 | 1 | Operational recovery and detection | Scraping, project rules, Google Drive backups, isolated restores, local notification testing and operator email delivery are verified. Add independent external detection, replace monitoring images when upstream ships the Go runtime patch, verify external recovery-key custody and exercise full host recovery. Record operator detection and restoration times |
 | 2 | Account hardening | Encrypted TOTP storage/rotation, reauthenticated password changes and recovery-code replacement are deployed. Add passkeys per origin and security-event history; review privilege changes and continue covering replay/concurrent credential updates |
-| 3 | Collections and search | Add private saved searches, collections built from tags, host/date/title filters, user-selected sorting and clear filter reset. Keep sensitive terms out of request URLs and shareable links |
+| 3 | Collections and search | Saved searches and complete filter reset are deployed. Add collections built from tags, host/date/title filters and user-selected sorting. Keep sensitive terms out of request URLs and shareable links |
 | 4 | Research workflow | Add a private bookmarks view, note search, tag management, configurable change-feed filters and explicit review state. Support the same URL under separate accounts throughout |
 | 5 | Crawl job management | Show quota use, scheduled time and failure reasons. Add per-account pause/cancel and safe batch import with validation, deduplication and an acceptance preview. Serialize state changes against worker claims |
 | 6 | Graph exploration | Add category/status filters, selected-node details, connected-neighbour loading, clustering and an accessible list of the displayed graph. Keep graph data loading bounded |
