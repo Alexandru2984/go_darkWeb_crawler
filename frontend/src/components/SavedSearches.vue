@@ -2,9 +2,12 @@
 import { nextTick, onMounted, onUnmounted, ref } from "vue";
 import { apiJSON } from "../lib/api.js";
 import { categoryLabel } from "../lib/categories.js";
-import { CRAWL_STATUSES } from "../lib/searchFilters.js";
+import { CRAWL_STATUSES, RESULT_SORTS } from "../lib/searchFilters.js";
 
-const props = defineProps({ criteria: { type: Object, required: true } });
+const props = defineProps({
+  criteria: { type: Object, required: true },
+  disabled: { type: Boolean, default: false },
+});
 const emit = defineEmits(["apply"]);
 const searches = ref([]);
 const limit = ref(50);
@@ -28,6 +31,12 @@ const describe = (criteria) =>
     criteria.q ? `“${criteria.q}”` : "All content",
     criteria.category ? categoryLabel(criteria.category) : "All categories",
     CRAWL_STATUSES[criteria.status] || "Any status",
+    ...(criteria.title ? [`Title: ${criteria.title}`] : []),
+    ...(criteria.host ? [`Domain: ${criteria.host}`] : []),
+    ...(criteria.discovered_from ? [`From ${criteria.discovered_from}`] : []),
+    ...(criteria.discovered_to ? [`Through ${criteria.discovered_to}`] : []),
+    ...(criteria.tag ? [`Collection: ${criteria.tag}`] : []),
+    ...(criteria.sort ? [RESULT_SORTS[criteria.sort]] : []),
   ].join(" · ");
 
 const load = async () => {
@@ -50,7 +59,8 @@ const load = async () => {
 };
 
 const save = async () => {
-  if (busy.value || !ready.value || !name.value.trim()) return;
+  if (props.disabled || busy.value || !ready.value || !name.value.trim())
+    return;
   busy.value = true;
   const result = await apiJSON("/api/saved-searches", {
     method: "POST",
@@ -135,6 +145,9 @@ onUnmounted(() => request.abort());
         Retry saved searches
       </button>
       <template v-if="ready">
+        <p v-if="disabled" class="muted small">
+          Apply your filter changes before saving this search.
+        </p>
         <form class="stack" @submit.prevent="save">
           <p class="preview small">
             <strong>Current search:</strong> {{ describe(criteria) }}
@@ -154,14 +167,20 @@ onUnmounted(() => request.abort());
                 autocapitalize="off"
                 spellcheck="false"
                 required
-                :disabled="busy || loading || searches.length >= limit"
+                :disabled="
+                  disabled || busy || loading || searches.length >= limit
+                "
               />
             </div>
             <button
               class="btn btn--secondary"
               type="submit"
               :disabled="
-                busy || loading || !name.trim() || searches.length >= limit
+                disabled ||
+                busy ||
+                loading ||
+                !name.trim() ||
+                searches.length >= limit
               "
             >
               Save search

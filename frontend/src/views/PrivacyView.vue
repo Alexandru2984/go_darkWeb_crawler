@@ -234,8 +234,9 @@ onMounted(load);
       <p class="muted body">
         A single JSON file with your account record, your data settings, your
         signed-in devices, your sign-in history, every site you crawled and
-        every link between them, plus your saved searches. Password hashes,
-        two-factor secrets and recovery codes are excluded.
+        every link between them, plus your saved searches, collections and
+        collection memberships. Password hashes, two-factor secrets and recovery
+        codes are excluded.
       </p>
       <a class="btn btn--secondary" :href="exportHref" download>
         Download JSON
@@ -252,6 +253,24 @@ onMounted(load);
       </p>
 
       <ul class="choices">
+        <li class="choice">
+          <div class="choice__text">
+            <span class="choice__title">Collections and tags</span
+            ><span class="hint muted"
+              >Removes all your collection memberships and tags. Crawl records,
+              notes and watches are kept. Collection filters remain in saved
+              searches; delete those separately to remove the preferences.</span
+            >
+          </div>
+          <button
+            class="btn btn--secondary btn--sm"
+            type="button"
+            aria-label="Delete all collections and tags"
+            @click="openConfirm('collections')"
+          >
+            Delete
+          </button>
+        </li>
         <li class="choice">
           <div class="choice__text">
             <span class="choice__title">Saved searches</span>

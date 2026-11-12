@@ -18,7 +18,8 @@ import NodeList from "../components/NodeList.vue";
 import NodeInspector from "../components/NodeInspector.vue";
 import NodeAnnotator from "../components/NodeAnnotator.vue";
 import SavedSearches from "../components/SavedSearches.vue";
-import { CRAWL_STATUSES } from "../lib/searchFilters.js";
+import ResearchFilters from "../components/ResearchFilters.vue";
+import { CRAWL_STATUSES, emptyResearchFilters } from "../lib/searchFilters.js";
 import { refreshUnseenChanges } from "../stores/changes.js";
 
 // Loaded on demand: the graph pulls in vis-network, which is by far the largest
@@ -55,6 +56,10 @@ const query = ref("");
 const searching = ref(false);
 const category = ref("all");
 const status = ref("");
+const research = ref(emptyResearchFilters());
+const researchDirty = ref(false);
+const researchReset = ref(0);
+const collections = ref([]);
 const page = ref(1);
 const hasMore = ref(false);
 const resultError = ref("");
@@ -63,9 +68,17 @@ const currentCriteria = computed(() => ({
   q: query.value.trim(),
   category: category.value === "all" ? "" : category.value,
   status: status.value,
+  ...research.value,
 }));
 const filtersActive = computed(
-  () => !!(query.value || category.value !== "all" || status.value),
+  () =>
+    !!(
+      query.value ||
+      category.value !== "all" ||
+      status.value ||
+      researchDirty.value ||
+      Object.values(research.value).some(Boolean)
+    ),
 );
 
 const toast = ref("");
@@ -88,21 +101,11 @@ const loadResults = async (background = false) => {
   resultsRequest = request;
   if (!background) loading.value = true;
   resultError.value = "";
-  const q = query.value.trim();
-  const filters = {
-    category: category.value === "all" ? "" : category.value,
-    status: status.value,
-  };
   const params = new URLSearchParams({ page: page.value, limit: 30 });
-  const endpoint = q ? "search" : "nodes";
-  if (!q) {
-    for (const [key, value] of Object.entries(filters)) {
-      if (value) params.set(key, value);
-    }
-  }
   try {
-    const response = await apiFetch(`/api/${endpoint}?${params}`, {
-      ...(q ? { method: "POST", json: { q, ...filters } } : {}),
+    const response = await apiFetch(`/api/browse?${params}`, {
+      method: "POST",
+      json: currentCriteria.value,
       signal: request.signal,
     });
     const data = await readJSON(response);
@@ -147,14 +150,34 @@ const clearSearch = () => {
 };
 
 const applyFilters = (criteria) => {
+  researchReset.value++;
+  researchDirty.value = false;
   clearTimeout(searchTimer);
   const nextCategory = criteria.category || "all";
   const nextStatus = criteria.status || "";
   const filtersChanged =
-    nextCategory !== category.value || nextStatus !== status.value;
+    nextCategory !== category.value ||
+    nextStatus !== status.value ||
+    JSON.stringify(research.value) !==
+      JSON.stringify(
+        Object.fromEntries(
+          Object.keys(emptyResearchFilters()).map((key) => [
+            key,
+            criteria[key] || "",
+          ]),
+        ),
+      );
   query.value = criteria.q || "";
   category.value = nextCategory;
   status.value = nextStatus;
+  const nextResearch = Object.fromEntries(
+    Object.keys(emptyResearchFilters()).map((key) => [
+      key,
+      criteria[key] || "",
+    ]),
+  );
+  if (JSON.stringify(research.value) !== JSON.stringify(nextResearch))
+    research.value = nextResearch;
   // The filter watcher batches category/status changes into one request.
   // A query-only change needs the explicit update instead.
   if (!filtersChanged) updateResults();
@@ -217,6 +240,15 @@ const startCrawl = async () => {
   }
 };
 
+const loadCollections = async () => {
+  const result = await apiJSON("/api/tags");
+  if (result.ok) collections.value = result.data || [];
+};
+const annotationsChanged = async () => {
+  await Promise.all([loadCollections(), refreshUnseenChanges()]);
+  await updateResults();
+};
+
 const downloadExport = async (format) => {
   try {
     const response = await apiFetch(`/api/export?format=${format}`);
@@ -236,7 +268,7 @@ const downloadExport = async (format) => {
   }
 };
 
-watch([category, status], updateResults);
+watch([category, status, research], updateResults, { deep: true });
 watch(view, (current) => {
   if (current === "graph") loadGraph();
   else graphRequest?.abort();
@@ -244,6 +276,7 @@ watch(view, (current) => {
 
 onMounted(() => {
   loadResults();
+  loadCollections();
   pollTimer = setInterval(() => {
     if (
       view.value === "list" &&
@@ -416,6 +449,13 @@ onUnmounted(() => {
         </select>
       </div>
 
+      <ResearchFilters
+        v-model="research"
+        :collections="collections"
+        :reset-version="researchReset"
+        @dirty="researchDirty = $event"
+      />
+
       <div class="filter-actions">
         <button
           class="btn btn--ghost btn--sm"
@@ -426,7 +466,11 @@ onUnmounted(() => {
           Reset all filters
         </button>
       </div>
-      <SavedSearches :criteria="currentCriteria" @apply="applyFilters" />
+      <SavedSearches
+        :criteria="currentCriteria"
+        :disabled="researchDirty"
+        @apply="applyFilters"
+      />
 
       <div class="section-head section-head--tight">
         <h2 id="results-heading" class="section-title">
@@ -449,6 +493,11 @@ onUnmounted(() => {
         v-else
         :nodes="nodes"
         :loading="loading"
+        :empty-message="
+          filtersActive
+            ? 'No sites match these filters. Adjust them or choose Reset all filters.'
+            : undefined
+        "
         @annotate="openAnnotator"
         @inspect="inspecting = $event.url"
       />
@@ -493,7 +542,7 @@ onUnmounted(() => {
       :url="annotating.url"
       :title="annotating.title"
       @close="closeAnnotator"
-      @changed="refreshUnseenChanges"
+      @changed="annotationsChanged"
     />
 
     <Transition name="toast">

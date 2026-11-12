@@ -17,6 +17,7 @@ const open = computed({
 const links = computed(() => [
   { to: "/", label: "Dashboard" },
   { to: "/queue", label: "Queue" },
+  { to: "/collections", label: "Collections" },
   { to: "/changes", label: "Changes", badge: unseenChanges },
   { to: "/security", label: "Security" },
   { to: "/privacy", label: "Privacy" },
@@ -252,15 +253,18 @@ const handleSignOut = async () => {
   margin: var(--s-1) var(--s-3) var(--s-2);
 }
 
-/* From tablet up there is room for a single row, so the drawer becomes an
-   ordinary horizontal nav and the toggle disappears. */
-@media (min-width: 768px) {
+/* Keep the drawer until the expanded navigation has room. Long account names
+   can wrap the wide layout without hiding the sign-out control. */
+@media (min-width: 1200px) {
   .drawer-toggle {
     display: none;
   }
   .nav {
     display: flex;
     flex-direction: row;
+    flex-wrap: wrap;
+    max-width: 100%;
+    min-width: 0;
     align-items: center;
     width: auto;
     gap: var(--s-2);

@@ -157,7 +157,8 @@ onUnmounted(() => request?.abort());
 
     <p class="hint muted">
       Tags and notes are yours alone. Another account tracking the same site
-      sees none of this.
+      sees none of this. Each tag also groups the site in your private
+      Collections page.
     </p>
 
     <p v-if="error" class="msg msg--error" role="alert">{{ error }}</p>

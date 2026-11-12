@@ -12,6 +12,12 @@ import { consumeLinkToken } from "./lib/linkTokens.js";
  */
 const routes = [
   {
+    path: "/collections",
+    name: "collections",
+    component: () => import("./views/CollectionsView.vue"),
+    meta: { requiresAuth: true, title: "Private collections" },
+  },
+  {
     path: "/admin",
     name: "admin",
     component: () => import("./views/AdminView.vue"),

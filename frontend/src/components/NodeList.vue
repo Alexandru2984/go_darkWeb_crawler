@@ -4,6 +4,10 @@ import { CATEGORY_COLORS, CATEGORY_LABELS } from "../lib/categories.js";
 defineProps({
   nodes: { type: Array, required: true },
   loading: { type: Boolean, default: false },
+  emptyMessage: {
+    type: String,
+    default: "Nothing here yet. Add an onion URL above to start crawling.",
+  },
 });
 const emit = defineEmits(["annotate", "inspect"]);
 
@@ -22,7 +26,7 @@ const statusClass = (status) => `pill--${(status || "").replace("_", "-")}`;
 </script>
 
 <template>
-  <div>
+  <div class="node-list">
     <!-- One dataset, two presentations. Below 900px the six-column table stops
          being readable at any font size worth using, so the same rows render as
          cards; above it, the table is the better scanning surface. Both are in
@@ -138,12 +142,17 @@ const statusClass = (status) => `pill--${(status || "").replace("_", "-")}`;
     </div>
 
     <p v-if="!nodes.length && !loading" class="empty">
-      Nothing here yet. Add an onion URL above to start crawling.
+      {{ emptyMessage }}
     </p>
   </div>
 </template>
 
 <style scoped>
+.node-list {
+  container-type: inline-size;
+  min-width: 0;
+  width: 100%;
+}
 .record-title {
   min-height: var(--tap);
   padding: 0;
@@ -268,7 +277,7 @@ const statusClass = (status) => `pill--${(status || "").replace("_", "-")}`;
 }
 
 /* ── Desktop: table ─────────────────────────────────────────────────────── */
-@media (min-width: 900px) {
+@container (min-width: 900px) {
   .cards {
     display: none;
   }
