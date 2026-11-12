@@ -151,6 +151,8 @@ onUnmounted(() => request.abort());
                 maxlength="80"
                 type="text"
                 autocomplete="off"
+                autocapitalize="off"
+                spellcheck="false"
                 required
                 :disabled="busy || loading || searches.length >= limit"
               />
@@ -192,6 +194,8 @@ onUnmounted(() => request.abort());
                   type="text"
                   maxlength="80"
                   autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
                   required
                   :disabled="busy"
                 />
