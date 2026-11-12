@@ -10,6 +10,11 @@ Primary incident commander: **assign by name before public launch**
 
 Backup incident commander / legal contact: **assign before public launch**
 
+TOTP key loss, rotation and compatible application rollback:
+[account-security runbook](account-security.md). Recover the correct keyring
+before restarting; replacing it with random keys or disabling MFA does not
+restore the existing authenticators.
+
 ## Severity and authority
 
 | Severity | Examples | Initial response target | Authority |

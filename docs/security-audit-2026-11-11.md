@@ -48,7 +48,7 @@ Both source and binary scanners now report no vulnerabilities.
 | --- | --- | --- |
 | Medium | Four dedicated scrape targets, 17 rules and operator email delivery are verified. Monitoring still shares the application's VPS | Add an independent external heartbeat and off-host notification path for complete VPS loss |
 | Medium | Google Drive publication and isolated database restore are verified. Independent recovery of the GPG passphrase and rclone crypt keys after total VPS loss remains an operator responsibility | Verify the external secret store, Google account recovery and a full host-recovery exercise |
-| High | TOTP seeds and live application data remain readable to a database administrator | Encryption of TOTP seeds using a separate managed key, rotation coverage and a documented recovery process |
+| High | TOTP seeds now use an independent keyring and account-bound authenticated encryption. Full API/VPS compromise can still expose keys and live data; a database writer can alter authorization | Retain protected key custody, review runtime isolation and exercise the documented recovery/rotation process; TOTP encryption does not protect all application content |
 | Medium | Cloudflare processes clearnet TLS and its account-side privacy settings were not audited through an authenticated connector | Operator review of edge logging, browser reporting, analytics and retention settings |
 | Medium | Distribution coverage for upstream nginx advisories was not verified | Match installed Ubuntu package patches to applicable advisories before treating upstream version comparisons as a vulnerability finding |
 | Medium | A private plaintext environment backup remains on disk with restricted permissions | Review its necessity, keep recovery material encrypted and rotate credentials when removing a potentially exposed copy |
@@ -115,6 +115,66 @@ telemetry service was introduced.
 
 These checks cover the reviewed code paths and the recorded environment.
 Production publication results and rollback artifacts are recorded below.
+
+## Account security release and recovery review
+
+Release `79f4622` was published on 2026-11-11 at 21:10:58 UTC. The installed API
+SHA-256 is `0c2c419bbad9b80794ce78f64377944338ce3463c51503f50e9b967e7acbcaae`.
+The previous frontend, previous binary, tested crypto-compatible binary and
+manifest are retained in the root-restricted directory
+`/home/micu/.local/state/onion-spider/releases/20261111T211058Z-accounts`.
+The compatible mode was checked before normal startup. The published service
+uses normal encryption mode, a root-only keyring delivered by LoadCredential,
+schema version 8 and zero automatic restarts. Public status and security pages
+returned 200. Unauthenticated password changes returned 401 through both vhosts.
+
+Password changes require the current password and MFA when enrolled, invalidate
+reset links and revoke every device atomically. The responsive form confirms
+the password, supports viewing the new value and returns to sign-in with a
+confirmation message. A browser-discovered redirect race was fixed before
+publication.
+
+Pending/active TOTP seeds now use AES-256-GCM envelopes bound to account ID and
+key identifier. Legacy migration and key rotation preserve enrolment, session,
+recovery-code and replay state. Every new write is encrypted, including in the
+explicit compatibility mode retained for rollback. Missing keys or corrupt
+records fail closed. No production TOTP seed records existed at the rollout
+precheck; migration and rotation of existing enrolled records were exercised in
+isolated fixtures. Accounts are not automatically enrolled in MFA.
+
+The existing Google Drive backup includes a separately GPG-encrypted keyring
+companion. Publication verifies both ciphertexts and retention preserves their
+pairing. The first paired backup and restore passed before publication. A fresh
+post-publication backup completed at 21:12:17 UTC. Its isolated restore completed
+at 21:18:17 UTC in 281.14 seconds, with schema version 8, no dirty migration or
+unvalidated constraints, and the downloaded TOTP keyring successfully verified.
+The restore uses the installed API binary's offline verifier without accessing
+the host's current keyring; the snapshot contained zero TOTP seed records.
+
+The first restore attempt failed during streaming and preserved the preceding
+success record. Review identified a startup race: the Docker image's temporary
+PostgreSQL initialization server accepted Unix-socket connections before the
+final restart. Readiness now waits on container-local TCP. A repeat using the
+final readiness check completed successfully. Stream diagnostics report exit
+codes and SQLSTATE without exposing SQL or credential material.
+
+Verification included all backend packages with the race detector and an
+isolated PostgreSQL database, vet, golangci-lint, clean source/binary govulncheck,
+26 frontend unit tests, strict lint, a production build and a clean npm audit.
+The 25 Python regressions cover backup, key management and monitoring. A nonroot
+read-only API container loaded a private group-readable keyring and reached
+readiness. Chromium checked widths 320/375/768/1280, password changes with and
+without MFA, copied-session rejection, enrolment, key rotation, TOTP login and
+unchanged recovery-code counts after rotation.
+
+Review boundary: this mitigates disclosure of TOTP seeds through database-only
+access. Full API/VPS compromise can expose runtime keys; database write access
+can alter authorization. The same GPG passphrase protects the database and
+keyring backups, so offsite-store plus passphrase access remains a full recovery
+boundary. No new vendor was introduced. Operator key custody and an independent
+incident-response exercise remain open; financial loss and legal applicability
+were not inferred. The recovery and rollback scenarios were rehearsed against
+disposable data. See [the account-security runbook](account-security.md).
 
 ## Production publication
 

@@ -6,6 +6,12 @@ The current findings, release verification and remaining operational work are
 recorded in the [2026-11-11 security review](security-audit-2026-11-11.md).
 The original release gate below describes the baseline review.
 
+Current account storage additionally encrypts TOTP seeds with a separately
+stored rotatable keyring. The [account-security runbook](account-security.md)
+defines the database-only disclosure boundary, encrypted backup key recovery,
+password-change re-authentication and compatible rollback. Full API/VPS
+compromise can still expose runtime keys and application data.
+
 Scope: Onion Spider API, crawler, web UI, PostgreSQL data, Tor integration,
 nginx/Cloudflare edge, systemd deployment, email and backups.
 

@@ -109,7 +109,9 @@ The dashboard is a routed Vue 3 application, mobile-first from 320 px:
   rings, and a stated text equivalent for the graph canvas (the list view),
   which is not keyboard-operable.
 - **Account security screen** for enrolling two-factor authentication, storing
-  recovery codes, and reviewing or signing out individual devices.
+  recovery codes, changing passwords with re-authentication, and reviewing or
+  signing out individual devices. TOTP seeds are encrypted with a separate
+  rotatable keyring and included in verified encrypted Google Drive recovery.
 
 ## 🚀 Tech Stack
 
@@ -155,9 +157,14 @@ Install PostgreSQL and create a database (e.g. `onion_spider`). Set `DATABASE_UR
 ```bash
 cd backend
 cp .env.example .env   # fill in your values
+python3 ../scripts/totp_keys.py init --path ../.secrets/totp-keyring.json
+# Set TOTP_KEYRING_FILE to the absolute path of that private keyring in .env.
 go run ./cmd/api/main.go
 # Server starts on port 8900 by default
 ```
+
+Key storage, rotation and recovery instructions:
+[`docs/account-security.md`](docs/account-security.md).
 
 **3. Start the Frontend (Vue)**
 ```bash
