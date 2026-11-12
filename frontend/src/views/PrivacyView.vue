@@ -234,10 +234,8 @@ onMounted(load);
       <p class="muted body">
         A single JSON file with your account record, your data settings, your
         signed-in devices, your sign-in history, every site you crawled and
-        every link between them. Passwords, two-factor secrets and recovery
-        codes are not included — those are stored only as hashes and putting
-        them in a downloadable file would be worse than the transparency is
-        worth.
+        every link between them, plus your saved searches. Password hashes,
+        two-factor secrets and recovery codes are excluded.
       </p>
       <a class="btn btn--secondary" :href="exportHref" download>
         Download JSON
@@ -254,6 +252,24 @@ onMounted(load);
       </p>
 
       <ul class="choices">
+        <li class="choice">
+          <div class="choice__text">
+            <span class="choice__title">Saved searches</span>
+            <span class="hint muted"
+              >Removes your named queries and filters. These are kept until you
+              delete them, independently of crawl-history retention. Your crawl
+              records are kept.</span
+            >
+          </div>
+          <button
+            class="btn btn--secondary btn--sm"
+            type="button"
+            aria-label="Delete all saved searches"
+            @click="openConfirm('saved_searches')"
+          >
+            Delete
+          </button>
+        </li>
         <li class="choice">
           <div class="choice__text">
             <span class="choice__title">Stored page content</span>
@@ -319,10 +335,10 @@ onMounted(load);
       </h2>
       <p class="body">
         Removes your account, your crawl records, your links and your sign-in
-        history. It takes effect after {{ graceDays }} day{{
-          graceDays === 1 ? "" : "s"
-        }}, and we email you when it is scheduled so you can stop it if it was
-        not you. After that it cannot be undone.
+        history, including saved searches. It takes effect after
+        {{ graceDays }} day{{ graceDays === 1 ? "" : "s" }}, and we email you
+        when it is scheduled so you can stop it if it was not you. After that it
+        cannot be undone.
       </p>
       <button
         class="btn btn--danger"
@@ -370,7 +386,10 @@ onMounted(load);
             id="confirm-code"
             v-model="code"
             class="field field--code"
-            inputmode="numeric"
+            type="text"
+            maxlength="64"
+            autocapitalize="off"
+            spellcheck="false"
             autocomplete="one-time-code"
           />
         </div>

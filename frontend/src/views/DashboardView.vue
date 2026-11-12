@@ -1,5 +1,12 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch, defineAsyncComponent } from "vue";
+import {
+  computed,
+  ref,
+  onMounted,
+  onUnmounted,
+  watch,
+  defineAsyncComponent,
+} from "vue";
 import { apiFetch, apiJSON, readJSON } from "../lib/api.js";
 import { isAdmin } from "../stores/session.js";
 import {
@@ -10,6 +17,8 @@ import {
 import NodeList from "../components/NodeList.vue";
 import NodeInspector from "../components/NodeInspector.vue";
 import NodeAnnotator from "../components/NodeAnnotator.vue";
+import SavedSearches from "../components/SavedSearches.vue";
+import { CRAWL_STATUSES } from "../lib/searchFilters.js";
 import { refreshUnseenChanges } from "../stores/changes.js";
 
 // Loaded on demand: the graph pulls in vis-network, which is by far the largest
@@ -49,13 +58,15 @@ const status = ref("");
 const page = ref(1);
 const hasMore = ref(false);
 const resultError = ref("");
-const statuses = {
-  pending: "Queued",
-  crawling: "Crawling",
-  completed: "Completed",
-  failed: "Failed",
-  blocked: "Blocked",
-};
+const statuses = CRAWL_STATUSES;
+const currentCriteria = computed(() => ({
+  q: query.value.trim(),
+  category: category.value === "all" ? "" : category.value,
+  status: status.value,
+}));
+const filtersActive = computed(
+  () => !!(query.value || category.value !== "all" || status.value),
+);
 
 const toast = ref("");
 let toastTimer = null;
@@ -133,6 +144,20 @@ const scheduleSearch = () => {
 const clearSearch = () => {
   query.value = "";
   updateResults();
+};
+
+const applyFilters = (criteria) => {
+  clearTimeout(searchTimer);
+  const nextCategory = criteria.category || "all";
+  const nextStatus = criteria.status || "";
+  const filtersChanged =
+    nextCategory !== category.value || nextStatus !== status.value;
+  query.value = criteria.q || "";
+  category.value = nextCategory;
+  status.value = nextStatus;
+  // The filter watcher batches category/status changes into one request.
+  // A query-only change needs the explicit update instead.
+  if (!filtersChanged) updateResults();
 };
 
 const changePage = (delta) => {
@@ -387,6 +412,18 @@ onUnmounted(() => {
           </option>
         </select>
       </div>
+
+      <div class="filter-actions">
+        <button
+          class="btn btn--ghost btn--sm"
+          type="button"
+          :disabled="!filtersActive"
+          @click="applyFilters({})"
+        >
+          Reset all filters
+        </button>
+      </div>
+      <SavedSearches :criteria="currentCriteria" @apply="applyFilters" />
 
       <div class="section-head section-head--tight">
         <h2 id="results-heading" class="section-title">
