@@ -3,13 +3,21 @@
 This is the implementation order, not a promise that every idea belongs in the
 product. Security and privacy gates take precedence over feature count.
 
-## Current plan reviewed on 2026-11-11
+## Current plan reviewed on 2026-11-12
 
-The current audit is recorded in
-[the security review](security-audit-2026-11-11.md). Earlier delivery notes below
-describe their original release dates.
+The baseline audit is recorded in
+[the security review](security-audit-2026-11-11.md), with the latest
+[administrator access follow-up](security-audit-2026-11-12-admin.md). Earlier
+delivery notes below describe their original release dates.
 
 ### Delivered in the current implementation
+
+- [x] Repair operator-approved owner access while retaining the existing account
+  and data. Add a responsive MFA-gated Admin page, paginated account inventory,
+  reauthenticated account invitations, one-time password-choice activation,
+  explicit delivery failures, resend recovery and crawler blacklist controls.
+- [x] Consume email credentials before browser-history construction so the
+  router cannot restore reset, verification or invitation fragments.
 
 - [x] Apply MFA policy to every administrative data path and revoke older
   sessions when authentication factors change.
@@ -57,7 +65,7 @@ describe their original release dates.
 | 6 | Graph exploration | Add category/status filters, selected-node details, connected-neighbour loading, clustering and an accessible list of the displayed graph. Keep graph data loading bounded |
 | 7 | Optional history | Add explicit opt-in snapshots, bounded retention and a text-diff view. Include snapshots in export, purge and account deletion before enabling the feature |
 | 8 | Exports and automation | Add explicit export scope, row estimates, cancellable export jobs, expiry and encrypted temporary storage. Introduce separate API credentials with narrow scopes, one-time display, expiry and revocation |
-| 9 | Onboarding and mobile | Choose invitation or registration flow, provide rate-limited verification resend, add first-use guidance, improve empty states and complete keyboard, screen-reader, Firefox and Safari checks |
+| 9 | Onboarding and mobile | Administrator invitations and pending-account resend are deployed with public registration closed. Add first-use guidance, improve empty states and complete keyboard, screen-reader, Firefox and Safari checks |
 | 10 | CI and release automation | Pin action revisions, add browser and accessibility checks, container runtime smoke tests and image scanning. Verify the pushed workflow and create a reproducible release/rollback path |
 | 11 | Public documentation and SEO | Add public usage/security documentation, validate crawler-visible metadata, improve public-page performance and expand the demo. Keep authenticated records and account pages excluded from indexing |
 

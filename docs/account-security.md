@@ -1,5 +1,8 @@
 # Account credentials and TOTP recovery
 
+Administrator sign-in, closed registration, account invitations and the Admin
+page are covered in the [administrator access runbook](admin-access.md).
+
 ## Password changes
 
 Account security includes a password-change form with current password,
