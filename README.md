@@ -112,6 +112,9 @@ The dashboard is a routed Vue 3 application, mobile-first from 320 px:
   recovery codes, changing passwords with re-authentication, and reviewing or
   signing out individual devices. TOTP seeds are encrypted with a separate
   rotatable keyring and included in verified encrypted Google Drive recovery.
+- **Recovery-code replacement** with password and fresh authenticator proof,
+  stronger random codes, one-time display and atomic invalidation of old codes
+  and signed-in devices.
 
 ## 🚀 Tech Stack
 

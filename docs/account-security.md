@@ -12,6 +12,25 @@ Concurrent resets or MFA changes cause a conflict. Successful changes sign out
 every device, discard unconfirmed MFA setup and preserve enrolled MFA and unused
 recovery codes. The browser returns to sign-in with a confirmation message.
 
+## Replace recovery codes
+
+With MFA enabled, Account security offers recovery-code replacement. It requires
+the current password and a fresh authenticator code. An existing recovery code
+cannot mint a new set. The transaction consumes that authenticator step,
+replaces all fallback digests, advances the credential version and revokes
+sessions. A failure or concurrent request preserves a complete valid set.
+
+The ten new codes appear once in memory, with no-store responses. Save them
+before signing in again. The UI highlights two or fewer unused codes. If the
+authenticator is lost, use the password plus an existing recovery code in the
+separate disable/re-enrol flow.
+
+New codes have four groups of seven uniformly random characters from a
+31-character alphabet, about 139 bits of entropy. Older printed codes remain
+accepted until explicit replacement. Sign-in and sensitive-action fields accept
+the longer format; reload older open tabs to update their input bounds.
+Replacement events are recorded in the pseudonymous auth audit.
+
 ## TOTP storage and threat boundary
 
 Pending and confirmed seeds use AES-256-GCM envelopes with independently random

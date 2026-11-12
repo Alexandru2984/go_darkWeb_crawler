@@ -41,13 +41,16 @@ describe their original release dates.
   keyring, account-bound authenticated envelopes and recoverable Google Drive
   keyring snapshots. Test legacy migration, replay protection and browser use
   after key rotation.
+- [x] Add authenticated recovery-code replacement, low-code guidance and codes
+  with over 128 bits of uniform randomness. Test races, failed inserts, replay,
+  legacy-code compatibility and mobile display.
 
 ### Next implementation stages
 
 | Order | Stage | Capabilities and completion criteria |
 | --- | --- | --- |
 | 1 | Operational recovery and detection | Scraping, project rules, Google Drive backups, isolated restores, local notification testing and operator email delivery are verified. Add independent external detection, replace monitoring images when upstream ships the Go runtime patch, verify external recovery-key custody and exercise full host recovery. Record operator detection and restoration times |
-| 2 | Account hardening | Encrypted TOTP storage/rotation and reauthenticated password changes are deployed. Add passkeys per origin, recovery-code regeneration and security-event history; review privilege changes and cover replay/concurrent credential updates |
+| 2 | Account hardening | Encrypted TOTP storage/rotation, reauthenticated password changes and recovery-code replacement are deployed. Add passkeys per origin and security-event history; review privilege changes and continue covering replay/concurrent credential updates |
 | 3 | Collections and search | Add private saved searches, collections built from tags, host/date/title filters, user-selected sorting and clear filter reset. Keep sensitive terms out of request URLs and shareable links |
 | 4 | Research workflow | Add a private bookmarks view, note search, tag management, configurable change-feed filters and explicit review state. Support the same URL under separate accounts throughout |
 | 5 | Crawl job management | Show quota use, scheduled time and failure reasons. Add per-account pause/cancel and safe batch import with validation, deduplication and an acceptance preview. Serialize state changes against worker claims |
