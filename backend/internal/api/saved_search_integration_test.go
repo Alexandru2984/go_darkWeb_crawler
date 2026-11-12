@@ -91,7 +91,7 @@ func TestSavedSearchExportAndReauthenticatedPurge(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &exported); err != nil {
 		t.Fatal(err)
 	}
-	if exported.Version != 2 || len(exported.Searches) != 1 || exported.Searches[0].Query != "owned term" || strings.Contains(rr.Body.String(), "other account term") {
+	if exported.Version != 3 || len(exported.Searches) != 1 || exported.Searches[0].Query != "owned term" || strings.Contains(rr.Body.String(), "other account term") {
 		t.Fatal("personal export missing/scoping incorrect for administrator")
 	}
 	proof := `{"scope":"saved_searches","password":"wrong"}`

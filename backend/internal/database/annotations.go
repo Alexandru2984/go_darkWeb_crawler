@@ -152,38 +152,7 @@ func (db *DB) watchFor(nodeID, userID int) (*Watch, error) {
 // AddTag attaches a label to a site. Applying an existing tag again succeeds
 // without creating a duplicate.
 func (db *DB) AddTag(nodeURL string, userID int, tag string) error {
-	tag = NormalizeTag(tag)
-	if tag == "" || len(tag) > MaxTagLen {
-		return errors.New("invalid tag")
-	}
-	tx, err := db.Conn.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	nodeID, err := nodeIDFor(tx, nodeURL, userID)
-	if err != nil {
-		return err
-	}
-	// Counted inside the transaction so two simultaneous additions cannot both
-	// see room for the last slot.
-	var n int
-	if err := tx.QueryRow(
-		`SELECT COUNT(*) FROM node_tags WHERE user_id = $1 AND node_id = $2`, userID, nodeID,
-	).Scan(&n); err != nil {
-		return err
-	}
-	if n >= MaxTagsPerNode {
-		return ErrTooManyTags
-	}
-	if _, err := tx.Exec(`
-		INSERT INTO node_tags (user_id, node_id, tag) VALUES ($1, $2, $3)
-		ON CONFLICT (user_id, node_id, tag) DO NOTHING
-	`, userID, nodeID, tag); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return db.AddTagContext(context.Background(), nodeURL, userID, tag)
 }
 
 // RemoveTag detaches a label. Removing one that is not there is not an error.
@@ -232,8 +201,8 @@ type TagCount struct {
 func (db *DB) ListTags(userID int) ([]TagCount, error) {
 	rows, err := db.Conn.Query(`
 		SELECT tag, COUNT(*) FROM node_tags WHERE user_id = $1
-		 GROUP BY tag ORDER BY COUNT(*) DESC, tag
-	`, userID)
+		 GROUP BY tag ORDER BY COUNT(*) DESC, tag LIMIT $2
+	`, userID, MaxCollections)
 	if err != nil {
 		return nil, err
 	}

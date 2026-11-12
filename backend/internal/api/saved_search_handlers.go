@@ -12,7 +12,7 @@ import (
 
 func savedSearchError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
-	case errors.Is(err, database.ErrSearchCriteria), errors.Is(err, database.ErrSavedSearchName):
+	case errors.Is(err, database.ErrSearchCriteria), errors.Is(err, database.ErrSavedSearchName), errors.Is(err, database.ErrResearchFilters), errors.Is(err, database.ErrCollectionName):
 		WriteJSONError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, database.ErrSavedSearchNotFound):
 		WriteJSONError(w, http.StatusNotFound, "Saved search not found")
@@ -46,7 +46,7 @@ func (d *deps) handleSavedSearchCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input database.SavedSearchInput
-	if !decodeJSONBody(w, r, 4096, &input) {
+	if !decodeJSONBody(w, r, 8192, &input) {
 		return
 	}
 	saved, err := d.cfg.DB.CreateSavedSearch(r.Context(), GetUserID(r), input)

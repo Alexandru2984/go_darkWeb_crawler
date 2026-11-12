@@ -40,6 +40,10 @@ func annotationError(w http.ResponseWriter, r *http.Request, op string, err erro
 		WriteJSONError(w, http.StatusNotFound, "That site is not in your graph. Crawl it first.")
 	case errors.Is(err, database.ErrTooManyTags):
 		WriteJSONError(w, http.StatusBadRequest, "That site already has the maximum number of tags.")
+	case errors.Is(err, database.ErrCollectionName):
+		WriteJSONError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, database.ErrCollectionLimit):
+		WriteJSONError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, database.ErrInvalidOnionURL):
 		WriteJSONError(w, http.StatusBadRequest, "A valid onion URL is required")
 	default:
@@ -70,6 +74,9 @@ func (d *deps) handleAnnotation(w http.ResponseWriter, r *http.Request) {
 
 // handleTag adds or removes one label.
 func (d *deps) handleTag(w http.ResponseWriter, r *http.Request) {
+	if !d.allowCollectionWrite(w, r) {
+		return
+	}
 	var req struct {
 		URL    string `json:"url"`
 		Tag    string `json:"tag"`
@@ -82,7 +89,7 @@ func (d *deps) handleTag(w http.ResponseWriter, r *http.Request) {
 	if nodeURL == "" {
 		return
 	}
-	if tag := database.NormalizeTag(req.Tag); tag == "" || len(tag) > database.MaxTagLen {
+	if _, err := database.NormalizeCollectionName(req.Tag); err != nil {
 		WriteJSONError(w, http.StatusBadRequest,
 			"A tag must be between 1 and "+strconv.Itoa(database.MaxTagLen)+" characters")
 		return
@@ -93,7 +100,7 @@ func (d *deps) handleTag(w http.ResponseWriter, r *http.Request) {
 	if req.Remove {
 		err = d.cfg.DB.RemoveTag(nodeURL, uid, req.Tag)
 	} else {
-		err = d.cfg.DB.AddTag(nodeURL, uid, req.Tag)
+		err = d.cfg.DB.AddTagContext(r.Context(), nodeURL, uid, req.Tag)
 	}
 	if err != nil {
 		annotationError(w, r, "tag", err)

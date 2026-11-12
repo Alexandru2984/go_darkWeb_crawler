@@ -35,6 +35,7 @@ func New(cfg Config) http.Handler {
 		crawlLim:       NewCrawlLimiter(20, time.Minute),
 		searchLim:      NewCrawlLimiter(60, time.Minute),
 		savedSearchLim: NewCrawlLimiter(60, time.Minute),
+		collectionLim:  NewCrawlLimiter(60, time.Minute),
 
 		// Ten re-authentications an hour is far more than anyone deleting their
 		// own data needs, and far fewer than online password guessing requires.
@@ -131,6 +132,9 @@ func New(cfg Config) http.Handler {
 		r.Post("/api/annotations/tag", d.handleTag)
 		r.Post("/api/annotations/note", d.handleNote)
 		r.Get("/api/tags", d.handleTags)
+		r.Post("/api/collections/add", d.handleCollectionAdd)
+		r.Post("/api/collections/rename", d.handleCollectionRename)
+		r.Post("/api/collections/delete", d.handleCollectionDelete)
 
 		r.Post("/api/watch", d.handleWatch)
 		r.Get("/api/watches", d.handleWatches)
@@ -141,6 +145,7 @@ func New(cfg Config) http.Handler {
 		r.Post("/api/node", d.handleNode)
 		r.Get("/api/edges", d.handleEdges)
 		r.Post("/api/search", d.handleSearch)
+		r.Post("/api/browse", d.handleBrowse)
 
 		// Preferences are private even for admins. Sensitive names and query
 		// terms are carried only in JSON bodies, never in resource paths.

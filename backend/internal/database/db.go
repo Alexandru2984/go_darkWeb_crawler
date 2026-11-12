@@ -297,7 +297,7 @@ func domainBlacklistedTx(tx *sql.Tx, hostname string) (bool, error) {
 // account can still be told that a page changed without this service holding
 // what the page said.
 func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status string, metadata string, content string, category string, userID int) (bool, error) {
-	canonical, _, err := canonicalCrawlURL(nodeURL)
+	canonical, host, err := canonicalCrawlURL(nodeURL)
 	if err != nil {
 		return false, err
 	}
@@ -340,12 +340,13 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 		// Restore an unchanged body if storage was re-enabled after the last crawl.
 		_, err := tx.Exec(`
 		INSERT INTO nodes (url, title, status_code, server_header, processing_status,
-			metadata, content, content_hash, category, last_crawled_at, next_crawl_at, user_id)
+			metadata, content, content_hash, category, last_crawled_at, next_crawl_at, user_id, host)
 		VALUES ($1, $2, $3, $4, $5,
 			CASE WHEN $11 THEN $6::jsonb ELSE $6::jsonb - 'entities' END,
-			$7, $8, $9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '7 days', $10)
+			$7, $8, $9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '7 days', $10, $12)
 		ON CONFLICT (url, user_id) DO UPDATE SET
 			title             = EXCLUDED.title,
+			host              = EXCLUDED.host,
 			status_code       = EXCLUDED.status_code,
 			server_header     = EXCLUDED.server_header,
 			processing_status = EXCLUDED.processing_status,
@@ -356,7 +357,7 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 			last_crawled_at   = CURRENT_TIMESTAMP,
 			next_crawl_at     = CURRENT_TIMESTAMP + (INTERVAL '1 day' * nodes.re_crawl_interval_days)
 		WHERE nodes.processing_status != 'blocked';
-		`, nodeURL, title, statusCode, server, status, metadata, storedContent, newHash, category, userID, keepContent)
+		`, nodeURL, title, statusCode, server, status, metadata, storedContent, newHash, category, userID, keepContent, host)
 		if err != nil {
 			return false, err
 		}
@@ -367,12 +368,13 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 	_, err = tx.Exec(`
 	UPDATE nodes SET
 		status_code       = $3,
+		host              = $6,
 		server_header     = $4,
 		processing_status = $5,
 		last_crawled_at   = CURRENT_TIMESTAMP,
 		next_crawl_at     = CURRENT_TIMESTAMP + (INTERVAL '1 day' * re_crawl_interval_days)
 	WHERE url = $1 AND user_id = $2 AND processing_status != 'blocked'
-	`, nodeURL, userID, statusCode, server, status)
+	`, nodeURL, userID, statusCode, server, status, host)
 	if err != nil {
 		return false, err
 	}

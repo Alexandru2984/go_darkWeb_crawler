@@ -134,7 +134,7 @@ func (d *deps) handlePrivacySettingsUpdate(w http.ResponseWriter, r *http.Reques
 
 // privacyExportVersion identifies the document shape, so a consumer reading an
 // export produced by an older deployment can tell what to expect.
-const privacyExportVersion = 2
+const privacyExportVersion = 3
 
 // handlePrivacyExport streams everything this service holds about the account.
 //
@@ -196,6 +196,12 @@ func (d *deps) handlePrivacyExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	collections, err := d.cfg.DB.ListTags(uid)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "export_collections_failed", "uid", uid, "err", err)
+		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
+		return
+	}
 	rc := http.NewResponseController(w)
 	rc.SetWriteDeadline(time.Now().Add(10 * time.Minute))
 
@@ -235,6 +241,7 @@ func (d *deps) handlePrivacyExport(w http.ResponseWriter, r *http.Request) {
 		{"authentication_history", history},
 		{"watches", watches},
 		{"saved_searches", savedSearches},
+		{"collections", collections},
 	} {
 		if err := writeSection(section.name, section.value); err != nil {
 			panic(http.ErrAbortHandler)
@@ -317,6 +324,8 @@ func (d *deps) handlePrivacyPurge(w http.ResponseWriter, r *http.Request) {
 		scope = "activity_log"
 	case "saved_searches":
 		scope = "saved_searches"
+	case "collections":
+		scope = "collections"
 	default:
 		WriteJSONError(w, http.StatusBadRequest, "Unknown data category")
 		return
@@ -343,6 +352,9 @@ func (d *deps) handlePrivacyPurge(w http.ResponseWriter, r *http.Request) {
 	case "saved_searches":
 		affected, err = d.cfg.DB.PurgeSavedSearches(r.Context(), uid)
 		message = "Saved searches deleted."
+	case "collections":
+		affected, err = d.cfg.DB.PurgeCollections(r.Context(), uid)
+		message = "Collections and tags deleted. Crawl records, notes and watches are kept."
 	}
 	if err != nil {
 		slog.ErrorContext(r.Context(), "privacy_purge_failed", "uid", uid, "scope", scope, "err", err)
