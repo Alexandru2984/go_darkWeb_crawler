@@ -7,10 +7,17 @@ product. Security and privacy gates take precedence over feature count.
 
 The baseline audit is recorded in
 [the security review](security-audit-2026-11-11.md), with the latest
-[bookmark/change-feed follow-up](security-audit-2026-11-13-workflow.md). Earlier
+[crawl-control follow-up](security-audit-2026-11-13-crawl-jobs.md). Earlier
 delivery notes below describe their original release dates.
 
 ### Delivered in the current implementation
+
+- [x] Add personal queue pause/resume, safe cancellation, run-now and local-time
+  scheduling, quota/failure visibility and read-only batch preview with explicit
+  acceptance. Serialize retry/cancel against worker claims, apply submission
+  quotas to retries, preserve complete job metadata in export format 5 and
+  provide a fail-closed schema-12 recovery mode. Make crawler alerts respect
+  paused/future work and policy refusals.
 
 - [x] Add a private bookmark reading list with review states, per-account atomic
   quotas, optional note previews, literal note search and complete saved filter
@@ -80,7 +87,7 @@ delivery notes below describe their original release dates.
 | 2 | Account hardening | Encrypted TOTP storage/rotation, reauthenticated password changes and recovery-code replacement are deployed. Add passkeys per origin and security-event history; review privilege changes and continue covering replay/concurrent credential updates |
 | 3 | Collections and search | Private collections, bookmarks/review states, note/title/domain/discovery-date filters, user-selected sorting, saved snapshots and filtered change feeds are deployed. Extend language support and configurable result presentation while keeping research terms out of request URLs |
 | 4 | Research workflow | Private bookmarks, note search, tag management, change-feed filters and review states are deployed. Add keyboard review shortcuts, safe multi-select actions and first-use guidance; preserve separate-account ownership for the same URL |
-| 5 | Crawl job management | Show quota use, scheduled time and failure reasons. Add per-account pause/cancel and safe batch import with validation, deduplication and an acceptance preview. Serialize state changes against worker claims |
+| 5 | Crawl job management | Personal pause/cancel, scheduling, quota/failure visibility and previewed batch import are deployed with serialized worker claims. Add safe multi-select controls and lease-backed interruption of in-flight requests |
 | 6 | Graph exploration | Add category/status filters, selected-node details, connected-neighbour loading, clustering and an accessible list of the displayed graph. Keep graph data loading bounded |
 | 7 | Optional history | Add explicit opt-in snapshots, bounded retention and a text-diff view. Include snapshots in export, purge and account deletion before enabling the feature |
 | 8 | Exports and automation | Add explicit export scope, row estimates, cancellable export jobs, expiry and encrypted temporary storage. Introduce separate API credentials with narrow scopes, one-time display, expiry and revocation |

@@ -1,5 +1,10 @@
 # Private bookmarks, notes and change-feed workflow
 
+Current scheduling controls, export format 5 and schema-12 recovery are described
+in [crawl jobs](crawl-jobs.md). The release-specific notes below describe the
+schema-11 deployment.
+
+
 Delivered on 2026-11-13, with schema **11** and personal-export format **4**.
 
 ## Product behavior

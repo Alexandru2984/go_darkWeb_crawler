@@ -45,3 +45,15 @@ Email notifications are enabled for the operator-approved Proton address. One
 test completed without SMTP errors and the operator confirmed receipt.
 Monitoring on the same VPS does not provide an independent path for detecting
 complete host loss.
+
+
+## Pause-aware scheduling metrics (2026-11-13)
+
+The API exports private aggregate `onionspider_crawl_ready_nodes` and
+`onionspider_crawl_failed_nodes`. The first includes running work and currently
+due records on unpaused accounts; the second excludes paused accounts and known
+robots/invalid-address refusals. Queue-stalled/progress rules use these gauges
+when available and legacy backlog metrics when absent. Paused/future work no
+longer creates false progress alerts; due completed recrawls do count.
+The rule count remains 17, with 27 regression scenarios. Deploy the updated
+rules with the schema-12 API and retain the prior rule file with release artifacts.

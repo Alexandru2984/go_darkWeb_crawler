@@ -4,6 +4,7 @@ A dark web crawler built for performance, concurrency, and safety. Explores the 
 
 Private research tools include [collections and saved searches](docs/collections-and-research.md),
 [bookmarks with review states, note search and filtered change feeds](docs/bookmarks-and-changes.md),
+[personal crawl scheduling and previewed imports](docs/crawl-jobs.md),
 account-scoped export and password/MFA-protected erasure. The current delivery
 plan and remaining work are in the [production roadmap](docs/production-roadmap.md).
 

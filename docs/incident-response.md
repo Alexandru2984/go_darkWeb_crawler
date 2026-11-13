@@ -206,3 +206,28 @@ Run at least quarterly tabletop exercises for:
 Measure time to acknowledge, contain, identify affected records, make the
 notification decision, restore and detect recurrence. A runbook not exercised
 against a timer is an untested assumption.
+
+## Crawl queue tampering or submission abuse
+
+Pause new claims for the affected, verified account through its owner controls
+or a narrowly scoped local database maintenance action. Claims already running
+may finish. If active network traffic itself must stop, stop the Onion Spider
+service using the containment procedure above. Do not alter host-wide Tor or
+unrelated workloads. Preserve the account's scheduling/cancellation preference
+and investigate before resuming it.
+
+Use private aggregate ready/failed/backlog metrics and route/status HTTP counters
+for triage; collect action timestamps, actor IDs and counts from the redacted
+application log. Keep raw research URLs out of incident tickets. A queued import
+is not evidence that its preview was accepted: distinguish preview reads from
+committed batch counts. Revoke compromised sessions through the account-security
+procedure. Retain stored records and annotations unless erasure is separately
+required.
+
+The 2026-11-13 isolated exercise tested cross-account/admin attempts (404),
+missing CSRF (403), quota and rate rejection, simultaneous cancel/claim,
+committing pause vs claim, capacity changes after preview and forced SQL rollback.
+No production account was paused/cancelled during that exercise. Schema-12
+recovery uses a compatible no-claim API and a visible Recovery mode banner;
+restore the forward API after diagnosis rather than running Down or enabling
+an older worker that ignores account pause/cancellation intent.
