@@ -1,10 +1,11 @@
 <script setup>
 import { computed, ref, watch } from "vue";
-import { RESULT_SORTS } from "../lib/searchFilters.js";
+import { RESULT_SORTS, REVIEW_STATES } from "../lib/searchFilters.js";
 const props = defineProps({
   modelValue: { type: Object, required: true },
   collections: { type: Array, default: () => [] },
   disabled: { type: Boolean, default: false },
+  bookmarksOnly: { type: Boolean, default: false },
   resetVersion: { type: Number, default: 0 },
 });
 const emit = defineEmits(["update:modelValue", "dirty"]);
@@ -17,6 +18,12 @@ watch(() => props.modelValue, reset, { deep: true });
 watch(() => props.resetVersion, reset);
 const update = (key, value) => {
   draft.value = { ...draft.value, [key]: value };
+  if ((key === "review" && value) || (key === "sort" && value === "bookmarked"))
+    draft.value.bookmarked_only = true;
+  if (key === "bookmarked_only" && !value) {
+    draft.value.review = "";
+    if (draft.value.sort === "bookmarked") draft.value.sort = "";
+  }
   emit(
     "dirty",
     JSON.stringify(draft.value) !== JSON.stringify(props.modelValue),
@@ -37,6 +44,49 @@ const missing = computed(
   <details class="research-filters">
     <summary>More filters &amp; sorting</summary>
     <form class="filters-grid" @submit.prevent="apply">
+      <div>
+        <label class="label" for="filter-note">Private note contains</label>
+        <input
+          id="filter-note"
+          class="field"
+          type="search"
+          :value="draft.note"
+          maxlength="200"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+          :disabled="disabled"
+          @input="update('note', $event.target.value)"
+        />
+      </div>
+      <div>
+        <label class="label" for="filter-review">Bookmark review</label>
+        <select
+          id="filter-review"
+          class="field"
+          :value="draft.review"
+          :disabled="disabled"
+          @change="update('review', $event.target.value)"
+        >
+          <option value="">Any review state</option>
+          <option
+            v-for="(label, value) in REVIEW_STATES"
+            :key="value"
+            :value="value"
+          >
+            {{ label }}
+          </option>
+        </select>
+        <label class="bookmark-check"
+          ><input
+            type="checkbox"
+            :checked="draft.bookmarked_only"
+            :disabled="disabled || bookmarksOnly"
+            @change="update('bookmarked_only', $event.target.checked)"
+          />
+          Bookmarked sites only</label
+        >
+      </div>
       <div>
         <label class="label" for="filter-title">Title contains</label>
         <input
@@ -134,9 +184,9 @@ const missing = computed(
         Apply filters
       </button>
       <p class="hint">
-        Choose Apply filters to update results. Collection filters show your own
-        tagged sites, including on an administrator account. Discovery dates
-        include the full selected days.
+        Choose Apply filters to update results. Collection, note and bookmark
+        filters show your own sites, including on an administrator account.
+        Discovery dates include the full selected days.
       </p>
     </form>
   </details>
@@ -162,6 +212,13 @@ summary {
 }
 .filters-grid > div {
   min-width: 0;
+}
+.bookmark-check {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+  min-height: var(--tap);
 }
 .hint {
   font-size: 0.8rem;

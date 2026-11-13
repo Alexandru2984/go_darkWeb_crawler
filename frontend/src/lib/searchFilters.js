@@ -12,9 +12,19 @@ export const RESULT_SORTS = {
   oldest: "Oldest discovered",
   title: "Title A–Z",
   relevance: "Content relevance",
+  bookmarked: "Recently bookmarked",
+};
+
+export const REVIEW_STATES = {
+  unreviewed: "Not reviewed",
+  reviewed: "Reviewed",
+  follow_up: "Follow up",
 };
 
 export const emptyResearchFilters = () => ({
+  note: "",
+  bookmarked_only: false,
+  review: "",
   title: "",
   host: "",
   discovered_from: "",

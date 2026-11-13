@@ -18,6 +18,7 @@ const links = computed(() => [
   { to: "/", label: "Dashboard" },
   { to: "/queue", label: "Queue" },
   { to: "/collections", label: "Collections" },
+  { to: "/bookmarks", label: "Bookmarks" },
   { to: "/changes", label: "Changes", badge: unseenChanges },
   { to: "/security", label: "Security" },
   { to: "/privacy", label: "Privacy" },

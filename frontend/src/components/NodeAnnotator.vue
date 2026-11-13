@@ -1,5 +1,6 @@
 <script setup>
 import { ref, watch as vueWatch, nextTick, onUnmounted } from "vue";
+import { REVIEW_STATES } from "../lib/searchFilters.js";
 import { apiJSON } from "../lib/api.js";
 
 const props = defineProps({
@@ -117,6 +118,13 @@ const stopWatch = async () => {
   if (data) annotation.value = { ...annotation.value, watch: null };
 };
 
+const bookmark = async (review = "") => {
+  const data = await send("/api/bookmarks", {
+    url: props.url,
+    ...(review ? { review } : { remove: !!annotation.value.bookmark }),
+  });
+  if (data) annotation.value = { ...annotation.value, bookmark: data.bookmark };
+};
 const close = () => emit("close");
 
 vueWatch(
@@ -166,6 +174,42 @@ onUnmounted(() => request?.abort());
 
     <template v-else>
       <section class="block">
+        <h3 class="block__title">Private bookmark</h3>
+        <div class="row">
+          <button
+            class="btn btn--secondary btn--sm"
+            type="button"
+            :disabled="busy || !!error"
+            :aria-pressed="!!annotation.bookmark"
+            @click="bookmark()"
+          >
+            {{ annotation.bookmark ? "Remove bookmark" : "Bookmark site" }}
+          </button>
+          <div v-if="annotation.bookmark">
+            <label class="label" for="bookmark-review">Review state</label>
+            <select
+              id="bookmark-review"
+              class="field"
+              :value="annotation.bookmark.review"
+              :disabled="busy"
+              @change="bookmark($event.target.value)"
+            >
+              <option
+                v-for="(label, value) in REVIEW_STATES"
+                :key="value"
+                :value="value"
+              >
+                {{ label }}
+              </option>
+            </select>
+          </div>
+        </div>
+        <p class="muted small">
+          Up to 1,000 per account. Bookmarks follow your crawl retention; use a
+          watch to keep a site.
+        </p>
+      </section>
+      <section class="block">
         <h3 class="block__title">Tags</h3>
         <ul v-if="annotation.tags.length" class="tags">
           <li v-for="tag in annotation.tags" :key="tag" class="tagchip">
@@ -187,6 +231,9 @@ onUnmounted(() => request?.abort());
           <label class="sr-only" for="new-tag">New tag</label>
           <input
             id="new-tag"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
             v-model="newTag"
             class="field"
             maxlength="40"
@@ -206,19 +253,22 @@ onUnmounted(() => request?.abort());
           v-model="noteDraft"
           class="field textarea"
           rows="4"
-          maxlength="4000"
+          maxlength="8000"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
           placeholder="Why this site matters to you."
         ></textarea>
         <div class="row">
           <button
             class="btn btn--sm"
             type="button"
-            :disabled="busy"
+            :disabled="busy || [...noteDraft].length > 4000"
             @click="saveNote"
           >
             Save note
           </button>
-          <span class="muted small">{{ noteDraft.length }} / 4000</span>
+          <span class="muted small">{{ [...noteDraft].length }} / 4000</span>
         </div>
       </section>
 

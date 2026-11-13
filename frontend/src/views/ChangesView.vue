@@ -1,63 +1,123 @@
 <script setup>
-import { ref, onMounted } from "vue";
+import { ref, onMounted, onUnmounted } from "vue";
 import { apiJSON } from "../lib/api.js";
 import { setUnseenChanges } from "../stores/changes.js";
-
-const events = ref([]);
-const watches = ref([]);
-const unseen = ref(0);
-const loading = ref(true);
-const busy = ref(false);
-const message = ref("");
-const messageKind = ref("info");
-
-const say = (text, kind = "info") => {
-  message.value = text;
-  messageKind.value = kind;
-};
-
+const events = ref([]),
+  watches = ref([]),
+  groups = ref([]),
+  unseen = ref(0),
+  page = ref(1),
+  hasMore = ref(false);
+const loading = ref(true),
+  busy = ref(false),
+  message = ref(""),
+  messageKind = ref("info");
+const empty = () => ({
+  kind: "",
+  unread_only: false,
+  title: "",
+  host: "",
+  tag: "",
+});
+const draft = ref(empty()),
+  applied = ref(empty());
 const KIND_LABEL = {
   content_changed: "Content changed",
   unreachable: "Stopped answering",
   recovered: "Answering again",
 };
-
-const load = async () => {
-  loading.value = true;
-  const [feed, list] = await Promise.all([
-    apiJSON("/api/watch/events?limit=100"),
-    apiJSON("/api/watches"),
-  ]);
-  if (feed.ok) {
-    events.value = feed.data.events || [];
-    unseen.value = feed.data.unseen || 0;
-    setUnseenChanges(unseen.value);
-  }
-  if (list.ok) watches.value = list.data || [];
-  loading.value = false;
+let request;
+const lifetime = new AbortController();
+const say = (text, kind = "info") => {
+  message.value = text;
+  messageKind.value = kind;
 };
-
-const markAllSeen = async () => {
+const load = async () => {
+  request?.abort();
+  const controller = new AbortController();
+  request = controller;
+  loading.value = true;
+  try {
+    const feed = await apiJSON(
+      `/api/watch/events/query?page=${page.value}&limit=20`,
+      { method: "POST", json: applied.value, signal: controller.signal },
+    );
+    if (request !== controller) return;
+    if (feed.ok) {
+      events.value = feed.data.events || [];
+      unseen.value = feed.data.unseen || 0;
+      hasMore.value = !!feed.data.has_more;
+      setUnseenChanges(unseen.value);
+      if (page.value > 1 && !events.value.length) {
+        page.value = 1;
+        await load();
+      }
+    } else say(feed.data.error || "Could not load changes.", "error");
+  } catch (err) {
+    if (err.name !== "AbortError") say("Could not load changes.", "error");
+  } finally {
+    if (request === controller) loading.value = false;
+  }
+};
+const loadWatches = async () => {
+  try {
+    const list = await apiJSON("/api/watches", { signal: lifetime.signal });
+    if (list.ok) watches.value = list.data || [];
+    else say(list.data.error || "Could not load watches.", "error");
+  } catch (err) {
+    if (err.name !== "AbortError") say("Could not load watches.", "error");
+  }
+};
+const apply = () => {
+  applied.value = { ...draft.value };
+  page.value = 1;
+  message.value = "";
+  load();
+};
+const move = (delta) => {
+  page.value += delta;
+  load();
+};
+const markSeen = async (ids) => {
+  if (busy.value || !ids.length) return;
   busy.value = true;
-  const { ok } = await apiJSON("/api/watch/events/seen", { method: "POST" });
+  const result = await apiJSON("/api/watch/events/seen", {
+    method: "POST",
+    json: { ids },
+  });
   busy.value = false;
-  if (!ok) return say("Could not mark the feed as read.", "error");
+  if (!result.ok)
+    return say(result.data.error || "Could not mark changes as read.", "error");
   await load();
 };
-
+const markVisible = () =>
+  markSeen(events.value.filter((e) => !e.seen).map((e) => e.id));
 const stopWatching = async (url) => {
   busy.value = true;
-  const { ok, data } = await apiJSON("/api/watch", {
+  const result = await apiJSON("/api/watch", {
     method: "POST",
     json: { url, stop: true },
   });
   busy.value = false;
-  if (!ok) return say(data.error || "Could not stop that watch.", "error");
-  say("No longer watching.", "ok");
-  await load();
+  if (!result.ok)
+    return say(result.data.error || "Could not stop that watch.", "error");
+  say("Watch stopped and its change history removed.", "ok");
+  await Promise.all([load(), loadWatches()]);
 };
-
-onMounted(load);
+onMounted(async () => {
+  load();
+  loadWatches();
+  try {
+    const result = await apiJSON("/api/tags", { signal: lifetime.signal });
+    if (result.ok) groups.value = result.data || [];
+  } catch (err) {
+    if (err.name !== "AbortError") say("Could not load collections.", "error");
+  }
+});
+onUnmounted(() => {
+  request?.abort();
+  lifetime.abort();
+});
 </script>
 
 <template>
@@ -71,15 +131,20 @@ onMounted(load);
       </div>
       <div class="row">
         <button
-          v-if="unseen"
+          v-if="events.some((e) => !e.seen)"
           class="btn btn--secondary btn--sm"
           type="button"
-          :disabled="busy"
-          @click="markAllSeen"
+          :disabled="busy || loading"
+          @click="markVisible"
         >
-          Mark all read
+          Mark visible read
         </button>
-        <button class="btn btn--ghost btn--sm" type="button" @click="load">
+        <button
+          class="btn btn--ghost btn--sm"
+          type="button"
+          :disabled="loading"
+          @click="load"
+        >
           Refresh
         </button>
       </div>
@@ -97,6 +162,62 @@ onMounted(load);
         through — exactly that.
       </p>
 
+      <form class="feed-filters" @submit.prevent="apply">
+        <div>
+          <label class="label" for="change-kind">Change type</label
+          ><select id="change-kind" v-model="draft.kind" class="field">
+            <option value="">All changes</option>
+            <option
+              v-for="(label, value) in KIND_LABEL"
+              :key="value"
+              :value="value"
+            >
+              {{ label }}
+            </option>
+          </select>
+        </div>
+        <div>
+          <label class="label" for="change-title">Title contains</label
+          ><input
+            id="change-title"
+            v-model="draft.title"
+            class="field"
+            type="search"
+            maxlength="200"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+          />
+        </div>
+        <div>
+          <label class="label" for="change-host">Onion domain</label
+          ><input
+            id="change-host"
+            v-model="draft.host"
+            class="field"
+            maxlength="253"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+          />
+        </div>
+        <div>
+          <label class="label" for="change-tag">Private collection</label
+          ><select id="change-tag" v-model="draft.tag" class="field">
+            <option value="">All collections</option>
+            <option v-for="group in groups" :key="group.tag" :value="group.tag">
+              {{ group.tag }}
+            </option>
+          </select>
+        </div>
+        <label class="unread-toggle"
+          ><input v-model="draft.unread_only" type="checkbox" /> Unread
+          only</label
+        >
+        <button class="btn btn--secondary" type="submit" :disabled="loading">
+          Apply filters
+        </button>
+      </form>
       <p v-if="loading" class="muted">Loading…</p>
       <ul v-else-if="events.length" class="feed">
         <li
@@ -116,18 +237,47 @@ onMounted(load);
             {{ e.detected_at }}
             <template v-if="e.status_code"> · {{ e.status_code }}</template>
           </span>
+          <button
+            v-if="!e.seen"
+            class="btn btn--ghost btn--sm"
+            type="button"
+            :disabled="busy || loading"
+            @click="markSeen([e.id])"
+          >
+            Mark read<span class="sr-only"> for {{ e.title || e.url }}</span>
+          </button>
         </li>
       </ul>
       <p v-else class="muted">
-        No changes recorded yet. Watched sites are compared on each recrawl.
+        No changes match these filters. Watched sites are compared on each
+        recrawl.
       </p>
+      <nav class="pagination" aria-label="Change pages">
+        <button
+          class="btn btn--ghost"
+          type="button"
+          :disabled="loading || page === 1"
+          @click="move(-1)"
+        >
+          Previous</button
+        ><span aria-live="polite">Page {{ page }}</span
+        ><button
+          class="btn btn--ghost"
+          type="button"
+          :disabled="loading || !hasMore"
+          @click="move(1)"
+        >
+          Next
+        </button>
+      </nav>
     </section>
 
     <section class="card" aria-labelledby="watches-heading">
       <h2 id="watches-heading" class="section-title">Watched sites</h2>
       <p class="muted body">
         These are never deleted by your retention setting — a watch is you
-        saying the site matters.
+        saying the site matters. Stopping a watch also removes its change
+        history.
       </p>
 
       <ul v-if="watches.length" class="watches">
@@ -162,6 +312,31 @@ onMounted(load);
 </template>
 
 <style scoped>
+.feed-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: var(--s-3);
+  align-items: end;
+  margin-bottom: var(--s-4);
+}
+.feed-filters > div {
+  min-width: 0;
+}
+.unread-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: var(--tap);
+}
+.pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+
 .page-title {
   font-size: 1.5rem;
 }
@@ -263,6 +438,7 @@ onMounted(load);
 @media (min-width: 720px) {
   .event {
     flex-direction: row;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--s-3);
   }

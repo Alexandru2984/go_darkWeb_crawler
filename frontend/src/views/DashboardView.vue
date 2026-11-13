@@ -163,7 +163,7 @@ const applyFilters = (criteria) => {
         Object.fromEntries(
           Object.keys(emptyResearchFilters()).map((key) => [
             key,
-            criteria[key] || "",
+            criteria[key] ?? emptyResearchFilters()[key],
           ]),
         ),
       );
@@ -173,7 +173,7 @@ const applyFilters = (criteria) => {
   const nextResearch = Object.fromEntries(
     Object.keys(emptyResearchFilters()).map((key) => [
       key,
-      criteria[key] || "",
+      criteria[key] ?? emptyResearchFilters()[key],
     ]),
   );
   if (JSON.stringify(research.value) !== JSON.stringify(nextResearch))

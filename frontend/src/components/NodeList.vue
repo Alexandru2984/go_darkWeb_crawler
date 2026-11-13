@@ -1,8 +1,10 @@
 <script setup>
+import { REVIEW_STATES } from "../lib/searchFilters.js";
 import { CATEGORY_COLORS, CATEGORY_LABELS } from "../lib/categories.js";
 
 defineProps({
   nodes: { type: Array, required: true },
+  showNotes: { type: Boolean, default: false },
   loading: { type: Boolean, default: false },
   emptyMessage: {
     type: String,
@@ -51,6 +53,12 @@ const statusClass = (status) => `pill--${(status || "").replace("_", "-")}`;
           </button>
         </h3>
         <p class="node-card__url mono">{{ node.url }}</p>
+        <p v-if="node.bookmarked" class="private-preview">
+          Bookmarked · {{ REVIEW_STATES[node.review] }}
+        </p>
+        <p v-if="showNotes && node.note_preview" class="private-preview">
+          {{ node.note_preview }}
+        </p>
         <dl class="node-card__meta">
           <div>
             <dt>Code</dt>
@@ -70,7 +78,7 @@ const statusClass = (status) => `pill--${(status || "").replace("_", "-")}`;
           type="button"
           @click="emit('annotate', node)"
         >
-          Tags, note &amp; watch
+          Bookmark, tags &amp; note
           <span class="sr-only">for {{ node.title || node.url }}</span>
         </button>
       </article>
@@ -127,6 +135,12 @@ const statusClass = (status) => `pill--${(status || "").replace("_", "-")}`;
               </span>
             </td>
             <td class="col-act">
+              <p v-if="node.bookmarked" class="private-preview">
+                Bookmarked · {{ REVIEW_STATES[node.review] }}
+              </p>
+              <p v-if="showNotes && node.note_preview" class="private-preview">
+                {{ node.note_preview }}
+              </p>
               <button
                 class="btn btn--ghost btn--sm"
                 type="button"
@@ -148,6 +162,13 @@ const statusClass = (status) => `pill--${(status || "").replace("_", "-")}`;
 </template>
 
 <style scoped>
+.private-preview {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  max-width: 30ch;
+}
 .node-list {
   container-type: inline-size;
   min-width: 0;

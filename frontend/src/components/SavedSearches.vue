@@ -2,7 +2,11 @@
 import { nextTick, onMounted, onUnmounted, ref } from "vue";
 import { apiJSON } from "../lib/api.js";
 import { categoryLabel } from "../lib/categories.js";
-import { CRAWL_STATUSES, RESULT_SORTS } from "../lib/searchFilters.js";
+import {
+  CRAWL_STATUSES,
+  RESULT_SORTS,
+  REVIEW_STATES,
+} from "../lib/searchFilters.js";
 
 const props = defineProps({
   criteria: { type: Object, required: true },
@@ -31,6 +35,9 @@ const describe = (criteria) =>
     criteria.q ? `“${criteria.q}”` : "All content",
     criteria.category ? categoryLabel(criteria.category) : "All categories",
     CRAWL_STATUSES[criteria.status] || "Any status",
+    ...(criteria.note ? [`Note: ${criteria.note}`] : []),
+    ...(criteria.bookmarked_only ? ["Bookmarked only"] : []),
+    ...(criteria.review ? [REVIEW_STATES[criteria.review]] : []),
     ...(criteria.title ? [`Title: ${criteria.title}`] : []),
     ...(criteria.host ? [`Domain: ${criteria.host}`] : []),
     ...(criteria.discovered_from ? [`From ${criteria.discovered_from}`] : []),
