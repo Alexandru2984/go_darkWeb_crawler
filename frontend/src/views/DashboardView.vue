@@ -224,7 +224,7 @@ const startCrawl = async () => {
       json: { url: targetUrl.value.trim() },
     });
     if (ok) {
-      formMessage.value = "Added to the crawl queue.";
+      formMessage.value = data.message || "URL accepted.";
       formKind.value = "ok";
       targetUrl.value = "";
       setTimeout(() => (formMessage.value = ""), 4000);
