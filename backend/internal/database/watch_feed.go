@@ -81,7 +81,9 @@ func (db *DB) MarkSelectedWatchEventsSeen(ctx context.Context, userID int, ids [
 		return 0, ErrWatchSelection
 	}
 	for _, id := range ids {
-		if id <= 0 {
+		// Event IDs are PostgreSQL SERIAL (signed 32-bit). Reject larger
+		// JSON integers here instead of turning array conversion into a 500.
+		if id <= 0 || id > 2147483647 {
 			return 0, ErrWatchSelection
 		}
 	}

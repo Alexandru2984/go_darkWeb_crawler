@@ -52,7 +52,7 @@ func TestBookmarkAndFeedAPIPrivacyBoundaries(t *testing.T) {
 	if err := db.Conn.QueryRow(`INSERT INTO watch_events(user_id,watch_id,kind) VALUES($1,$2,'content_changed') RETURNING id`, uid, watch.ID).Scan(&eventID); err != nil {
 		t.Fatal(err)
 	}
-	for _, bad := range []string{`{}`, `{"ids":[]}`, `{"ids":[0]}`, `{"ids":[1],"all":true}`, `{"ids":null}`} {
+	for _, bad := range []string{`{}`, `{"ids":[]}`, `{"ids":[0]}`, `{"ids":[2147483648]}`, `{"ids":[9223372036854775807]}`, `{"ids":[1],"all":true}`, `{"ids":null}`} {
 		if rr := postJSON(t, h, "/api/watch/events/seen", token, bad); rr.Code != 400 {
 			t.Fatal("ambiguous mark-read accepted", rr.Code)
 		}
