@@ -13,7 +13,7 @@ func (d *deps) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input database.BrowseInput
-	if !decodeJSONBody(w, r, 8192, &input) {
+	if !decodeJSONBody(w, r, 16384, &input) {
 		return
 	}
 	limit, offset := ParsePagination(r)

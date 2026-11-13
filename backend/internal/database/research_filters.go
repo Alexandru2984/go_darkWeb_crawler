@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -16,12 +17,15 @@ var ErrResearchFilters = errors.New("invalid research filters: use a valid onion
 
 // These fields are private research preferences, carried only in JSON bodies.
 type ResearchFilters struct {
-	Title string `json:"title"`
-	Host  string `json:"host"`
-	From  string `json:"discovered_from"`
-	To    string `json:"discovered_to"`
-	Tag   string `json:"tag"`
-	Sort  string `json:"sort"`
+	Note           string `json:"note"`
+	BookmarkedOnly bool   `json:"bookmarked_only"`
+	Review         string `json:"review"`
+	Title          string `json:"title"`
+	Host           string `json:"host"`
+	From           string `json:"discovered_from"`
+	To             string `json:"discovered_to"`
+	Tag            string `json:"tag"`
+	Sort           string `json:"sort"`
 }
 
 type BrowseInput struct {
@@ -32,6 +36,16 @@ type BrowseInput struct {
 }
 
 func NormalizeResearchFilters(input ResearchFilters) (ResearchFilters, error) {
+	input.Note = strings.TrimSpace(input.Note)
+	if !utf8.ValidString(input.Note) || utf8.RuneCountInString(input.Note) > 200 || strings.ContainsRune(input.Note, 0) {
+		return input, ErrResearchFilters
+	}
+	if input.Review != "" && !validReviewState(input.Review) {
+		return input, ErrResearchFilters
+	}
+	if input.Review != "" || input.Sort == "bookmarked" {
+		input.BookmarkedOnly = true
+	}
 	input.Title = strings.TrimSpace(input.Title)
 	if !utf8.ValidString(input.Title) || utf8.RuneCountInString(input.Title) > 200 || strings.IndexFunc(input.Title, unicode.IsControl) >= 0 {
 		return input, ErrResearchFilters
@@ -65,7 +79,7 @@ func NormalizeResearchFilters(input ResearchFilters) (ResearchFilters, error) {
 		return input, ErrResearchFilters
 	}
 	switch input.Sort {
-	case "", "recent", "oldest", "title", "relevance":
+	case "", "recent", "oldest", "title", "relevance", "bookmarked":
 	default:
 		return input, ErrResearchFilters
 	}
@@ -84,7 +98,7 @@ func (db *DB) BrowseNodes(ctx context.Context, input BrowseInput, limit, offset,
 		return nil, err
 	}
 	input.ResearchFilters = filters
-	args := []any{userID, isAdmin && input.Tag == ""}
+	args := []any{userID, isAdmin && input.Tag == "" && input.Note == "" && !input.BookmarkedOnly && input.Review == ""}
 	where := []string{"(n.user_id=$1 OR $2)"}
 	bind := func(value any) string { args = append(args, value); return fmt.Sprintf("$%d", len(args)) }
 	queryParam := ""
@@ -105,6 +119,16 @@ func (db *DB) BrowseNodes(ctx context.Context, input BrowseInput, limit, offset,
 	if input.Host != "" {
 		where = append(where, "n.host="+bind(input.Host))
 	}
+	if input.Note != "" {
+		literal := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(input.Note)
+		where = append(where, `own_note.body ILIKE `+bind("%"+literal+"%")+` ESCAPE '\'`)
+	}
+	if input.BookmarkedOnly {
+		where = append(where, "b.node_id IS NOT NULL")
+	}
+	if input.Review != "" {
+		where = append(where, "b.review_state="+bind(input.Review))
+	}
 	if input.From != "" {
 		where = append(where, "n.discovered_at >= "+bind(input.From)+"::date")
 	}
@@ -116,6 +140,8 @@ func (db *DB) BrowseNodes(ctx context.Context, input BrowseInput, limit, offset,
 	}
 	order := "n.discovered_at DESC NULLS LAST,n.id DESC"
 	switch input.Sort {
+	case "bookmarked":
+		order = "b.created_at DESC NULLS LAST,n.id DESC"
 	case "oldest":
 		order = "n.discovered_at ASC NULLS LAST,n.id ASC"
 	case "title":
@@ -127,10 +153,25 @@ func (db *DB) BrowseNodes(ctx context.Context, input BrowseInput, limit, offset,
 	}
 	limitParam, offsetParam := bind(limit), bind(offset)
 	rows, err := db.Conn.QueryContext(ctx, `SELECT n.id,n.url,COALESCE(n.title,''),COALESCE(n.status_code,0),COALESCE(n.server_header,''),
-		n.processing_status,COALESCE(n.category,'unknown'),to_char(n.last_crawled_at,'YYYY-MM-DD HH24:MI:SS')
-		FROM nodes n WHERE `+strings.Join(where, " AND ")+" ORDER BY "+order+" LIMIT "+limitParam+" OFFSET "+offsetParam, args...)
+		n.processing_status,COALESCE(n.category,'unknown'),to_char(n.last_crawled_at,'YYYY-MM-DD HH24:MI:SS'),
+		n.user_id=$1,b.node_id IS NOT NULL,COALESCE(b.review_state,''),COALESCE(left(own_note.body,180),'')
+		FROM nodes n LEFT JOIN node_bookmarks b ON b.user_id=$1 AND b.node_id=n.id
+		LEFT JOIN node_notes own_note ON own_note.user_id=$1 AND own_note.node_id=n.id AND n.user_id=$1 WHERE `+strings.Join(where, " AND ")+" ORDER BY "+order+" LIMIT "+limitParam+" OFFSET "+offsetParam, args...)
 	if err != nil {
 		return nil, err
 	}
-	return scanNodes(rows)
+	defer rows.Close()
+	nodes := make([]Node, 0)
+	for rows.Next() {
+		var node Node
+		var lastCrawled sql.NullString
+		if err := rows.Scan(&node.ID, &node.URL, &node.Title, &node.StatusCode, &node.ServerHeader, &node.ProcessingStatus, &node.Category, &lastCrawled, &node.Owned, &node.Bookmarked, &node.Review, &node.NotePreview); err != nil {
+			return nil, err
+		}
+		if lastCrawled.Valid {
+			node.LastCrawledAt = lastCrawled.String
+		}
+		nodes = append(nodes, node)
+	}
+	return nodes, rows.Err()
 }

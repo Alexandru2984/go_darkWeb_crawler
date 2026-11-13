@@ -206,6 +206,10 @@ func migrateOpaqueTokens(db *sql.DB) error {
 
 // Node represents an onion site stored in the DB
 type Node struct {
+	Owned            bool   `json:"owned,omitempty"`
+	Bookmarked       bool   `json:"bookmarked,omitempty"`
+	Review           string `json:"review,omitempty"`
+	NotePreview      string `json:"note_preview,omitempty"`
 	ID               int    `json:"id"`
 	URL              string `json:"url"`
 	Title            string `json:"title"`

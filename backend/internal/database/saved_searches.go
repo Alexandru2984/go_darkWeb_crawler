@@ -77,12 +77,12 @@ func savedSearchWriteError(err error) error {
 
 func scanSavedSearch(row interface{ Scan(...any) error }) (SavedSearch, error) {
 	var saved SavedSearch
-	err := row.Scan(&saved.ID, &saved.Name, &saved.Query, &saved.Category, &saved.Status, &saved.CreatedAt, &saved.UpdatedAt, &saved.Title, &saved.Host, &saved.From, &saved.To, &saved.Tag, &saved.Sort)
+	err := row.Scan(&saved.ID, &saved.Name, &saved.Query, &saved.Category, &saved.Status, &saved.CreatedAt, &saved.UpdatedAt, &saved.Title, &saved.Host, &saved.From, &saved.To, &saved.Tag, &saved.Sort, &saved.Note, &saved.BookmarkedOnly, &saved.Review)
 	return saved, err
 }
 
 func (db *DB) ListSavedSearches(ctx context.Context, userID int) ([]SavedSearch, error) {
-	rows, err := db.Conn.QueryContext(ctx, `SELECT id, name, query_text, category, status, created_at, updated_at, title_filter, host_filter, discovered_from, discovered_to, collection_tag, result_sort
+	rows, err := db.Conn.QueryContext(ctx, `SELECT id, name, query_text, category, status, created_at, updated_at, title_filter, host_filter, discovered_from, discovered_to, collection_tag, result_sort, note_filter, bookmarked_only, review_filter
 		FROM saved_searches WHERE user_id=$1 ORDER BY updated_at DESC, id DESC LIMIT $2`, userID, MaxSavedSearches)
 	if err != nil {
 		return nil, err
@@ -138,8 +138,8 @@ func (db *DB) CreateSavedSearch(ctx context.Context, userID int, input SavedSear
 	if count >= MaxSavedSearches {
 		return SavedSearch{}, ErrSavedSearchLimit
 	}
-	saved, err := scanSavedSearch(tx.QueryRowContext(ctx, `INSERT INTO saved_searches(user_id,name,query_text,category,status,title_filter,host_filter,discovered_from,discovered_to,collection_tag,result_sort)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id,name,query_text,category,status,created_at,updated_at,title_filter,host_filter,discovered_from,discovered_to,collection_tag,result_sort`, userID, name, input.Query, input.Category, input.Status, input.Title, input.Host, input.From, input.To, input.Tag, input.Sort))
+	saved, err := scanSavedSearch(tx.QueryRowContext(ctx, `INSERT INTO saved_searches(user_id,name,query_text,category,status,title_filter,host_filter,discovered_from,discovered_to,collection_tag,result_sort,note_filter,bookmarked_only,review_filter)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id,name,query_text,category,status,created_at,updated_at,title_filter,host_filter,discovered_from,discovered_to,collection_tag,result_sort,note_filter,bookmarked_only,review_filter`, userID, name, input.Query, input.Category, input.Status, input.Title, input.Host, input.From, input.To, input.Tag, input.Sort, input.Note, input.BookmarkedOnly, input.Review))
 	if err != nil {
 		return SavedSearch{}, savedSearchWriteError(err)
 	}
@@ -152,7 +152,7 @@ func (db *DB) RenameSavedSearch(ctx context.Context, userID, id int, name string
 		return SavedSearch{}, err
 	}
 	saved, err := scanSavedSearch(db.Conn.QueryRowContext(ctx, `UPDATE saved_searches SET name=$3,updated_at=CURRENT_TIMESTAMP
-		WHERE user_id=$1 AND id=$2 RETURNING id,name,query_text,category,status,created_at,updated_at,title_filter,host_filter,discovered_from,discovered_to,collection_tag,result_sort`, userID, id, name))
+		WHERE user_id=$1 AND id=$2 RETURNING id,name,query_text,category,status,created_at,updated_at,title_filter,host_filter,discovered_from,discovered_to,collection_tag,result_sort,note_filter,bookmarked_only,review_filter`, userID, id, name))
 	if errors.Is(err, sql.ErrNoRows) {
 		return SavedSearch{}, ErrSavedSearchNotFound
 	}

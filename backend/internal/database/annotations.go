@@ -68,9 +68,10 @@ func nodeIDFor(q interface {
 
 // Annotation is everything one account has attached to one site.
 type Annotation struct {
-	Tags  []string `json:"tags"`
-	Note  string   `json:"note"`
-	Watch *Watch   `json:"watch"`
+	Bookmark *BookmarkReference `json:"bookmark"`
+	Tags     []string           `json:"tags"`
+	Note     string             `json:"note"`
+	Watch    *Watch             `json:"watch"`
 }
 
 // Watch is a site the account is being told about when it changes.
@@ -124,6 +125,10 @@ func (db *DB) GetAnnotation(nodeURL string, userID int) (Annotation, error) {
 		return a, err
 	}
 	a.Watch = w
+	a.Bookmark, err = db.BookmarkForNode(context.Background(), userID, nodeID)
+	if err != nil {
+		return a, err
+	}
 	return a, nil
 }
 
@@ -135,7 +140,7 @@ func (db *DB) watchFor(nodeID, userID int) (*Watch, error) {
 		SELECT w.id, n.url, COALESCE(n.title, ''), w.interval_days, w.last_status,
 		       TO_CHAR(w.last_checked_at, 'YYYY-MM-DD"T"HH24:MI:SS'),
 		       COALESCE(TO_CHAR(w.created_at, 'YYYY-MM-DD"T"HH24:MI:SS'), '')
-		  FROM watches w JOIN nodes n ON n.id = w.node_id
+		  FROM watches w JOIN nodes n ON n.id = w.node_id AND n.user_id=w.user_id
 		 WHERE w.user_id = $1 AND w.node_id = $2
 	`, userID, nodeID).Scan(&w.ID, &w.URL, &w.Title, &w.IntervalDays, &status, &checked, &w.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -170,9 +175,10 @@ func (db *DB) RemoveTag(nodeURL string, userID int, tag string) error {
 // SetNote replaces the account's note on a site. An empty body deletes it, so
 // clearing the box in the interface does not leave an empty row behind.
 func (db *DB) SetNote(nodeURL string, userID int, body string) error {
-	body = strings.TrimSpace(body)
-	if len(body) > MaxNoteLen {
-		return errors.New("note too long")
+	var err error
+	body, err = NormalizeNoteText(body)
+	if err != nil {
+		return err
 	}
 	nodeID, err := nodeIDFor(db.Conn, nodeURL, userID)
 	if err != nil {
@@ -278,7 +284,7 @@ func (db *DB) ListWatches(userID int) ([]Watch, error) {
 		SELECT w.id, n.url, COALESCE(n.title, ''), w.interval_days, w.last_status,
 		       TO_CHAR(w.last_checked_at, 'YYYY-MM-DD"T"HH24:MI:SS'),
 		       COALESCE(TO_CHAR(w.created_at, 'YYYY-MM-DD"T"HH24:MI:SS'), '')
-		  FROM watches w JOIN nodes n ON n.id = w.node_id
+		  FROM watches w JOIN nodes n ON n.id = w.node_id AND n.user_id=w.user_id
 		 WHERE w.user_id = $1 ORDER BY w.created_at DESC
 	`, userID)
 	if err != nil {
@@ -389,7 +395,7 @@ func (db *DB) RecordWatchObservation(nodeURL string, userID int, reachable bool,
 	var currentHash sql.NullString
 	err = tx.QueryRow(`
 		SELECT w.id, w.last_hash, w.last_reachable, n.content_hash
-		  FROM watches w JOIN nodes n ON n.id = w.node_id
+		  FROM watches w JOIN nodes n ON n.id = w.node_id AND n.user_id=w.user_id
 		 WHERE w.user_id = $1 AND n.url = $2
 		 FOR UPDATE OF w
 	`, userID, canonical).Scan(&watchID, &lastHash, &lastReachable, &currentHash)
@@ -468,8 +474,8 @@ func (db *DB) ListWatchEvents(userID, limit int) ([]WatchEvent, error) {
 		       COALESCE(TO_CHAR(e.detected_at, 'YYYY-MM-DD"T"HH24:MI:SS'), ''),
 		       e.seen_at IS NOT NULL
 		  FROM watch_events e
-		  JOIN watches w ON w.id = e.watch_id
-		  JOIN nodes n   ON n.id = w.node_id
+		  JOIN watches w ON w.id = e.watch_id AND w.user_id=e.user_id
+		  JOIN nodes n   ON n.id = w.node_id AND n.user_id=w.user_id
 		 WHERE e.user_id = $1
 		 ORDER BY e.detected_at DESC, e.id DESC
 		 LIMIT $2

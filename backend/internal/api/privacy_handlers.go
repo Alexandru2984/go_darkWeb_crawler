@@ -134,7 +134,7 @@ func (d *deps) handlePrivacySettingsUpdate(w http.ResponseWriter, r *http.Reques
 
 // privacyExportVersion identifies the document shape, so a consumer reading an
 // export produced by an older deployment can tell what to expect.
-const privacyExportVersion = 3
+const privacyExportVersion = 4
 
 // handlePrivacyExport streams everything this service holds about the account.
 //
@@ -202,6 +202,11 @@ func (d *deps) handlePrivacyExport(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
+	bookmarks, err := d.cfg.DB.ListBookmarkReferences(r.Context(), uid)
+	if err != nil {
+		WriteJSONError(w, 500, "Internal error")
+		return
+	}
 	rc := http.NewResponseController(w)
 	rc.SetWriteDeadline(time.Now().Add(10 * time.Minute))
 
@@ -242,6 +247,7 @@ func (d *deps) handlePrivacyExport(w http.ResponseWriter, r *http.Request) {
 		{"watches", watches},
 		{"saved_searches", savedSearches},
 		{"collections", collections},
+		{"bookmarks", bookmarks},
 	} {
 		if err := writeSection(section.name, section.value); err != nil {
 			panic(http.ErrAbortHandler)
@@ -284,6 +290,20 @@ func (d *deps) handlePrivacyExport(w http.ResponseWriter, r *http.Request) {
 		panic(http.ErrAbortHandler)
 	}
 
+	writeChunk(`],"watch_events":[`)
+	firstEvent := true
+	if err := d.cfg.DB.ExportWatchEvents(r.Context(), uid, func(e database.WatchEvent) error {
+		if !firstEvent {
+			if _, err := w.Write([]byte(",")); err != nil {
+				return err
+			}
+		}
+		firstEvent = false
+		return enc.Encode(e)
+	}); err != nil {
+		slog.ErrorContext(r.Context(), "export_failed", "format", "privacy", "kind", "watch_events", "err", err)
+		panic(http.ErrAbortHandler)
+	}
 	writeChunk(`],"links":[`)
 	firstEdge := true
 	if err := d.cfg.DB.ExportEdges(r.Context(), uid, func(e database.Edge) error {
@@ -326,6 +346,10 @@ func (d *deps) handlePrivacyPurge(w http.ResponseWriter, r *http.Request) {
 		scope = "saved_searches"
 	case "collections":
 		scope = "collections"
+	case "bookmarks":
+		scope = "bookmarks"
+	case "watch_events":
+		scope = "watch_events"
 	default:
 		WriteJSONError(w, http.StatusBadRequest, "Unknown data category")
 		return
@@ -352,6 +376,12 @@ func (d *deps) handlePrivacyPurge(w http.ResponseWriter, r *http.Request) {
 	case "saved_searches":
 		affected, err = d.cfg.DB.PurgeSavedSearches(r.Context(), uid)
 		message = "Saved searches deleted."
+	case "bookmarks":
+		affected, err = d.cfg.DB.PurgeBookmarks(r.Context(), uid)
+		message = "Bookmarks deleted. Crawl records, notes and watches are kept."
+	case "watch_events":
+		affected, err = d.cfg.DB.PurgeWatchEvents(r.Context(), uid)
+		message = "Change history deleted. Watched sites and crawl records are kept."
 	case "collections":
 		affected, err = d.cfg.DB.PurgeCollections(r.Context(), uid)
 		message = "Collections and tags deleted. Crawl records, notes and watches are kept."

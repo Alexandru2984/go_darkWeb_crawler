@@ -46,7 +46,7 @@ func (d *deps) handleSavedSearchCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input database.SavedSearchInput
-	if !decodeJSONBody(w, r, 8192, &input) {
+	if !decodeJSONBody(w, r, 16384, &input) {
 		return
 	}
 	saved, err := d.cfg.DB.CreateSavedSearch(r.Context(), GetUserID(r), input)

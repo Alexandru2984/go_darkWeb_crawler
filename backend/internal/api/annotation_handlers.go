@@ -2,9 +2,11 @@ package api
 
 import (
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"onion-spider/internal/database"
 )
@@ -40,7 +42,7 @@ func annotationError(w http.ResponseWriter, r *http.Request, op string, err erro
 		WriteJSONError(w, http.StatusNotFound, "That site is not in your graph. Crawl it first.")
 	case errors.Is(err, database.ErrTooManyTags):
 		WriteJSONError(w, http.StatusBadRequest, "That site already has the maximum number of tags.")
-	case errors.Is(err, database.ErrCollectionName):
+	case errors.Is(err, database.ErrNoteText), errors.Is(err, database.ErrCollectionName):
 		WriteJSONError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, database.ErrCollectionLimit):
 		WriteJSONError(w, http.StatusConflict, err.Error())
@@ -120,17 +122,16 @@ func (d *deps) handleNote(w http.ResponseWriter, r *http.Request) {
 		URL  string `json:"url"`
 		Body string `json:"body"`
 	}
-	// Sized for the note limit plus the URL and JSON framing.
-	if !decodeJSONBody(w, r, database.MaxNoteLen+3000, &req) {
+	// Includes a full 4,000-character note encoded as escaped UTF-16 pairs.
+	if !decodeJSONBody(w, r, 65536, &req) {
 		return
 	}
 	nodeURL := resolveAnnotationTarget(w, req.URL)
 	if nodeURL == "" {
 		return
 	}
-	if len(req.Body) > database.MaxNoteLen {
-		WriteJSONError(w, http.StatusBadRequest,
-			"A note can be at most "+strconv.Itoa(database.MaxNoteLen)+" characters")
+	if _, err := database.NormalizeNoteText(req.Body); err != nil {
+		WriteJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	uid := GetUserID(r)
@@ -236,7 +237,35 @@ func (d *deps) handleWatchEvents(w http.ResponseWriter, r *http.Request) {
 
 // handleWatchEventsSeen clears the unread badge.
 func (d *deps) handleWatchEventsSeen(w http.ResponseWriter, r *http.Request) {
-	n, err := d.cfg.DB.MarkWatchEventsSeen(GetUserID(r))
+	var n int64
+	var err error
+	// An empty legacy request retains its explicit mark-all behavior. A JSON
+	// object without a nonempty selection must never mean "all".
+	if r.Body == nil || r.Body == http.NoBody {
+		n, err = d.cfg.DB.MarkWatchEventsSeen(GetUserID(r))
+	} else {
+		first, readErr := io.ReadAll(io.LimitReader(r.Body, 1))
+		if readErr != nil {
+			WriteJSONError(w, 400, "Invalid request")
+			return
+		}
+		if len(first) == 0 {
+			n, err = d.cfg.DB.MarkWatchEventsSeen(GetUserID(r))
+		} else {
+			r.Body = io.NopCloser(io.MultiReader(strings.NewReader(string(first)), r.Body))
+			var input struct {
+				IDs []int `json:"ids"`
+			}
+			if !decodeJSONBody(w, r, 4096, &input) {
+				return
+			}
+			n, err = d.cfg.DB.MarkSelectedWatchEventsSeen(r.Context(), GetUserID(r), input.IDs)
+		}
+	}
+	if errors.Is(err, database.ErrWatchSelection) {
+		WriteJSONError(w, 400, err.Error())
+		return
+	}
 	if err != nil {
 		annotationError(w, r, "mark_watch_events_seen", err)
 		return

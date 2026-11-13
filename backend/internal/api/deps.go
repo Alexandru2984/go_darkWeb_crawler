@@ -45,6 +45,7 @@ type deps struct {
 	searchLim      *CrawlLimiter
 	savedSearchLim *CrawlLimiter
 	collectionLim  *CrawlLimiter
+	bookmarkLim    *CrawlLimiter
 
 	// sensitiveLim covers the endpoints that re-check the password before
 	// destroying data. They answer whether a password was correct, which makes

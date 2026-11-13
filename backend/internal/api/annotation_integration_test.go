@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -152,7 +153,7 @@ func TestWatchFeedIsScopedAndClearable(t *testing.T) {
 		t.Fatalf("feed = %d events, %d unseen, want 1/1", len(feed.Events), feed.Unseen)
 	}
 
-	if rr := postJSON(t, h, "/api/watch/events/seen", mineToken, `{}`); rr.Code != http.StatusOK {
+	if rr := postJSON(t, h, "/api/watch/events/seen", mineToken, fmt.Sprintf(`{"ids":[%d]}`, feed.Events[0].ID)); rr.Code != http.StatusOK {
 		t.Fatalf("mark seen: %d", rr.Code)
 	}
 
