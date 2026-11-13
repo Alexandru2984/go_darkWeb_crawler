@@ -4,6 +4,7 @@ export const CRAWL_STATUSES = {
   completed: "Completed",
   failed: "Failed",
   blocked: "Blocked",
+  cancelled: "Cancelled",
 };
 
 export const RESULT_SORTS = {

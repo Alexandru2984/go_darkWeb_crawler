@@ -235,8 +235,9 @@ onMounted(load);
         A single JSON file with your account record, your data settings, your
         signed-in devices, your sign-in history, every site you crawled and
         every link between them, plus your saved searches, collections,
-        bookmarks, change history and collection memberships. Password hashes,
-        two-factor secrets and recovery codes are excluded.
+        bookmarks, change history, crawl schedules, failure codes and pause
+        preferences. Password hashes, two-factor secrets and recovery codes are
+        excluded.
       </p>
       <a class="btn btn--secondary" :href="exportHref" download>
         Download JSON
