@@ -1,5 +1,9 @@
 # Private saved searches
 
+Current extensions and schema-11 recovery are documented in
+[bookmarks and changes](bookmarks-and-changes.md). The release-specific
+migration and rollback notes below describe the earlier deployment.
+
 Open **Dashboard → List & search → Saved searches**. Choose the current query,
 category and crawl status, enter a name, then choose **Save search**. Saving is
 explicit: typing, searching and changing filters do not create stored history.

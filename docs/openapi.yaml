@@ -71,7 +71,33 @@ components:
       properties:
         tags: { type: array, items: { type: string } }
         note: { type: string }
+        bookmark: { $ref: '#/components/schemas/Bookmark' }
         watch: { $ref: '#/components/schemas/Watch' }
+    Bookmark:
+      type: object
+      nullable: true
+      properties:
+        node_id: { type: integer }
+        url: { type: string }
+        review: { type: string, enum: [unreviewed, reviewed, follow_up] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ResearchFilters:
+      type: object
+      additionalProperties: false
+      properties:
+        q: { type: string, maxLength: 200 }
+        category: { type: string, maxLength: 50 }
+        status: { type: string, enum: ['', pending, crawling, completed, failed, blocked] }
+        title: { type: string, maxLength: 200 }
+        host: { type: string, maxLength: 253 }
+        discovered_from: { type: string, description: Inclusive YYYY-MM-DD }
+        discovered_to: { type: string, description: Inclusive YYYY-MM-DD }
+        tag: { type: string, maxLength: 40 }
+        note: { type: string, maxLength: 200, description: Literal private-note substring }
+        bookmarked_only: { type: boolean, default: false }
+        review: { type: string, enum: ['', unreviewed, reviewed, follow_up] }
+        sort: { type: string, enum: ['', recent, oldest, title, relevance, bookmarked] }
     Watch:
       type: object
       nullable: true
@@ -112,6 +138,10 @@ components:
         category: { type: string }
         last_crawled_at: { type: string }
         user_id: { type: integer }
+        owned: { type: boolean, description: Browse response only }
+        bookmarked: { type: boolean, description: Browse response only }
+        review: { type: string, description: Bookmark review state in browse results }
+        note_preview: { type: string, maxLength: 180, description: Own private note excerpt in browse results }
     NodeDetail:
       allOf:
         - $ref: '#/components/schemas/Node'
@@ -889,7 +919,21 @@ paths:
 
   /api/watch/events/seen:
     post:
-      summary: Mark the whole feed read
+      summary: Mark selected feed events read
+      description: >-
+        Send the IDs currently displayed to avoid marking later arrivals.
+        A genuinely empty legacy request retains mark-all behavior. A JSON
+        object with missing, empty, null, nonpositive or over 200 IDs is rejected.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [ids]
+              properties:
+                ids: { type: array, minItems: 1, maxItems: 200, items: { type: integer, minimum: 1, maximum: 2147483647 } }
       security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       responses:
         '200':
@@ -953,7 +997,9 @@ paths:
       summary: Download everything held about this account
       description: >-
         A single JSON document: account record, data settings, signed-in
-        devices, authentication history, crawl records and links. Credential
+        devices, authentication history, crawl records, annotations, watches,
+        saved searches, collections, bookmarks, full streamed watch-event history
+        and links (format_version 4). Credential
         material is deliberately excluded — the password digest, the TOTP seed,
         recovery-code digests and the opaque verification and reset tokens are
         never selected. Scoped to the calling account even for administrators.
@@ -982,7 +1028,7 @@ paths:
               type: object
               required: [scope, password]
               properties:
-                scope: { type: string, enum: [crawl_history, page_content, activity_log] }
+                scope: { type: string, enum: [crawl_history, page_content, activity_log, saved_searches, collections, bookmarks, watch_events] }
                 password: { type: string }
                 code: { type: string, description: TOTP or recovery code, required when a second factor is enrolled }
       responses:
@@ -1092,3 +1138,103 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { description: Domain not in blacklist }
+
+  /api/bookmarks:
+    post:
+      summary: Bookmark, remove or review an owned crawl record
+      description: >-
+        Private even for administrators. Up to 1,000 bookmarks per account,
+        enforced atomically. Empty review creates idempotently; remove deletes
+        only the bookmark. A nonempty review updates an existing bookmark.
+        Bookmarks follow crawl retention and cascade with node/account deletion.
+        Remove and review cannot be combined. Rate limit is 60 writes/minute/account.
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [url]
+              properties:
+                url: { type: string, maxLength: 2048 }
+                remove: { type: boolean, default: false }
+                review: { type: string, enum: ['', unreviewed, reviewed, follow_up] }
+      responses:
+        '200': { description: Current annotation, content: { application/json: { schema: { $ref: '#/components/schemas/Annotation' } } } }
+        '400': { description: Invalid input }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { description: Missing cookie-session CSRF proof }
+        '404': { description: Owned node or existing bookmark not found }
+        '409': { description: Bookmark quota reached }
+        '429': { description: Write limit reached }
+
+  /api/browse:
+    post:
+      summary: Filter and paginate crawl records using private research criteria
+      description: >-
+        JSON body up to 16 KiB; no research values in URLs. Tag, note and
+        bookmark/review filters force the caller's own graph even for admins.
+        Review and bookmarked sorting imply bookmarked_only. Values are
+        parameterized, title/note substring wildcards are literal. Responses
+        are no-store; X-Has-More signals another page. Share a 60/minute/account
+        result-query limiter with content search and filtered watch feeds.
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResearchFilters' }
+      responses:
+        '200':
+          description: Filtered results
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Node' } }
+        '400': { description: Invalid criteria }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { description: Result-query limit reached }
+
+  /api/watch/events/query:
+    post:
+      summary: Filter and paginate this account's change feed
+      description: >-
+        Sensitive filters stay in a JSON body up to 8 KiB. All filters apply
+        before pagination. Title wildcard characters are literal; hostnames
+        must be valid onion domains. Unseen is the account-wide unread count,
+        not the filtered-page count. No notification email is sent.
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                kind: { type: string, enum: ['', content_changed, unreachable, recovered] }
+                unread_only: { type: boolean, default: false }
+                title: { type: string, maxLength: 200 }
+                host: { type: string, maxLength: 253 }
+                tag: { type: string, maxLength: 40 }
+      responses:
+        '200':
+          description: Filtered feed and global unread count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events: { type: array, items: { type: object } }
+                  unseen: { type: integer }
+                  has_more: { type: boolean }
+        '400': { description: Invalid filters }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { description: Result-query limit reached }

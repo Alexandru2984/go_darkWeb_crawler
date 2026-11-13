@@ -1,5 +1,9 @@
 # Private collections and research filters
 
+Current extensions and schema-11 recovery are documented in
+[bookmarks and changes](bookmarks-and-changes.md). The release-specific
+migration and rollback notes below describe the earlier deployment.
+
 Open **Collections** to group sites already present in your own crawl graph.
 Create a collection with its first site, add more sites, rename it or remove it
 with explicit confirmation. Each tag is a collection membership, so existing

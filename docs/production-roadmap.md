@@ -3,14 +3,21 @@
 This is the implementation order, not a promise that every idea belongs in the
 product. Security and privacy gates take precedence over feature count.
 
-## Current plan reviewed on 2026-11-12
+## Current plan reviewed on 2026-11-13
 
 The baseline audit is recorded in
 [the security review](security-audit-2026-11-11.md), with the latest
-[collection/research follow-up](security-audit-2026-11-12-collections.md). Earlier
+[bookmark/change-feed follow-up](security-audit-2026-11-13-workflow.md). Earlier
 delivery notes below describe their original release dates.
 
 ### Delivered in the current implementation
+
+- [x] Add a private bookmark reading list with review states, per-account atomic
+  quotas, optional note previews, literal note search and complete saved filter
+  snapshots. Add filtered/paginated change feeds, selection-only read marking,
+  complete streamed history in export format 4 and password/MFA-protected bulk
+  bookmark/history erasure. Verify Unicode note bounds, responsive layouts and
+  data-preserving schema-11 recovery.
 
 - [x] Add a private collection workspace backed by tags, atomic collection and
   membership limits, rename propagation to saved searches and guarded removal.
@@ -71,8 +78,8 @@ delivery notes below describe their original release dates.
 | --- | --- | --- |
 | 1 | Operational recovery and detection | Scraping, project rules, Google Drive backups, isolated restores, local notification testing and operator email delivery are verified. Add independent external detection, replace monitoring images when upstream ships the Go runtime patch, verify external recovery-key custody and exercise full host recovery. Record operator detection and restoration times |
 | 2 | Account hardening | Encrypted TOTP storage/rotation, reauthenticated password changes and recovery-code replacement are deployed. Add passkeys per origin and security-event history; review privilege changes and continue covering replay/concurrent credential updates |
-| 3 | Collections and search | Private collections, title/domain/discovery-date filters, user-selected sorting and saved snapshots are deployed. Extend language support and configurable result presentation while keeping research terms out of request URLs |
-| 4 | Research workflow | Add a private bookmarks view, note search, tag management, configurable change-feed filters and explicit review state. Support the same URL under separate accounts throughout |
+| 3 | Collections and search | Private collections, bookmarks/review states, note/title/domain/discovery-date filters, user-selected sorting, saved snapshots and filtered change feeds are deployed. Extend language support and configurable result presentation while keeping research terms out of request URLs |
+| 4 | Research workflow | Private bookmarks, note search, tag management, change-feed filters and review states are deployed. Add keyboard review shortcuts, safe multi-select actions and first-use guidance; preserve separate-account ownership for the same URL |
 | 5 | Crawl job management | Show quota use, scheduled time and failure reasons. Add per-account pause/cancel and safe batch import with validation, deduplication and an acceptance preview. Serialize state changes against worker claims |
 | 6 | Graph exploration | Add category/status filters, selected-node details, connected-neighbour loading, clustering and an accessible list of the displayed graph. Keep graph data loading bounded |
 | 7 | Optional history | Add explicit opt-in snapshots, bounded retention and a text-diff view. Include snapshots in export, purge and account deletion before enabling the feature |
@@ -86,7 +93,7 @@ identity. Features that retain additional data must include export, retention an
 deletion behaviour in the same stage.
 
 The current interface keeps the graph in a separately loaded chunk. The final
-build transfers about 45.8 kB gzip for the shared entry chunk and about 154.5 kB
+build transfers about 46.4 kB gzip for the shared entry chunk and about 154.5 kB
 gzip for the graph chunk. Those figures provide a baseline for further UI work.
 
 ## Product north star
