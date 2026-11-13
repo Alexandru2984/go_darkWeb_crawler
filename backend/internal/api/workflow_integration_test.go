@@ -100,7 +100,7 @@ func TestWorkflowExportAndReauthenticatedPurge(t *testing.T) {
 		Bookmarks []database.BookmarkReference `json:"bookmarks"`
 		Events    []database.WatchEvent        `json:"watch_events"`
 	}
-	if err := json.Unmarshal(rr.Body.Bytes(), &data); err != nil || rr.Code != 200 || data.Version != 4 || len(data.Bookmarks) != 1 || len(data.Events) != 205 {
+	if err := json.Unmarshal(rr.Body.Bytes(), &data); err != nil || rr.Code != 200 || data.Version != 5 || len(data.Bookmarks) != 1 || len(data.Events) != 205 {
 		t.Fatalf("incomplete export v4: %d %v", rr.Code, err)
 	}
 	for _, scope := range []string{"bookmarks", "watch_events"} {

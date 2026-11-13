@@ -317,3 +317,54 @@ tests:
       exp_annotations:
         summary: Queue metrics are missing or stale
         description: Check the queue-depth refresh query and database locks.
+- name: Paused or future jobs do not imply stalled execution
+  interval: 1m
+  input_series:
+  - series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="pending"}
+    values: 5+0x140
+  - series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="crawling"}
+    values: 0+0x140
+  - series: onionspider_crawl_ready_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider"}
+    values: 0+0x140
+  alert_rule_test:
+  - eval_time: 125m
+    alertname: OnionSpiderNotCrawling
+    exp_alerts: []
+- name: Paused or policy-refused failures do not require revival
+  interval: 1m
+  input_series:
+  - series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="failed"}
+    values: 200+0x140
+  - series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="pending"}
+    values: 0+0x140
+  - series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="crawling"}
+    values: 0+0x140
+  - series: onionspider_crawl_ready_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider"}
+    values: 0+0x140
+  - series: onionspider_crawl_failed_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider"}
+    values: 0+0x140
+  alert_rule_test:
+  - eval_time: 125m
+    alertname: OnionSpiderQueueStalled
+    exp_alerts: []
+- name: Due automatic recrawls without pending entries still need progress
+  interval: 1m
+  input_series:
+  - series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="pending"}
+    values: 0+0x140
+  - series: onionspider_queue_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider",status="crawling"}
+    values: 0+0x140
+  - series: onionspider_crawl_ready_nodes{job="onion-spider",instance="127.0.0.1:8900",service="onion-spider"}
+    values: 5+0x140
+  alert_rule_test:
+  - eval_time: 65m
+    alertname: OnionSpiderNotCrawling
+    exp_alerts:
+    - exp_labels:
+        job: onion-spider
+        instance: 127.0.0.1:8900
+        service: onion-spider
+        severity: critical
+      exp_annotations:
+        summary: Crawl work is available without successful completions
+        description: Check worker activity and Tor connectivity.

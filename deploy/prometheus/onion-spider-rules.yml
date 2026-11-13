@@ -21,10 +21,18 @@ groups:
 
       - alert: OnionSpiderQueueStalled
         expr: |
-          onionspider_queue_nodes{job="onion-spider",status="failed"} > 100
+          (
+            onionspider_crawl_failed_nodes{job="onion-spider"}
+            or on(job,instance)
+            onionspider_queue_nodes{job="onion-spider",status="failed"}
+          ) > 100
           and on(job,instance)
-          sum by(job,instance) (
-            onionspider_queue_nodes{job="onion-spider",status=~"pending|crawling"}
+          (
+            onionspider_crawl_ready_nodes{job="onion-spider"}
+            or on(job,instance)
+            sum by(job,instance) (
+              onionspider_queue_nodes{job="onion-spider",status=~"pending|crawling"}
+            )
           ) == 0
         for: 2h
         labels: { severity: critical, service: onion-spider }
@@ -44,8 +52,12 @@ groups:
             )
           ) == 0
           and on(job,instance)
-          sum by(job,instance,service) (
-            onionspider_queue_nodes{job="onion-spider",status=~"pending|crawling"}
+          (
+            onionspider_crawl_ready_nodes{job="onion-spider"}
+            or on(job,instance)
+            sum by(job,instance,service) (
+              onionspider_queue_nodes{job="onion-spider",status=~"pending|crawling"}
+            )
           ) > 0
         for: 1h
         labels: { severity: critical, service: onion-spider }

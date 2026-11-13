@@ -102,7 +102,7 @@ func TestResearchFilterSnapshotsExportAndCollectionPurge(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &export); err != nil {
 		t.Fatal(err)
 	}
-	if export.Version != 4 || len(export.Groups) != 1 || export.Groups[0].Count != 1 || len(export.Saved) != 1 || export.Saved[0].Title != "Needle" {
+	if export.Version != 5 || len(export.Groups) != 1 || export.Groups[0].Count != 1 || len(export.Saved) != 1 || export.Saved[0].Title != "Needle" {
 		t.Fatal("private export omitted research preferences")
 	}
 	if rr := postJSON(t, h, "/api/privacy/purge", token, `{"scope":"collections","password":"wrong"}`); rr.Code != 403 {

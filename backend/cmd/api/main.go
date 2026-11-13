@@ -341,9 +341,16 @@ func main() {
 				logger.Warn("queue gauge refresh failed", "err", err)
 				return
 			}
+			ready, failed, err := dbConn.GlobalCrawlSchedulingCounts(context.Background())
+			if err != nil {
+				logger.Warn("crawl scheduling gauge refresh failed", "err", err)
+				return
+			}
 			for status, n := range counts {
 				metrics.QueueNodes.WithLabelValues(status).Set(float64(n))
 			}
+			metrics.CrawlReadyNodes.Set(float64(ready))
+			metrics.CrawlFailedNodes.Set(float64(failed))
 			metrics.QueueLastRefresh.SetToCurrentTime()
 		}
 		refresh()

@@ -223,7 +223,7 @@ func (e *Engine) worker(ctx context.Context, id int) {
 		if !onion.IsV3URL(targetUrl) {
 			log.WarnContext(ctx, "non_onion_url_skipped", "url", targetUrl)
 			metrics.CrawlsTotal.WithLabelValues("non_onion").Inc()
-			_ = e.DB.MarkRobotsBlocked(targetUrl, userID)
+			_ = e.DB.MarkCrawlRefused(targetUrl, userID, "invalid_url")
 			continue
 		}
 
@@ -269,7 +269,7 @@ func (e *Engine) worker(ctx context.Context, id int) {
 		changed, err := e.DB.SaveNode(targetUrl, result.Title, result.ServerHeader, result.StatusCode, "completed", result.Metadata, result.Content, result.Category, userID)
 		if err != nil {
 			log.ErrorContext(ctx, "save_node_failed", "err", err)
-			if retryErr := e.DB.FailNodeWithRetry(targetUrl, userID); retryErr != nil {
+			if retryErr := e.DB.FailNodeWithReason(targetUrl, userID, "storage"); retryErr != nil {
 				log.ErrorContext(ctx, "retry_after_save_failed", "err", retryErr)
 			}
 		} else if !changed {

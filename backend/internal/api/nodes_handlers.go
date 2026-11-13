@@ -106,7 +106,7 @@ func validateNodeFilters(w http.ResponseWriter, category, status string) bool {
 		return false
 	}
 	switch status {
-	case "", "pending", "crawling", "completed", "failed", "blocked":
+	case "", "pending", "crawling", "completed", "failed", "blocked", "cancelled":
 		return true
 	default:
 		WriteJSONError(w, http.StatusBadRequest, "Invalid crawl status")

@@ -37,6 +37,7 @@ func New(cfg Config) http.Handler {
 		savedSearchLim: NewCrawlLimiter(60, time.Minute),
 		collectionLim:  NewCrawlLimiter(60, time.Minute),
 		bookmarkLim:    NewCrawlLimiter(60, time.Minute),
+		queueLim:       NewCrawlLimiter(60, time.Minute),
 
 		// Ten re-authentications an hour is far more than anyone deleting their
 		// own data needs, and far fewer than online password guessing requires.
@@ -161,6 +162,10 @@ func New(cfg Config) http.Handler {
 		r.Post("/api/recrawl", d.handleRecrawl)
 		r.Post("/api/crawl/bulk", d.handleCrawlBulk)
 		r.Get("/api/queue", d.handleQueue)
+		r.Post("/api/queue/pause", d.handleQueuePause)
+		r.Post("/api/queue/jobs", d.handleQueueJobs)
+		r.Post("/api/queue/action", d.handleQueueAction)
+		r.Post("/api/crawl/bulk/preview", d.handleCrawlPreview)
 
 		r.Get("/api/stats/timeline", d.handleTimeline)
 		r.Get("/api/export", d.handleExport)

@@ -51,6 +51,14 @@ var (
 		Name: "onionspider_queue_last_refresh_timestamp_seconds",
 		Help: "Unix time of the last successful queue-depth refresh.",
 	})
+	CrawlReadyNodes = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "onionspider_crawl_ready_nodes",
+		Help: "Due crawl records on unpaused accounts plus requests already running.",
+	})
+	CrawlFailedNodes = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "onionspider_crawl_failed_nodes",
+		Help: "Failed records on unpaused accounts excluding crawler policy refusals.",
+	})
 
 	// RetentionDeleted counts rows the automatic lifecycle jobs removed.
 	// kind ∈ {nodes, accounts}. These jobs destroy data on a timer with nobody

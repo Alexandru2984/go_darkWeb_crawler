@@ -785,7 +785,7 @@ func TestQueueStatusCountsIncludeEmptyStates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, status := range []string{"pending", "crawling", "failed", "blocked"} {
+	for _, status := range []string{"pending", "crawling", "failed", "blocked", "cancelled"} {
 		if count, exists := counts[status]; !exists || count != 0 {
 			t.Errorf("empty status %q: count=%d exists=%v", status, count, exists)
 		}

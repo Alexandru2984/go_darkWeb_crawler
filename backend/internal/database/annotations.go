@@ -396,7 +396,7 @@ func (db *DB) RecordWatchObservation(nodeURL string, userID int, reachable bool,
 	err = tx.QueryRow(`
 		SELECT w.id, w.last_hash, w.last_reachable, n.content_hash
 		  FROM watches w JOIN nodes n ON n.id = w.node_id AND n.user_id=w.user_id
-		 WHERE w.user_id = $1 AND n.url = $2
+		 WHERE w.user_id = $1 AND n.url = $2 AND n.processing_status NOT IN ('blocked','cancelled')
 		 FOR UPDATE OF w
 	`, userID, canonical).Scan(&watchID, &lastHash, &lastReachable, &currentHash)
 	if errors.Is(err, sql.ErrNoRows) {

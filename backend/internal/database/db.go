@@ -74,7 +74,7 @@ func InitDB(dsn string) (*DB, error) {
 
 	// Nodes left in 'crawling' from a previous crash will never be retried.
 	// Reset them to 'pending' on every startup.
-	if _, err = db.Exec(`UPDATE nodes SET processing_status = 'pending' WHERE processing_status = 'crawling'`); err != nil {
+	if _, err = db.Exec(`UPDATE nodes SET processing_status = 'pending',crawl_started_at=NULL WHERE processing_status = 'crawling'`); err != nil {
 		slog.Warn("reset_crawling_nodes_failed", "err", err)
 	}
 
@@ -344,10 +344,10 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 		// Restore an unchanged body if storage was re-enabled after the last crawl.
 		_, err := tx.Exec(`
 		INSERT INTO nodes (url, title, status_code, server_header, processing_status,
-			metadata, content, content_hash, category, last_crawled_at, next_crawl_at, user_id, host)
+			metadata, content, content_hash, category, last_crawled_at, next_crawl_at, user_id, host,last_failure_code)
 		VALUES ($1, $2, $3, $4, $5,
 			CASE WHEN $11 THEN $6::jsonb ELSE $6::jsonb - 'entities' END,
-			$7, $8, $9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '7 days', $10, $12)
+			$7, $8, $9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '7 days', $10, $12,CASE WHEN $3>=400 THEN 'http_error' ELSE '' END)
 		ON CONFLICT (url, user_id) DO UPDATE SET
 			title             = EXCLUDED.title,
 			host              = EXCLUDED.host,
@@ -358,9 +358,10 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 			content           = EXCLUDED.content,
 			content_hash      = EXCLUDED.content_hash,
 			category          = EXCLUDED.category,
+ retry_count = 0, last_failure_code=CASE WHEN EXCLUDED.status_code>=400 THEN 'http_error' ELSE '' END,
 			last_crawled_at   = CURRENT_TIMESTAMP,
 			next_crawl_at     = CURRENT_TIMESTAMP + (INTERVAL '1 day' * nodes.re_crawl_interval_days)
-		WHERE nodes.processing_status != 'blocked';
+		WHERE nodes.processing_status NOT IN ('blocked','cancelled');
 		`, nodeURL, title, statusCode, server, status, metadata, storedContent, newHash, category, userID, keepContent, host)
 		if err != nil {
 			return false, err
@@ -374,10 +375,11 @@ func (db *DB) SaveNode(nodeURL, title, server string, statusCode int, status str
 		status_code       = $3,
 		host              = $6,
 		server_header     = $4,
+ retry_count=0,last_failure_code=CASE WHEN $3>=400 THEN 'http_error' ELSE '' END,
 		processing_status = $5,
 		last_crawled_at   = CURRENT_TIMESTAMP,
 		next_crawl_at     = CURRENT_TIMESTAMP + (INTERVAL '1 day' * re_crawl_interval_days)
-	WHERE url = $1 AND user_id = $2 AND processing_status != 'blocked'
+	WHERE url = $1 AND user_id = $2 AND processing_status NOT IN ('blocked','cancelled')
 	`, nodeURL, userID, statusCode, server, status, host)
 	if err != nil {
 		return false, err
@@ -416,6 +418,13 @@ func (db *DB) EnqueueURL(rawURL string, depth int, userID int, maxPending int) e
 	}
 	if blocked {
 		return ErrBlacklisted
+	}
+	var exists bool
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM nodes WHERE user_id=$1 AND url=$2)`, userID, canonical).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return tx.Commit()
 	}
 	if maxPending > 0 {
 		if err := lockUserQuota(tx, userID); err != nil {
@@ -529,39 +538,33 @@ func (db *DB) SaveEdge(source, target string, targetDepth int, userID int) error
 // every worker — but under contention the pool is shared evenly instead of one
 // user with a huge backlog starving everyone else.
 //
-// Within a user, 'pending' beats expired 'completed' (re-crawl), then oldest
-// next_crawl_at. The candidate row is locked with FOR UPDATE OF n SKIP LOCKED
-// so concurrent workers never collide. The match is on the full (url, user_id)
-// key — matching on url alone would flip every tenant's copy of the same URL to
-// 'crawling' at once.
+// Claims first SHARE-lock an eligible owner's preference row, then lock a node
+// with SKIP LOCKED. A pause update conflicts with that short owner lock, so a
+// committed pause cannot be crossed by a new claim. Keeping owner before node
+// also matches the lock order of privacy writes. Pending work beats scheduled
+// recrawls within the owner; due time and ID give stable tie ordering.
 func (db *DB) GetNextPendingNode() (string, int, int, error) {
 	var nodeURL string
 	var depth int
 	var userID int
 	err := db.Conn.QueryRow(`
-		UPDATE nodes
-		SET processing_status = 'crawling',
-		    crawl_started_at  = CURRENT_TIMESTAMP
-		WHERE (url, user_id) = (
-			SELECT n.url, n.user_id
-			FROM nodes n
-			LEFT JOIN (
-				SELECT user_id, COUNT(*) AS inflight
-				FROM nodes
-				WHERE processing_status = 'crawling'
-				GROUP BY user_id
-			) c ON c.user_id = n.user_id
-			WHERE n.processing_status IN ('pending', 'completed')
-			  AND n.next_crawl_at <= CURRENT_TIMESTAMP
-			ORDER BY
-				COALESCE(c.inflight, 0) ASC,
-				CASE WHEN n.processing_status = 'pending' THEN 0 ELSE 1 END ASC,
-				n.next_crawl_at ASC
-			LIMIT 1
-			FOR UPDATE OF n SKIP LOCKED
-		)
-		RETURNING url, depth, user_id
-	`).Scan(&nodeURL, &depth, &userID)
+ WITH owner AS MATERIALIZED (
+  SELECT u.id FROM users u
+  JOIN (SELECT user_id,MIN(CASE WHEN processing_status='pending' THEN 0 ELSE 1 END) AS priority,MIN(next_crawl_at) AS due
+        FROM nodes WHERE processing_status IN ('pending','completed') AND next_crawl_at<=CURRENT_TIMESTAMP GROUP BY user_id) q ON q.user_id=u.id
+  LEFT JOIN (SELECT user_id,count(*) AS inflight FROM nodes WHERE processing_status='crawling' GROUP BY user_id) c ON c.user_id=u.id
+  WHERE NOT u.crawl_paused
+  ORDER BY COALESCE(c.inflight,0),q.priority,q.due,u.id
+  LIMIT 1 FOR SHARE OF u SKIP LOCKED
+ ), candidate AS MATERIALIZED (
+  SELECT n.id FROM owner o JOIN nodes n ON n.user_id=o.id
+  WHERE n.processing_status IN ('pending','completed') AND n.next_crawl_at<=CURRENT_TIMESTAMP
+  ORDER BY CASE WHEN n.processing_status='pending' THEN 0 ELSE 1 END,n.next_crawl_at,n.id
+  LIMIT 1 FOR UPDATE OF n SKIP LOCKED
+ )
+ UPDATE nodes n SET processing_status='crawling',crawl_started_at=CURRENT_TIMESTAMP
+ FROM candidate c WHERE n.id=c.id RETURNING n.url,n.depth,n.user_id
+ `).Scan(&nodeURL, &depth, &userID)
 	if err == sql.ErrNoRows {
 		return "", 0, 0, nil
 	}
@@ -590,9 +593,16 @@ func (db *DB) ResetStuckCrawling(olderThan time.Duration) (int64, error) {
 // FailNodeWithRetry records a failure and schedules a retry with exponential backoff.
 // Formula: min(2^retry * 10min, 48h). 'blocked' nodes are never modified.
 func (db *DB) FailNodeWithRetry(nodeURL string, userID int) error {
+	return db.FailNodeWithReason(nodeURL, userID, "network")
+}
+func (db *DB) FailNodeWithReason(nodeURL string, userID int, reason string) error {
+	if reason != "network" && reason != "storage" {
+		reason = "network"
+	}
 	_, err := db.Conn.Exec(`
 		UPDATE nodes
-		SET retry_count       = retry_count + 1,
+		SET last_failure_code=$3,
+ retry_count       = retry_count + 1,
 		    processing_status = CASE WHEN retry_count >= 4 THEN 'failed' ELSE 'pending' END,
 		    next_crawl_at     = CURRENT_TIMESTAMP + (
 		        LEAST(
@@ -600,8 +610,8 @@ func (db *DB) FailNodeWithRetry(nodeURL string, userID int) error {
 		            INTERVAL '48 hours'
 		        )
 		    )
-		WHERE url = $1 AND user_id = $2 AND processing_status != 'blocked'
-	`, nodeURL, userID)
+		WHERE url = $1 AND user_id = $2 AND processing_status NOT IN ('blocked','cancelled')
+	`, nodeURL, userID, reason)
 	return err
 }
 
@@ -675,35 +685,27 @@ func (db *DB) GetNodeByURL(nodeURL string, userID int, isAdmin bool) (*NodeDetai
 // Returns (found bool, canRequeue bool, error).
 // canRequeue=false if the node is already in the 'crawling' state.
 func (db *DB) RequeueForCrawl(nodeURL string, userID int) (found bool, canRequeue bool, err error) {
-	var status string
-	err = db.Conn.QueryRow(`SELECT processing_status FROM nodes WHERE url = $1 AND user_id = $2`, nodeURL, userID).Scan(&status)
-	if err == sql.ErrNoRows {
-		return false, false, nil
-	}
-	if err != nil {
-		return false, false, err
-	}
-	if status == "crawling" || status == "blocked" {
-		return true, false, nil
-	}
-	_, err = db.Conn.Exec(
-		`UPDATE nodes SET processing_status = 'pending', next_crawl_at = CURRENT_TIMESTAMP WHERE url = $1 AND user_id = $2`,
-		nodeURL, userID,
-	)
-	return true, true, err
+	return db.ScheduleCrawl(context.Background(), userID, nodeURL, time.Time{}, 0)
 }
 
 // MarkRobotsBlocked marks a node as disallowed by robots.txt.
 // Sets next_crawl_at to 30 days and retry_count=10 to prevent unnecessary retries.
 // Does not overwrite nodes explicitly blocked via the blacklist.
 func (db *DB) MarkRobotsBlocked(nodeURL string, userID int) error {
+	return db.MarkCrawlRefused(nodeURL, userID, "robots")
+}
+func (db *DB) MarkCrawlRefused(nodeURL string, userID int, reason string) error {
+	if reason != "robots" && reason != "invalid_url" {
+		reason = "robots"
+	}
 	_, err := db.Conn.Exec(`
 		UPDATE nodes SET
 			processing_status = 'failed',
+ last_failure_code=$3,
 			retry_count       = 10,
 			next_crawl_at     = CURRENT_TIMESTAMP + INTERVAL '30 days'
-		WHERE url = $1 AND user_id = $2 AND processing_status != 'blocked'
-	`, nodeURL, userID)
+		WHERE url = $1 AND user_id = $2 AND processing_status NOT IN ('blocked','cancelled')
+	`, nodeURL, userID, reason)
 	return err
 }
 
@@ -853,7 +855,7 @@ func (db *DB) AddBlacklist(domain string) error {
 	// Block all existing nodes with this domain (exact match on the host column)
 	_, err = tx.Exec(`
 		UPDATE nodes SET processing_status = 'blocked'
-		WHERE host = $1 AND processing_status != 'blocked'
+		WHERE host = $1 AND processing_status NOT IN ('blocked','cancelled')
 	`, domain)
 	if err != nil {
 		return err
@@ -1252,7 +1254,7 @@ func (db *DB) ReviveFailedNodes(olderThan time.Duration, limit int) (int64, erro
 		WHERE (url, user_id) IN (
 			SELECT url, user_id
 			FROM nodes
-			WHERE processing_status = 'failed'
+			WHERE processing_status = 'failed' AND last_failure_code NOT IN ('robots','invalid_url')
 			  AND next_crawl_at < CURRENT_TIMESTAMP - ($1 || ' seconds')::INTERVAL
 			ORDER BY next_crawl_at ASC
 			LIMIT $2
@@ -1303,7 +1305,7 @@ func (db *DB) GlobalStatusCounts() (map[string]int, error) {
 	}
 	defer rows.Close()
 	counts := map[string]int{
-		"pending": 0, "crawling": 0, "completed": 0, "failed": 0, "blocked": 0,
+		"pending": 0, "crawling": 0, "completed": 0, "failed": 0, "blocked": 0, "cancelled": 0,
 	}
 	for rows.Next() {
 		var status string

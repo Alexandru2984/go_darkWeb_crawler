@@ -52,7 +52,7 @@ func ValidateSearchCriteria(query, category, status string) error {
 		return ErrSearchCriteria
 	}
 	switch status {
-	case "", "pending", "crawling", "completed", "failed", "blocked":
+	case "", "pending", "crawling", "completed", "failed", "blocked", "cancelled":
 		return nil
 	default:
 		return ErrSearchCriteria

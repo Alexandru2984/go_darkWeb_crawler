@@ -134,7 +134,7 @@ func (d *deps) handlePrivacySettingsUpdate(w http.ResponseWriter, r *http.Reques
 
 // privacyExportVersion identifies the document shape, so a consumer reading an
 // export produced by an older deployment can tell what to expect.
-const privacyExportVersion = 4
+const privacyExportVersion = 5
 
 // handlePrivacyExport streams everything this service holds about the account.
 //
@@ -207,6 +207,11 @@ func (d *deps) handlePrivacyExport(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, 500, "Internal error")
 		return
 	}
+	crawlPrefs, err := d.cfg.DB.GetCrawlPreferences(r.Context(), uid)
+	if err != nil {
+		WriteJSONError(w, 500, "Internal error")
+		return
+	}
 	rc := http.NewResponseController(w)
 	rc.SetWriteDeadline(time.Now().Add(10 * time.Minute))
 
@@ -248,6 +253,7 @@ func (d *deps) handlePrivacyExport(w http.ResponseWriter, r *http.Request) {
 		{"saved_searches", savedSearches},
 		{"collections", collections},
 		{"bookmarks", bookmarks},
+		{"crawl_preferences", crawlPrefs},
 	} {
 		if err := writeSection(section.name, section.value); err != nil {
 			panic(http.ErrAbortHandler)
@@ -302,6 +308,20 @@ func (d *deps) handlePrivacyExport(w http.ResponseWriter, r *http.Request) {
 		return enc.Encode(e)
 	}); err != nil {
 		slog.ErrorContext(r.Context(), "export_failed", "format", "privacy", "kind", "watch_events", "err", err)
+		panic(http.ErrAbortHandler)
+	}
+	writeChunk(`],"crawl_jobs":[`)
+	firstJob := true
+	if err := d.cfg.DB.ExportCrawlJobs(r.Context(), uid, func(job database.CrawlJob) error {
+		if !firstJob {
+			if _, err := w.Write([]byte(",")); err != nil {
+				return err
+			}
+		}
+		firstJob = false
+		return enc.Encode(job)
+	}); err != nil {
+		slog.ErrorContext(r.Context(), "export_failed", "format", "privacy", "kind", "crawl_jobs", "err", err)
 		panic(http.ErrAbortHandler)
 	}
 	writeChunk(`],"links":[`)

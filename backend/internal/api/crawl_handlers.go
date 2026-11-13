@@ -1,10 +1,10 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"onion-spider/internal/database"
 )
@@ -19,11 +19,7 @@ func (d *deps) handleCrawl(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		URL string `json:"url"`
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 2048)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		WriteJSONError(w, http.StatusBadRequest, "Invalid body")
+	if !decodeJSONBody(w, r, 16384, &req) {
 		return
 	}
 	req.URL = NormalizeOnionURL(req.URL)
@@ -45,9 +41,7 @@ func (d *deps) handleCrawl(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]string{"message": "URL added to the crawling queue"})
+	writeNoStoreJSON(w, http.StatusAccepted, map[string]string{"message": "URL accepted. Existing crawl records are kept; use Queue to retry or reschedule them."})
 }
 
 func (d *deps) handleRecrawl(w http.ResponseWriter, r *http.Request) {
@@ -60,11 +54,7 @@ func (d *deps) handleRecrawl(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		URL string `json:"url"`
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 2048)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		WriteJSONError(w, http.StatusBadRequest, "Invalid body")
+	if !decodeJSONBody(w, r, 16384, &req) {
 		return
 	}
 	req.URL = NormalizeOnionURL(req.URL)
@@ -72,10 +62,9 @@ func (d *deps) handleRecrawl(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusBadRequest, "Invalid URL")
 		return
 	}
-	found, canRequeue, err := d.cfg.DB.RequeueForCrawl(req.URL, GetUserID(r))
+	found, canRequeue, err := d.cfg.DB.ScheduleCrawl(r.Context(), GetUserID(r), req.URL, time.Time{}, d.cfg.Engine.MaxPendingPerUser)
 	if err != nil {
-		slog.ErrorContext(ctx, "recrawl_failed", "url", req.URL, "err", err)
-		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
+		crawlControlError(w, r, err)
 		return
 	}
 	if !found {
@@ -83,86 +72,64 @@ func (d *deps) handleRecrawl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !canRequeue {
-		WriteJSONError(w, http.StatusConflict, "Node is already being crawled")
+		WriteJSONError(w, http.StatusConflict, "Node is running or blocked; its schedule cannot be changed")
 		return
 	}
 	slog.InfoContext(ctx, "recrawl_request", "ip", ip, "url", req.URL)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Node has been queued for re-crawling"})
+	writeNoStoreJSON(w, http.StatusAccepted, map[string]string{"message": "Node has been queued for re-crawling"})
 }
 
 func (d *deps) handleCrawlBulk(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	ip := ClientIP(r)
-	if !HasAdminAccess(r) && !d.crawlLim.Allow(RequestKey(r)) {
-		WriteJSONError(w, http.StatusTooManyRequests, "Too many requests. Please try again in a few minutes.")
-		return
-	}
-	var req struct {
+	var input struct {
 		URLs []string `json:"urls"`
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 10*1024)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		WriteJSONError(w, http.StatusBadRequest, "Invalid body")
+	if !decodeJSONBody(w, r, 256*1024, &input) {
 		return
 	}
-	if len(req.URLs) == 0 || len(req.URLs) > 20 {
-		WriteJSONError(w, http.StatusBadRequest, "Send 1-20 URLs in the 'urls' field")
+	if len(input.URLs) < 1 || len(input.URLs) > 20 {
+		WriteJSONError(w, 400, database.ErrCrawlBatch.Error())
 		return
 	}
-	// Charge the batch for every URL it carries. Charging it as a single
-	// request let one caller submit twenty URLs for the price of one, turning
-	// the twenty-per-minute limit into four hundred.
-	if !HasAdminAccess(r) && !d.crawlLim.AllowN(RequestKey(r), len(req.URLs)) {
-		WriteJSONError(w, http.StatusTooManyRequests, "Too many URLs submitted. Please try again in a few minutes.")
+	if !HasAdminAccess(r) && !d.crawlLim.AllowN(RequestKey(r), len(input.URLs)) {
+		WriteJSONError(w, 429, "Too many URLs submitted. Try again in a minute.")
 		return
 	}
-	var added, skipped int
-	var quotaHit bool
-	for _, u := range req.URLs {
-		u = NormalizeOnionURL(u)
-		if !IsValidOnionURL(u) {
-			skipped++
-			continue
-		}
-		slog.InfoContext(ctx, "crawl_bulk_item", "ip", ip, "user", GetUserID(r), "url", u)
-		err := d.cfg.Engine.AddToQueue(u, GetUserID(r))
-		if errors.Is(err, database.ErrQueueQuotaExceeded) {
-			// The rest of the batch cannot fit either; stop rather than
-			// reporting a pile of identical failures as "skipped".
-			quotaHit = true
-			skipped += len(req.URLs) - added - skipped
-			break
-		}
-		if err != nil {
-			skipped++
-		} else {
-			added++
-		}
-	}
-	w.Header().Set("Content-Type", "application/json")
-	if quotaHit {
-		w.WriteHeader(http.StatusTooManyRequests)
-		json.NewEncoder(w).Encode(map[string]any{
-			"added": added, "skipped": skipped,
-			"error": "Crawl queue is full for this account. Wait for pending URLs to be crawled.",
-		})
+	result, err := d.cfg.DB.CrawlBatch(r.Context(), GetUserID(r), input.URLs, d.cfg.Engine.MaxPendingPerUser, false)
+	if err != nil {
+		crawlControlError(w, r, err)
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]int{"added": added, "skipped": skipped})
+	slog.InfoContext(r.Context(), "crawl_batch_accepted", "uid", GetUserID(r), "added", result.Added, "skipped", result.Skipped)
+	status := http.StatusAccepted
+	if result.QuotaHit {
+		status = http.StatusTooManyRequests
+	}
+	writeNoStoreJSON(w, status, result)
 }
 
 func (d *deps) handleQueue(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	summary, err := d.cfg.DB.GetQueueSummary(GetUserID(r), HasAdminAccess(r))
+	summary, err := d.cfg.DB.GetQueueSummary(GetUserID(r), false)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "get_queue_failed", "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
-	json.NewEncoder(w).Encode(summary)
+	prefs, err := d.cfg.DB.GetCrawlPreferences(r.Context(), GetUserID(r))
+	if err != nil {
+		crawlControlError(w, r, err)
+		return
+	}
+	due, err := d.cfg.DB.DueCrawlCount(r.Context(), GetUserID(r))
+	if err != nil {
+		crawlControlError(w, r, err)
+		return
+	}
+	writeNoStoreJSON(w, 200, struct {
+		*database.QueueSummary
+		Paused          bool   `json:"paused"`
+		SubmissionLimit int    `json:"submission_limit"`
+		Due             int    `json:"due"`
+		Scope           string `json:"scope"`
+	}{summary, prefs.Paused, d.cfg.Engine.MaxPendingPerUser, due, "account"})
 }
